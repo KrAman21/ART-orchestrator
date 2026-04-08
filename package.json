@@ -2,9 +2,9 @@
   "name": "art-orchestrator",
   "version": "1.0.0",
   "description": "Automated Regression Testing Orchestrator for Loan Marketplace",
-  "main": "src/orchestrator.js",
+  "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "start": "node src/orchestrator.js"
+    "start": "node src/index.js"
   }
 }

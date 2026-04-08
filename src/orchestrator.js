@@ -1,24 +1,39 @@
-import { SERVICE_MAP, API_ENDPOINT_MAP, SKIP_DESTINATIONS } from './config.js';
+import { SERVICE_MAP, API_ENDPOINT_MAP, SKIP_DESTINATIONS, extractPayload, ENDPOINT_API_MAP } from './config.js';
 import { makeRequest, checkHealth } from './services/http-client.js';
 import { compareLog, findMatchingLog } from './services/comparator.js';
+import { logger } from './utils/logger.js';
 
 /**
  * ART Orchestrator - Replays production logs against local services
  */
 class Orchestrator {
-  constructor() {
-    this.outputList = []; // Stores responses from service calls
+  constructor(merchantId) {
+    this.outputList = [];
     this.results = {
       passed: 0,
       failed: 0,
       errors: [],
       processedLogs: []
     };
+    this.merchantId = merchantId;
+  }
+
+  /**
+   * Extract merchantId from logs by traversing and finding first non-null message.merchant_id
+   */
+  static extractMerchantId(logs) {
+    for (const log of logs) {
+      const merchantId = log?.message?.merchant_id;
+      if (merchantId) {
+        logger.info('Extracted merchantId from logs', { merchantId });
+        return merchantId;
+      }
+    }
+    throw new Error('merchantId not found in logs');
   }
 
   /**
    * Parse source_destination field to extract source and destination
-   * e.g., "LSP_TO_GW" -> { source: "LSP", destination: "GW" }
    */
   parseSourceDestination(sourceDestination) {
     const parts = sourceDestination.split('_TO_');
@@ -29,24 +44,21 @@ class Orchestrator {
   }
 
   /**
-   * Get API endpoint configuration based on source_destination and log_tag
+   * Get API endpoint configuration based on (sourceDestination, logTag) combination
    */
   getEndpointConfig(sourceDestination, logTag) {
-    const mapping = API_ENDPOINT_MAP[sourceDestination];
-    if (!mapping) {
-      throw new Error(`No API mapping found for source_destination: ${sourceDestination}`);
-    }
+    const key = `${sourceDestination}|${logTag}`;
+    const config = API_ENDPOINT_MAP[key];
 
-    const config = mapping[logTag];
     if (!config) {
-      throw new Error(`No API mapping found for log_tag: ${logTag} in ${sourceDestination}`);
+      throw new Error(`No API mapping found for key: ${key}`);
     }
 
     return config;
   }
 
   /**
-   * Get service configuration based on service name
+   * Get service configuration
    */
   getServiceConfig(serviceName) {
     const config = SERVICE_MAP[serviceName];
@@ -59,22 +71,47 @@ class Orchestrator {
   /**
    * Process a single log entry
    */
-  async processLog(log) {
-    const { message, log_tag: logTag, source_destination: sourceDestination, xRequestId } = log;
+  async processLog(log, index, total) {
+    const { message, xRequestId } = log;
+    const logTag = message.log_tag;
+    const sourceDestination = message.source_destination;
     const { source, destination } = this.parseSourceDestination(sourceDestination);
 
-    console.log(`Processing log: ${logTag} | ${source} -> ${destination}`);
+    // Skip logs where source is WRAPPER
+    if (source === 'WRAPPER') {
+      logger.logSkipped(source, 'Source is WRAPPER - ignoring trace log');
+      return { success: true, step: 'skipped', reason: 'WRAPPER source' };
+    }
+
+    // Extract the appropriate payload based on log_tag (Request/Response)
+    const payload = extractPayload(message, logTag);
+
+    logger.logStep('processing', index, total, {
+      logTag,
+      source,
+      destination,
+      sourceDestination,
+      hasPayload: payload !== null
+    });
 
     // Step 1: Find and compare with expected output from previous responses
-    const { found, log: expectedLog, index } = findMatchingLog(
+    const { found, log: expectedLog, index: foundIndex } = findMatchingLog(
       this.outputList,
       logTag,
       sourceDestination
     );
 
+    logger.debug('OUTPUT_LIST state', {
+      size: this.outputList.length,
+      matchFound: found,
+      matchIndex: foundIndex
+    });
+
     if (found) {
-      // Compare with expected response
-      const comparison = compareLog(expectedLog, message);
+      // Compare using the extracted payload
+      const comparison = compareLog(expectedLog, payload, logTag);
+
+      logger.logComparison(logTag, sourceDestination, comparison.match);
 
       if (!comparison.match) {
         return {
@@ -85,41 +122,57 @@ class Orchestrator {
         };
       }
 
-      // Remove the matched log from outputList
-      this.outputList.splice(index, 1);
-      console.log(`  Comparison passed for ${logTag}`);
+      this.outputList.splice(foundIndex, 1);
+    } else {
+      logger.debug('No matching log found for comparison', { logTag, sourceDestination });
     }
 
     // Step 2: Skip service call if destination is APP or LENDER
     if (SKIP_DESTINATIONS.includes(destination)) {
-      console.log(`  Skipping service call for external destination: ${destination}`);
+      logger.logSkipped(destination, 'External service not available');
       return { success: true, step: 'skipped', destination };
     }
 
     // Step 3: Call the destination service
     const endpointConfig = this.getEndpointConfig(sourceDestination, logTag);
-    const serviceConfig = this.getServiceConfig(destination);
+    const serviceConfig = this.getServiceConfig(endpointConfig.service);
 
-    console.log(`  Calling ${destination} at ${endpointConfig.method} ${endpointConfig.endpoint}`);
+    logger.logServiceCall(source, endpointConfig.service, endpointConfig.endpoint, endpointConfig.method);
+
+    // Use extracted payload for the API call, fallback to full message if null
+    const requestPayload = payload;
 
     const response = await makeRequest(
       serviceConfig.baseUrl,
       endpointConfig.endpoint,
       endpointConfig.method,
-      message,
-      xRequestId || message.request_id
+      requestPayload,
+      xRequestId || message.request_id,
+      sourceDestination,
+      logTag,
+      this.merchantId
     );
 
     // Step 4: Store response in OUTPUT_LIST
+    // For mock responses, use the endpoint to look up the response log_tag and source_destination
+    let responseLogTag = response.logTag;
+    let responseSourceDestination = response.sourceDestination;
+
+    if (response.endpoint && ENDPOINT_API_MAP[response.endpoint]) {
+      const mapping = ENDPOINT_API_MAP[response.endpoint];
+      responseLogTag = mapping.logTag;
+      responseSourceDestination = mapping.sourceDestination;
+    }
+
     const responseLog = {
-      log_tag: logTag,
-      source_destination: sourceDestination,
+      log_tag: responseLogTag,
+      source_destination: responseSourceDestination,
       response: response,
       timestamp: new Date().toISOString()
     };
 
     this.outputList.push(responseLog);
-    console.log(`  Response stored in OUTPUT_LIST`);
+    logger.logResponseStored(responseLogTag, responseSourceDestination, this.outputList.length);
 
     return { success: true, step: 'service_call', response };
   }
@@ -128,17 +181,16 @@ class Orchestrator {
    * Verify all required services are healthy
    */
   async verifyServices() {
-    console.log('Verifying service health...\n');
+    logger.info('Verifying service health');
 
     for (const [name, config] of Object.entries(SERVICE_MAP)) {
       const isHealthy = await checkHealth(config);
       if (!isHealthy) {
         throw new Error(`Service ${name} is not healthy at ${config.baseUrl}`);
       }
-      console.log(`  ${name}: OK`);
     }
 
-    console.log('All services are healthy\n');
+    logger.info('All services are healthy');
   }
 
   /**
@@ -146,22 +198,17 @@ class Orchestrator {
    */
   async replay(logs) {
     try {
-      // Step 1: Verify services are healthy
       await this.verifyServices();
+      logger.logStart(logs.length);
 
-      console.log(`Starting replay of ${logs.length} logs...\n`);
-
-      // Step 2: Process each log sequentially
       for (let i = 0; i < logs.length; i++) {
         const log = logs[i];
-        console.log(`[${i + 1}/${logs.length}]`);
-
-        const result = await this.processLog(log);
+        const result = await this.processLog(log, i + 1, logs.length);
 
         this.results.processedLogs.push({
           logIndex: i,
-          logTag: log.log_tag,
-          sourceDestination: log.source_destination,
+          logTag: log.message?.log_tag,
+          sourceDestination: log.message?.source_destination,
           result
         });
 
@@ -173,25 +220,23 @@ class Orchestrator {
             error: result
           });
 
-          console.log(`\nReplay failed at log ${i + 1}`);
-          console.log('Error:', result.error);
-          console.log('Details:', JSON.stringify(result.details, null, 2));
+          logger.error('Replay failed', {
+            logIndex: i + 1,
+            error: result.error,
+            details: result.details
+          });
 
-          // Break the flow as per requirements
           break;
         }
 
         this.results.passed++;
-        console.log(''); // Empty line for readability
       }
 
-      // Step 3: Call cleanup API after all logs processed
       await this.cleanup();
-
       return this.getSummary();
 
     } catch (error) {
-      console.error('Orchestrator error:', error.message);
+      logger.logError(error, { phase: 'replay' });
       throw error;
     }
   }
@@ -200,16 +245,16 @@ class Orchestrator {
    * Call cleanup API to clear journey data
    */
   async cleanup() {
-    console.log('Calling cleanup API...');
+    logger.info('Calling cleanup API');
     // TODO: Implement actual cleanup API call when endpoint is provided
-    console.log('Cleanup completed\n');
+    logger.info('Cleanup completed');
   }
 
   /**
    * Get summary of replay results
    */
   getSummary() {
-    return {
+    const summary = {
       total: this.results.passed + this.results.failed,
       passed: this.results.passed,
       failed: this.results.failed,
@@ -217,6 +262,9 @@ class Orchestrator {
       outputListSize: this.outputList.length,
       errors: this.results.errors
     };
+
+    logger.logComplete(summary);
+    return summary;
   }
 }
 
@@ -224,7 +272,9 @@ class Orchestrator {
  * Main entry point
  */
 export async function runOrchestrator(logs) {
-  const orchestrator = new Orchestrator();
+  // Extract merchantId from logs before processing
+  const merchantId = Orchestrator.extractMerchantId(logs);
+  const orchestrator = new Orchestrator(merchantId);
   return await orchestrator.replay(logs);
 }
 

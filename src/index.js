@@ -17,7 +17,8 @@ const CONFIG = {
   CLICKHOUSE_API_URL: process.env.CLICKHOUSE_API_URL || 'http://localhost:3000/api/order-ids',
 
   // Use local JSON file instead of API (set to 'true' to use local file)
-  USE_JSON_FILE: process.env.USE_JSON_FILE === 'true'
+  // USE_JSON_FILE: process.env.USE_JSON_FILE === 'true'
+  USE_JSON_FILE: true
 };
 
 /**
