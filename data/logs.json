@@ -1,0 +1,64 @@
+[
+  {
+    "messageNumber": 6160,
+    "message": {
+      "merchant_customer_id": null,
+      "trace_error_msg": null,
+      "uuid": "05ceca03-6687-48e8-8b69-fabbec033290",
+      "trace_response": null,
+      "created_at": "2026-04-07T17:14:07.287952655Z",
+      "log_tag": "POLLING API Request",
+      "trace_request_ack": null,
+      "trace_response_ack": null,
+      "request_id": "05ceca03-6687-48e8-8b69-fabbec033290",
+      "euler_order_id": null,
+      "loan_request_info_id": null,
+      "lender_org_id": "DMI",
+      "label": "GATEWAY",
+      "merchant_id": null,
+      "order_id": null,
+      "loan_application_id": "LSPec24b893ee3e4f3699bac109526517b9",
+      "trace_request": {
+        "opportunityname": "XXXXXXX327391",
+        "accountid": "XXXXXXXJ8HSGQA3",
+        "opportunityid": "XXXXXXX0FTkejQAD",
+        "applicationid": "LSP7bd4e3ff420e48099e4f766b544c148f",
+        "type": "parentopp"
+      },
+      "updated_at": "2026-04-07T17:14:07.287952655Z",
+      "source_destination": "LSP_TO_GW"
+    },
+    "xRequestId": "05ceca03-6687-48e8-8b69-fabbec033290"
+  },
+  {
+    "messageNumber": 6167,
+    "message": {
+      "merchant_customer_id": null,
+      "trace_error_msg": null,
+      "uuid": "05ceca03-6687-48e8-8b69-fabbec03fed7",
+      "trace_response": {
+        "opportunityname": "XXXXXXX327391",
+        "accountid": "XXXXXXXJ8HSGQA3",
+        "opportunityid": "XXXXXXX0FTkejQAD",
+        "applicationid": "LSP7bd4e3ff420e48099e4f766b544c148f",
+        "type": "parentopp"
+      },
+      "created_at": "2026-04-07T17:14:07.687952655Z",
+      "log_tag": "POLLING API Response",
+      "trace_request_ack": null,
+      "trace_response_ack": null,
+      "request_id": "05ceca03-6687-48e8-8b69-fabbec03fed7",
+      "euler_order_id": null,
+      "loan_request_info_id": null,
+      "lender_org_id": "DMI",
+      "label": "GATEWAY",
+      "merchant_id": null,
+      "order_id": null,
+      "loan_application_id": "LSPec24b893ee3e4f3699bac109526517b9",
+      "trace_request": null,
+      "updated_at": "2026-04-07T17:14:07.687952655Z",
+      "source_destination": "GW_TO_LSP"
+    },
+    "xRequestId": "05ceca03-6687-48e8-8b69-fabbec03fed7"
+  }
+]
