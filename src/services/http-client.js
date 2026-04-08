@@ -5,19 +5,19 @@ import { logger } from '../utils/logger.js';
  */
 
 let mockResponses = {
-  "POLLING API Request LSP_TO_GW": {
+  "POLLING API Request LSP_GW": {
     status: 200,
     statusText: 'OK',
     data: {
-      message: 'Mock response for LSP_TO_GW'
+      message: 'Mock response for LSP_GW'
     },
     endpoint: '/api/polling',
     headers: { 'content-type': 'application/json' }
   },
-  "POLLING API Response GW_TO_LSP": {
+  "POLLING API Response GW_LSP": {
     status: 200,
     statusText: 'OK',
-    data: { message: 'Mock response for GW_TO_LSP' },
+    data: { message: 'Mock response for GW_LSP' },
     endpoint: '/api/applications',
     headers: { 'content-type': 'application/json' }
   }

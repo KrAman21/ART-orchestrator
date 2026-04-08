@@ -1,81 +1,103 @@
-import { runOrchestrator } from './orchestrator.js';
-import {
-  fetchLogsFromAPI,
-  fetchLogsFromJSONFile,
-  fetchOrderIdsFromClickHouse
-} from './services/log-fetcher.js';
+import { fetchLogsFromJSONFile } from './services/log-fetcher.js';
+import { ReplayOrchestrator } from './orchestrator.js';
+import { createServer } from './server.js';
+import { logger } from './utils/logger.js';
 
-// Configuration - can be overridden via environment variables
+// Configuration
 const CONFIG = {
-  // API endpoint that returns logs JSON (populated from ClickHouse/S3)
-  LOGS_API_URL: process.env.LOGS_API_URL || 'http://localhost:3000/api/logs',
-
-  // Alternative: Local JSON file path (relative to repo root)
+  PORT: process.env.PORT || 3001,
   LOGS_FILE_PATH: process.env.LOGS_FILE_PATH || 'data/logs.json',
-
-  // API to fetch order IDs from ClickHouse
-  CLICKHOUSE_API_URL: process.env.CLICKHOUSE_API_URL || 'http://localhost:3000/api/order-ids',
-
-  // Use local JSON file instead of API (set to 'true' to use local file)
-  // USE_JSON_FILE: process.env.USE_JSON_FILE === 'true'
-  USE_JSON_FILE: true
+  TIMEOUT_MS: parseInt(process.env.TIMEOUT_MS, 10) || 30000,
+  AUTO_START: process.env.AUTO_START !== 'false' // Default to auto-start
 };
 
 /**
  * Main execution flow
  */
 async function main() {
+  let server = null;
+  let orchestrator = null;
+
   try {
-    let logs;
-
-    if (CONFIG.USE_JSON_FILE) {
-      // Option 1: Read from local JSON file in repo
-      console.log('Reading logs from local JSON file...');
-      logs = await fetchLogsFromJSONFile(CONFIG.LOGS_FILE_PATH);
-    } else {
-      // Option 2: Fetch order IDs from ClickHouse, then fetch logs
-      console.log('Fetching order IDs from ClickHouse...');
-      const orderIds = await fetchOrderIdsFromClickHouse(CONFIG.CLICKHOUSE_API_URL, {
-        // Add filters here if needed
-        // startDate: '2026-04-01',
-        // endDate: '2026-04-07',
-        // limit: 100
-      });
-
-      if (orderIds.length === 0) {
-        console.log('No order IDs found');
-        return;
-      }
-
-      console.log('Fetching logs for order IDs:', orderIds.join(', '));
-      logs = await fetchLogsFromAPI(CONFIG.LOGS_API_URL, orderIds);
-    }
+    // Load logs
+    console.log('Loading logs from file...');
+    const logs = await fetchLogsFromJSONFile(CONFIG.LOGS_FILE_PATH);
 
     if (logs.length === 0) {
       console.log('No logs to process');
-      return;
+      process.exit(1);
     }
 
-    console.log(`\nStarting ART replay with ${logs.length} logs...\n`);
+    console.log(`Loaded ${logs.length} logs`);
 
-    const results = await runOrchestrator(logs);
+    // Create orchestrator
+    orchestrator = new ReplayOrchestrator(logs, {
+      timeoutMs: CONFIG.TIMEOUT_MS
+    });
 
-    console.log('\n=== Replay Summary ===');
-    console.log(JSON.stringify(results, null, 2));
+    // Create and start HTTP server
+    const app = createServer(orchestrator);
+    server = app.listen(CONFIG.PORT, () => {
+      console.log(`\n🚀 ART Orchestrator Server running on port ${CONFIG.PORT}`);
+      console.log(`\nEndpoints:`);
+      console.log(`  - Health:  http://localhost:${CONFIG.PORT}/health`);
+      console.log(`  - Status:  http://localhost:${CONFIG.PORT}/status`);
+      console.log(`  - LSP:     http://localhost:${CONFIG.PORT}/lsp/*`);
+      console.log(`  - GW:      http://localhost:${CONFIG.PORT}/gw/*`);
+      console.log(`  - Control: http://localhost:${CONFIG.PORT}/control/{start|stop}`);
+      console.log(`\nReplay ready. Call /control/start to begin.\n`);
+    });
 
-    // Exit with appropriate code
-    process.exit(results.success ? 0 : 1);
+    // Auto-start if configured
+    if (CONFIG.AUTO_START) {
+      await orchestrator.start();
+      console.log('✅ Replay auto-started');
+    }
+
+    // Graceful shutdown
+    process.on('SIGINT', async () => {
+      console.log('\n\nShutting down gracefully...');
+      if (orchestrator) {
+        await orchestrator.stop();
+        const results = orchestrator.getResults();
+        console.log('\n=== Final Results ===');
+        console.log(JSON.stringify(results, null, 2));
+      }
+      if (server) {
+        server.close(() => {
+          console.log('Server closed');
+          process.exit(0);
+        });
+      }
+    });
+
+    process.on('SIGTERM', async () => {
+      console.log('\n\nReceived SIGTERM, shutting down...');
+      if (orchestrator) {
+        await orchestrator.stop();
+      }
+      if (server) {
+        server.close(() => process.exit(0));
+      }
+    });
 
   } catch (error) {
-    console.error('Failed:', error.message);
+    console.error('Failed to start:', error.message);
+    console.error(error.stack);
+
+    if (server) {
+      server.close();
+    }
+    if (orchestrator) {
+      await orchestrator.stop();
+    }
+
     process.exit(1);
   }
 }
 
-// Run if called directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main();
-}
+// Run main
+main();
 
-// Export for testing or programmatic use
+// Export for testing
 export { main };
