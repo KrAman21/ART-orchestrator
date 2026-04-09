@@ -62,6 +62,9 @@ export class StateManager {
     // requestKey format: "source_destination|api|correlationId"
     this.bufferedRequests = new Map();
 
+    // Map to store response headers per correlation key
+    this.responseHeaders = new Map();
+
     this.config = {
       defaultTimeoutMs: 30000,
       maxBufferedResponses: 100,
@@ -180,6 +183,61 @@ export class StateManager {
    */
   hasBufferedRequest(requestKey) {
     return this.bufferedRequests.has(requestKey);
+  }
+
+  /**
+   * Find a buffered request matching the expected entry criteria
+   * @param {Object} criteria - { source, destination, logTag }
+   * @returns {Object|null} - { key, data } or null if not found
+   */
+  findBufferedRequest(criteria) {
+    for (const [key, entry] of this.bufferedRequests.entries()) {
+      const data = entry.data;
+      if (
+        data.source === criteria.source &&
+        data.destination === criteria.destination &&
+        data.logTag === criteria.logTag
+      ) {
+        return { key, data };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Remove a buffered request by key
+   * @param {string} requestKey - The key to remove
+   */
+  removeBufferedRequest(requestKey) {
+    const existed = this.bufferedRequests.delete(requestKey);
+    if (existed) {
+      logger.debug('Removed buffered request', { requestKey });
+    }
+    return existed;
+  }
+
+  /**
+   * Store response headers for a correlation key
+   * @param {string} correlationKey - The correlation key
+   * @param {Object} headers - Response headers
+   */
+  storeResponseHeaders(correlationKey, headers) {
+    this.responseHeaders.set(correlationKey, headers);
+    logger.debug('Stored response headers', { correlationKey, headerKeys: Object.keys(headers) });
+  }
+
+  /**
+   * Get stored response headers for a correlation key
+   * @param {string} correlationKey - The correlation key
+   * @returns {Object|null} - The headers or null
+   */
+  getResponseHeaders(correlationKey) {
+    const headers = this.responseHeaders.get(correlationKey);
+    if (headers) {
+      this.responseHeaders.delete(correlationKey);
+      logger.debug('Retrieved response headers', { correlationKey, headerKeys: Object.keys(headers) });
+    }
+    return headers || null;
   }
 
   /**

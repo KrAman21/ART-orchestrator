@@ -69,9 +69,9 @@ export async function fetchLogsFromJSONFile(filePath) {
 
     // Sort logs by messageNumber
     const sortedLogs = data.sort((a, b) => {
-      const numA = a.messageNumber || 0;
-      const numB = b.messageNumber || 0;
-      return numA - numB;
+      const timeA = a.message?.created_at || '';
+      const timeB = b.message?.created_at || '';
+      return new Date(timeA) - new Date(timeB);
     });
 
     console.log(`Loaded ${sortedLogs.length} logs from ${filePath}`);

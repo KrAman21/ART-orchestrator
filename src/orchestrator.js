@@ -3,7 +3,7 @@ import { LogSequenceValidator, LogEntry } from './services/log-sequence-validato
 import { makeRequest } from './services/http-client.js';
 import { compareLog } from './services/comparator.js';
 import { logger } from './utils/logger.js';
-import { extractPayload } from './config.js';
+import { extractPayload, getApiForLogTag as getApiFromConfig, getEndpointConfig, SERVICE_MAP, SKIP_DESTINATIONS } from './config.js';
 
 /**
  * ReplayOrchestrator - Event-driven orchestrator for replaying production logs
@@ -36,7 +36,83 @@ export class ReplayOrchestrator {
       processedLogs: []
     };
 
+    // Track pending external requests (e.g., GW→LENDER) by context for out-of-order matching
+    // Map<contextKey, {requestEntry, responseEntry}>
+    this.pendingExternalRequests = new Map();
+
+    // Buffer for early-arriving external responses (response arrives before tracking)
+    // Map<contextKey, incoming>
+    this.earlyExternalResponses = new Map();
+
     this.isRunning = false;
+  }
+
+  /**
+   * Generate a context key for matching requests and responses
+   * Based on loan_application_id and lender_org_id
+   */
+  getContextKey(entry) {
+    const parts = [];
+    if (entry.loanApplicationId) {
+      parts.push(entry.loanApplicationId);
+    }
+    if (entry.lenderOrgId) {
+      parts.push(entry.lenderOrgId);
+    }
+    return parts.join(':') || entry.requestId || `${entry.index}`;
+  }
+
+  /**
+   * Extract merchantId from logs
+   * Throws error if not found
+   */
+  static extractMerchantId(logs) {
+    for (const log of logs) {
+      const merchantId = log?.message?.merchant_id;
+      if (merchantId) {
+        logger.info('Extracted merchantId from logs', { merchantId });
+        return merchantId;
+      }
+    }
+    throw new Error('merchant_id not found in logs. Seed data onboarding requires merchant_id.');
+  }
+
+  /**
+   * Onboard seed data to LSP
+   * Called before replay starts
+   */
+  async onboardSeedData(merchantId) {
+    logger.info('Onboarding seed data to LSP: ', { baseUrl: SERVICE_MAP.LSP.baseUrl + '/art/set', merchantId });
+
+    try {
+      const response = await makeRequest(
+        SERVICE_MAP.LSP.baseUrl,
+        '/art/set',
+        'POST',
+        { merchantId },
+        null,  // requestId
+        null,  // sourceDestination
+        null,  // logTag
+        merchantId
+      );
+
+      if (response.error) {
+        throw new Error(`Seed data onboarding failed: ${response.message}`);
+      }
+
+      if (response.status !== 200) {
+        throw new Error(`Seed data onboarding failed: HTTP ${response.status}`);
+      }
+
+      logger.info('Seed data onboarding successful', {
+        merchantId,
+        status: response.status
+      });
+
+    } catch (error) {
+      logger.error('Seed data onboarding failed', { merchantId, error: error.message });
+      throw error;
+    }
   }
 
   /**
@@ -44,6 +120,11 @@ export class ReplayOrchestrator {
    */
   async start() {
     this.isRunning = true;
+
+    // Extract merchantId and onboard seed data
+    const merchantId = ReplayOrchestrator.extractMerchantId(this.logs);
+    await this.onboardSeedData(merchantId);
+
     logger.info('Replay orchestrator started', {
       totalLogs: this.logs.length,
       validator: this.validator.getProgress()
@@ -61,6 +142,12 @@ export class ReplayOrchestrator {
 
     const entry = this.validator.getCurrentEntry();
 
+    logger.info('processNextLogEntry called', {
+      currentEntry: entry ? entry.toString() : 'none',
+      isExternalSource: entry?.isExternalSource(),
+      isRequest: entry?.isRequest
+    });
+
     if (!entry) {
       logger.info('No more log entries to process');
       return;
@@ -73,6 +160,10 @@ export class ReplayOrchestrator {
       });
 
       await this.triggerExternalRequest(entry);
+    } else {
+      logger.debug('Not an external source request, waiting for incoming', {
+        entry: entry.toString()
+      });
     }
     // Otherwise, wait for incoming request (normal flow)
   }
@@ -90,14 +181,14 @@ export class ReplayOrchestrator {
       const expectedResponse = this.validator.peekNext(10).find(e => {
         // Basic direction match
         if (!(e.source === entry.destination &&
-              e.destination === entry.source &&
-              e.isResponse)) {
+          e.destination === entry.source &&
+          e.isResponse)) {
           return false;
         }
 
         // If request has loan_application_id, response must match
         if (entry.loanApplicationId &&
-            e.loanApplicationId !== entry.loanApplicationId) {
+          e.loanApplicationId !== entry.loanApplicationId) {
           return false;
         }
 
@@ -109,6 +200,13 @@ export class ReplayOrchestrator {
         return true;
       });
 
+      // Get endpoint config for custom headers
+      const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
+      const customHeaders = endpointConfig?.headers || {};
+
+      // Use original source_destination for makeRequest to detect WRAPPER correctly
+      const sourceDestinationForRequest = entry.originalSourceDestination || entry.sourceDestination;
+
       // Make request to destination service (LSP or GW)
       const response = await makeRequest(
         this.getServiceBaseUrl(service),
@@ -116,9 +214,10 @@ export class ReplayOrchestrator {
         'POST',
         entry.payload,
         entry.requestId,
-        entry.sourceDestination,
+        sourceDestinationForRequest,
         entry.logTag,
-        null
+        null,
+        customHeaders
       );
 
       // Compare response with expected
@@ -134,7 +233,8 @@ export class ReplayOrchestrator {
         } else {
           logger.info('External request response validated', {
             request: entry.toString(),
-            response: expectedResponse.toString()
+            response: expectedResponse.toString(),
+            actualResponse: response.data
           });
           this.recordSuccess('external_response_validation', expectedResponse);
         }
@@ -160,17 +260,10 @@ export class ReplayOrchestrator {
 
   /**
    * Get API endpoint for a log tag
+   * Delegates to config.js
    */
   getApiForLogTag(logTag) {
-    // Map log tags to API endpoints
-    const mappings = {
-      'POLLING API Request': '/api/polling',
-      'SUBMIT_APPLICATION': '/api/applications',
-      'STATUS_CHECK': '/api/status',
-      'LENDER_RESPONSE': '/api/callback/lender',
-      'STATUS_CALLBACK': '/api/callback/status'
-    };
-    return mappings[logTag] || '/api/unknown';
+    return getApiFromConfig(logTag) || '/api/unknown';
   }
 
   /**
@@ -219,7 +312,9 @@ export class ReplayOrchestrator {
       destination: incoming.destination,
       logTag: incoming.logTag,
       isRequest: true,
-      requestId: incoming.requestId
+      requestId: incoming.requestId,
+      loanApplicationId: incoming.loanApplicationId,
+      lenderOrgId: incoming.lenderOrgId
     });
 
     // Handle case where we're expecting a response but got a request
@@ -229,6 +324,12 @@ export class ReplayOrchestrator {
         expected: expectedEntry.toString(),
         received: `${incoming.source}→${incoming.destination} ${incoming.logTag}`
       });
+    }
+
+    // Check if this is a response from a skipped external service (e.g., LENDER→GW)
+    // This handles out-of-order responses where response arrives before the orchestrator expects it
+    if (incoming.source === 'LENDER' && incoming.destination === 'GW') {
+      return await this.handleExternalServiceResponse(incoming);
     }
 
     // If validation failed, check if we need to handle out-of-order scenarios
@@ -241,7 +342,26 @@ export class ReplayOrchestrator {
       return this.fail(validation.error);
     }
 
-    // Validation passed - compare payloads
+    // Validation passed - check if there's a buffered request for this expected entry
+    const buffered = this.stateManager.findBufferedRequest({
+      source: expectedEntry.source,
+      destination: expectedEntry.destination,
+      logTag: expectedEntry.logTag
+    });
+
+    if (buffered) {
+      // Remove the buffered request and use it instead of the new one
+      this.stateManager.removeBufferedRequest(buffered.key);
+      logger.info('Using buffered request instead of new one', {
+        bufferedKey: buffered.key,
+        newRequestId: incoming.requestId,
+        bufferedRequestId: buffered.data.requestId
+      });
+      // Compare payloads using the buffered request
+      incoming = buffered.data;
+    }
+
+    // Compare payloads
     const expectedPayload = expectedEntry.payload;
     const comparison = this.comparePayloads(expectedPayload, incoming.payload, incoming.logTag);
 
@@ -258,21 +378,8 @@ export class ReplayOrchestrator {
     this.validator.advance();
     this.recordSuccess('request_validation', expectedEntry);
 
-    // Determine next action based on destination
-    if (expectedEntry.isExternalDestination()) {
-      // External destination - we need to mock the response
-      logger.info('External destination, mocking response', {
-        destination: expectedEntry.destination
-      });
-
-      // Return the expected response from the next log entry
-      const mockResponse = await this.getExpectedResponse(expectedEntry);
-      return mockResponse;
-    }
-
-    // Forward to actual destination service
+    // Forward to destination and validate the actual response
     const response = await this.forwardToDestination(incoming, expectedEntry);
-
     return response;
   }
 
@@ -337,9 +444,17 @@ export class ReplayOrchestrator {
     this.validator.advance();
     this.recordSuccess('response_validation', expectedEntry);
 
+    // Trigger next log entry processing (for external source requests like APP->LSP)
+    setImmediate(() => {
+      this.processNextLogEntry().catch(err => {
+        logger.error('Error processing next log entry after response validation', { error: err.message });
+      });
+    });
+
     return {
       success: true,
-      payload: incomingResponse.payload
+      payload: incomingResponse.payload,
+      headers: incomingResponse.headers
     };
   }
 
@@ -350,11 +465,74 @@ export class ReplayOrchestrator {
     const destination = expectedEntry.destination;
     const api = incoming.api;
 
+    // Check if destination should be skipped (external services like LENDER, APP)
+    if (SKIP_DESTINATIONS.includes(destination)) {
+      logger.info('Skipping external destination (tracked for async response)', {
+        destination,
+        api,
+        requestId: incoming.requestId,
+        logTag: expectedEntry.logTag.replace('Request', 'Response').replace('INCOMING', 'OUTGOING'), // Derive expected response log tag,
+        sourceDestination: expectedEntry.sourceDestination
+      });
+
+      // Find the expected response from logs
+      const expectedResponse = this.findCorrespondingResponse(expectedEntry);
+      if (!expectedResponse) {
+        return this.fail(`No expected response found for skipped destination ${destination}`);
+      }
+
+      // Track this pending external request by context for out-of-order matching
+      const contextKey = this.getContextKey(expectedEntry);
+      this.pendingExternalRequests.set(contextKey, {
+        requestEntry: expectedEntry,
+        responseEntry: expectedResponse
+      });
+
+      // Check if response arrived early and process it now
+      const earlyResponse = this.earlyExternalResponses.get(contextKey);
+      if (earlyResponse) {
+        logger.info('Processing early-arrived response now', { contextKey });
+        this.earlyExternalResponses.delete(contextKey);
+        // Process immediately (but don't return - continue with normal response)
+        this.handleExternalServiceResponse(earlyResponse).catch(err => {
+          logger.error('Error processing early response', { error: err.message });
+        });
+      }
+
+      logger.debug('Tracked pending external request', {
+        contextKey,
+        requestIndex: expectedEntry.index,
+        expectedResponseIndex: expectedResponse.index
+      });
+
+      // Mark both request and response as processed (since we're mocking the external call)
+      this.validator.markProcessed(expectedEntry);
+      this.validator.markProcessed(expectedResponse);
+
+      // Trigger next log entry processing (for external source requests like APP->LSP)
+      // Use setImmediate to let current request handling complete first
+      setImmediate(() => {
+        this.processNextLogEntry().catch(err => {
+          logger.error('Error processing next log entry after skipping destination', { error: err.message });
+        });
+      });
+
+      return {
+        success: true,
+        payload: expectedResponse.payload,
+        tracked: true
+      };
+    }
+
     logger.info('Forwarding to destination', {
       destination,
       api,
       requestId: incoming.requestId
     });
+
+    // Get endpoint config for custom headers
+    const endpointConfig = getEndpointConfig(expectedEntry.sourceDestination, expectedEntry.logTag);
+    const customHeaders = { ...incoming.headers, ...endpointConfig?.headers };
 
     try {
       // Generate correlation key for tracking
@@ -364,11 +542,21 @@ export class ReplayOrchestrator {
         incoming.requestId
       );
 
+      // Find the expected response entry (may not be the immediate next entry)
+      const expectedResponse = this.findCorrespondingResponse(expectedEntry);
+      logger.info('Found expected response for request', {
+        request: expectedEntry.toString(),
+        expectedResponse: expectedResponse ? expectedResponse.toString() : 'null'
+      });
+
       // Register pending request (for response matching)
       const responsePromise = this.stateManager.registerPendingRequest(
         correlationKey,
-        this.validator.peekNext(1)[0] // Next entry should be the response
+        expectedResponse
       );
+
+      // Use original source_destination for makeRequest to detect WRAPPER correctly
+      const sourceDestinationForRequest = expectedEntry.originalSourceDestination || expectedEntry.sourceDestination;
 
       // Make actual HTTP request to destination
       // This would use the http-client with actual endpoint mapping
@@ -378,13 +566,41 @@ export class ReplayOrchestrator {
         'POST', // Method should come from config
         incoming.payload,
         incoming.requestId,
-        expectedEntry.sourceDestination,
+        sourceDestinationForRequest,
         expectedEntry.logTag,
-        null // merchantId
+        null, // merchantId
+        customHeaders
       );
 
       // If response came synchronously, handle it
       if (serviceResponse && !serviceResponse.error) {
+        // Store response headers for forwarding
+        if (serviceResponse.headers) {
+          this.stateManager.storeResponseHeaders(correlationKey, serviceResponse.headers);
+        }
+
+        // Validate response against expected
+        if (expectedResponse) {
+          const comparison = this.comparePayloads(
+            expectedResponse.payload,
+            serviceResponse.data,
+            expectedResponse.logTag
+          );
+
+          if (!comparison.match) {
+            this.recordFailure('downstream_response_comparison', expectedResponse, comparison.differences);
+          } else {
+            logger.info('Downstream response validated', {
+              request: expectedEntry.toString(),
+              response: expectedResponse.toString()
+            });
+            this.recordSuccess('downstream_response_validation', expectedResponse);
+          }
+
+          // Mark response as processed
+          this.validator.markProcessed(expectedResponse);
+        }
+
         // Try to match with pending
         const handled = this.stateManager.handleIncomingResponse(
           correlationKey,
@@ -392,15 +608,37 @@ export class ReplayOrchestrator {
         );
 
         if (handled) {
-          // Response was matched with pending request
-          return serviceResponse.data;
+          // Response was matched with pending request - include headers
+          // Continue processing next log entry
+          await this.processNextLogEntry();
+
+          return {
+            success: true,
+            payload: serviceResponse.data,
+            headers: serviceResponse.headers
+          };
         }
       }
 
       // Wait for response (handles race condition where response arrives separately)
       const finalResponse = await responsePromise;
 
-      return finalResponse;
+      // Get stored headers and include in response
+      const storedHeaders = this.stateManager.getResponseHeaders(correlationKey);
+
+      // Validate and mark expected response as processed if not already done
+      if (expectedResponse && !this.validator.processedIndices.has(expectedResponse.index)) {
+        this.validator.markProcessed(expectedResponse);
+        this.recordSuccess('downstream_response_validation', expectedResponse);
+      }
+
+      // Continue processing next log entry
+      await this.processNextLogEntry();
+
+      return {
+        ...finalResponse,
+        headers: finalResponse.headers || storedHeaders
+      };
 
     } catch (error) {
       logger.error('Failed to forward request', {
@@ -479,6 +717,93 @@ export class ReplayOrchestrator {
   }
 
   /**
+   * Handle response from an external service (e.g., LENDER→GW callback)
+   * Matches by context (loan_application_id, lender_org_id) to find the corresponding request
+   */
+  async handleExternalServiceResponse(incoming) {
+    // Build context key from incoming response payload
+    const incomingLoanAppId = incoming.payload?.loan_application_id || incoming.payload?.applicationid;
+    const incomingLenderOrgId = incoming.payload?.lender_org_id;
+    const contextKey = [incomingLoanAppId, incomingLenderOrgId].filter(Boolean).join(':');
+
+    logger.info('Handling external service response', {
+      source: incoming.source,
+      destination: incoming.destination,
+      contextKey,
+      pendingCount: this.pendingExternalRequests.size
+    });
+
+    // Find matching pending request by context
+    let matchedEntry = null;
+    let matchedResponse = null;
+
+    for (const [key, value] of this.pendingExternalRequests.entries()) {
+      const responseContextKey = this.getContextKey(value.responseEntry);
+      if (responseContextKey === contextKey || key === contextKey) {
+        matchedEntry = value.requestEntry;
+        matchedResponse = value.responseEntry;
+        this.pendingExternalRequests.delete(key);
+        logger.info('Matched external response to pending request', {
+          requestIndex: matchedEntry.index,
+          responseIndex: matchedResponse.index,
+          contextKey
+        });
+        break;
+      }
+    }
+
+    // If no match, check if response arrived early (before we tracked the request)
+    if (!matchedResponse) {
+      logger.warn('No pending external request found for response, buffering', {
+        contextKey,
+        availableKeys: Array.from(this.pendingExternalRequests.keys())
+      });
+      this.earlyExternalResponses.set(contextKey, incoming);
+      return {
+        success: true,
+        buffered: true,
+        message: 'Response buffered, awaiting matching request'
+      };
+    }
+
+    // Compare the incoming response with expected
+    const comparison = this.comparePayloads(
+      matchedResponse.payload,
+      incoming.payload,
+      incoming.logTag || matchedResponse.logTag
+    );
+
+    if (!comparison.match) {
+      return this.fail('External response comparison failed', comparison.differences);
+    }
+
+    // Mark both request and response as processed in the validator
+    // First mark the request entry as processed
+    if (matchedEntry.index < this.validator.currentIndex) {
+      // Already passed - no need to mark
+      logger.debug('Request entry already passed', { index: matchedEntry.index });
+    } else if (matchedEntry.index === this.validator.currentIndex) {
+      // Currently at this entry - advance
+      this.validator.advance();
+    } else {
+      // Ahead of current - mark as processed without advancing through intervening entries
+      this.validator.markProcessed(matchedEntry);
+    }
+
+    // Mark the response as processed (it's after the request)
+    this.validator.markProcessed(matchedResponse);
+    this.recordSuccess('external_response_matched', matchedResponse);
+
+    // Continue processing next log entry to trigger subsequent external requests
+    await this.processNextLogEntry();
+
+    return {
+      success: true,
+      payload: matchedResponse.payload
+    };
+  }
+
+  /**
    * Get expected response for a given request from logs
    */
   async getExpectedResponse(requestEntry) {
@@ -488,8 +813,9 @@ export class ReplayOrchestrator {
       throw new Error(`No response found for request ${requestEntry.toString()}`);
     }
 
-    // Mark response as processed
+    // Mark response as processed and track it as mocked
     this.validator.markProcessed(responseEntry);
+    this.mockedResponseIndices.add(responseEntry.index);
 
     return {
       success: true,
@@ -502,15 +828,15 @@ export class ReplayOrchestrator {
    */
   findCorrespondingResponse(requestEntry) {
     // Look for response with reversed source_destination and matching request context
-    const reversedDirection = `${requestEntry.destination}_${requestEntry.source}`;
+    const direction = `${requestEntry.source}_${requestEntry.destination}`;
 
-    // Search in remaining logs
-    const lookahead = this.validator.peekNext(10);
+    // Search in remaining logs - look ahead further to handle interleaved entries
+    const lookahead = this.validator.peekNext(50);
 
     for (const entry of lookahead) {
       if (
         entry.isResponse &&
-        entry.sourceDestination === reversedDirection &&
+        entry.sourceDestination === direction &&
         this.matchesRequestContext(requestEntry, entry)
       ) {
         return entry;
@@ -527,16 +853,25 @@ export class ReplayOrchestrator {
     // Match by loan_application_id if present
     if (
       requestEntry.loanApplicationId &&
-      responseEntry.loanApplicationId
+      responseEntry.loanApplicationId &&
+      requestEntry.loanApplicationId !== responseEntry.loanApplicationId
     ) {
-      return requestEntry.loanApplicationId === responseEntry.loanApplicationId;
+      return false;
+    }
+    // Match by loan_application_id if present
+    if (
+      requestEntry.lenderOrgId &&
+      responseEntry.lenderOrgId &&
+      requestEntry.lenderOrgId !== responseEntry.lenderOrgId
+    ) {
+      return false;
     }
 
     // Match by request_id if present
-    if (requestEntry.requestId && responseEntry.requestId) {
-      // In real traces, response might have related request_id
-      return true; // Simplified - should check actual relationship
-    }
+    // if (requestEntry.requestId && responseEntry.requestId) {
+    //   // In real traces, response might have related request_id
+    //   return true; // Simplified - should check actual relationship
+    // }
 
     return true; // Default to match for simple cases
   }
@@ -556,7 +891,11 @@ export class ReplayOrchestrator {
       'LSP': process.env.LSP_URL || 'http://localhost:4232',
       'GW': process.env.GW_URL || 'http://localhost:2344'
     };
-    return urls[serviceName];
+    const url = urls[serviceName];
+    if (!url) {
+      logger.warn('Unknown service, no base URL configured', { serviceName });
+    }
+    return url;
   }
 
   /**

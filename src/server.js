@@ -1,6 +1,6 @@
 import express from 'express';
 import { logger } from './utils/logger.js';
-import { getLogTagForApi, getApiMapping } from './config.js';
+import { getApiMapping } from './config.js';
 
 /**
  * Create Express server with routes for LSP and GW
@@ -8,6 +8,7 @@ import { getLogTagForApi, getApiMapping } from './config.js';
  * Routes are organized by source service:
  * - /lsp/* - Routes that LSP calls (LSP -> GW flows)
  * - /gw/* - Routes that GW calls (GW -> LSP flows)
+ * - /webhook/* - External service callbacks
  */
 export function createServer(orchestrator) {
   const app = express();
@@ -43,138 +44,79 @@ export function createServer(orchestrator) {
     res.json(orchestrator.getResults());
   });
 
-  // ============================================
-  // LSP Routes (LSP calls these endpoints)
-  // These represent LSP -> GW flows
-  // ============================================
-
-  const lspRouter = express.Router();
-
-  // Generic LSP request handler
-  lspRouter.use('/:api(*)', async (req, res) => {
+  /**
+   * Unified request handler for all service routes
+   * Derives source/destination entirely from API mapping
+   * @returns {Function} Express handler
+   */
+  const unifiedHandler = () => async (req, res) => {
+    // console.log(`Received request on ${req.path} with body:`, req.body);
     try {
       const api = '/' + req.params.api;
+      console.log(`Handling API: ${api}`);
       const payload = req.body;
       const requestId = req.headers['x-request-id'] || req.body.request_id;
 
-      // Determine logTag based on API endpoint (from config mapping)
+      // Determine source/destination and logTag from API endpoint mapping
       const mapping = getApiMapping(api);
-      const logTag = mapping?.logTag;
+      if (!mapping) {
+        // Unknown API endpoint - likely a webhook/callback, ignore gracefully
+        logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
+        return res.json({ success: true, ignored: true, message: 'Webhook ignored' });
+      }
+
+      // Source/destination always from mapping
+      const parts = mapping.sourceDestination.split('_');
+      const source = parts[0];
+      const destination = parts[1];
+      const logTag = mapping.logTag;
+
+      console.log('Request headers: ', req.headers);
+
+      // Extract correlation fields from payload for matching
+      const loanApplicationId = payload?.loan_application_id;
+      const lenderOrgId = payload?.lender_org_id;
 
       const result = await orchestrator.handleIncomingRequest({
-        source: 'LSP',
-        destination: 'GW',
+        source,
+        destination,
         api,
         payload,
         requestId,
         logTag,
-        headers: req.headers
+        headers: req.headers,
+        loanApplicationId,
+        lenderOrgId
       });
 
       if (result.success === false) {
         return res.status(400).json(result);
+      }
+
+      // Forward response headers if present
+      if (result.headers) {
+        Object.entries(result.headers).forEach(([key, value]) => {
+          res.setHeader(key, value);
+        });
       }
 
       res.json(result.payload || result);
 
     } catch (error) {
-      logger.error('LSP route error', { error: error.message, stack: error.stack });
+      logger.error(`Route error`, { error: error.message, stack: error.stack });
       res.status(500).json({
         success: false,
         error: error.message
       });
     }
-  });
-
-  app.use('/lsp', lspRouter);
+  };
 
   // ============================================
-  // GW Routes (GW calls these endpoints)
-  // These represent GW -> LSP flows
+  // Single Catch-all Route - handles all API calls
+  // Source/destination derived from API mapping in config
   // ============================================
 
-  const gwRouter = express.Router();
-
-  // Generic GW request handler
-  gwRouter.use('/:api(*)', async (req, res) => {
-    try {
-      const api = '/' + req.params.api;
-      const payload = req.body;
-      const requestId = req.headers['x-request-id'] || req.body.request_id;
-
-      // Determine logTag based on API endpoint
-      const mapping = getApiMapping(api);
-      const logTag = mapping?.logTag;
-
-      const result = await orchestrator.handleIncomingRequest({
-        source: 'GW',
-        destination: 'LSP',
-        api,
-        payload,
-        requestId,
-        logTag,
-        headers: req.headers
-      });
-
-      if (result.success === false) {
-        return res.status(400).json(result);
-      }
-
-      res.json(result.payload || result);
-
-    } catch (error) {
-      logger.error('GW route error', { error: error.message, stack: error.stack });
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
-    }
-  });
-
-  app.use('/gw', gwRouter);
-
-  // ============================================
-  // Webhook Routes (External -> GW flows)
-  // These handle LENDER callbacks and webhooks
-  // ============================================
-
-  const webhookRouter = express.Router();
-
-  webhookRouter.post('/lender/:lenderId', async (req, res) => {
-    try {
-      const lenderId = req.params.lenderId;
-      const payload = req.body;
-
-      logger.info('Received lender webhook', { lenderId });
-
-      // This represents LENDER -> GW flow
-      // We need to inject this into the log sequence
-      const result = await orchestrator.handleIncomingRequest({
-        source: 'LENDER',
-        destination: 'GW',
-        api: '/webhook/lender/' + lenderId,
-        payload,
-        requestId: req.headers['x-request-id'],
-        logTag: 'LENDER_CALLBACK',
-        headers: req.headers
-      });
-
-      if (result.success === false) {
-        return res.status(400).json(result);
-      }
-
-      res.json(result.payload || { received: true });
-
-    } catch (error) {
-      logger.error('Webhook error', { error: error.message });
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
-    }
-  });
-
-  app.use('/webhook', webhookRouter);
+  app.use('/:api(*)', unifiedHandler());
 
   // ============================================
   // Control Routes

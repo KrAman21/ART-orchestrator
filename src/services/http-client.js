@@ -1,52 +1,41 @@
 import { logger } from '../utils/logger.js';
+import { MOCK_CONFIG } from '../config.js';
 
 /**
  * Simple HTTP client for service calls
+ * Routes to mock servers when MOCK_ENABLED is true
  */
 
-let mockResponses = {
-  "POLLING API Request LSP_GW": {
-    status: 200,
-    statusText: 'OK',
-    data: {
-      message: 'Mock response for LSP_GW'
-    },
-    endpoint: '/api/polling',
-    headers: { 'content-type': 'application/json' }
-  },
-  "POLLING API Response GW_LSP": {
-    status: 200,
-    statusText: 'OK',
-    data: { message: 'Mock response for GW_LSP' },
-    endpoint: '/api/applications',
-    headers: { 'content-type': 'application/json' }
-  }
-};
+export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}) {
+  // Parse destination from sourceDestination (format: "SOURCE_DEST")
+  const dest = sourceDestination?.split('_')[1] || '';
 
-export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId) {
-  const key = `${logTag} ${sourceDestination}`;
-
-  logger.debug('Making HTTP request', {
+  logger.info('Making HTTP request', {
     baseUrl,
     endpoint,
     method,
     requestId,
     sourceDestination,
+    dest,
     logTag,
     merchantId,
-    mockKey: key
+    customHeaders
   });
 
-  if (mockResponses[key]) {
-    logger.debug('Using mock response', { key });
-    return mockResponses[key];
-  }
-
+  // When mocking is enabled, we use the mock server ports
+  // The baseUrl already points to mock ports via config
   const url = `${baseUrl}${endpoint}`;
   const headers = {
+    ...customHeaders,
+    'x-request-id': requestId,
     'Content-Type': 'application/json',
-    'x-request-id': requestId
+    'Accept': 'application/json'
   };
+
+  // Add loan_application_id for correlation if present in payload
+  if (payload?.loan_application_id) {
+    headers['x-loan-application-id'] = payload.loan_application_id;
+  }
 
   // Add merchant ID to headers if provided
   if (merchantId) {
@@ -54,10 +43,25 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
   }
 
   try {
+    let body = method !== 'GET' ? JSON.stringify(payload ?? {}) : undefined;
+
+    // Double-stringify if destination is WRAPPER
+    if (dest === 'WRAPPER' && body) {
+      body = JSON.stringify(body);
+      headers['disable_encryption'] = customHeaders['disable_encryption'] || 'TRUE';
+      headers['authorization'] = customHeaders['authorization'] || 'Basic flipkart';
+      logger.info('Double-stringified body for WRAPPER destination');
+    }
+
+    logger.info('Request body prepared', {
+      bodyPreview: body ? body.substring(0, 200) + (body.length > 200 ? '...' : '') : null,
+      contentType: headers['Content-Type']
+    });
+
     const response = await fetch(url, {
       method,
       headers,
-      body: method !== 'GET' ? JSON.stringify(payload) : undefined
+      body
     });
 
     const data = await response.json().catch(() => null);
@@ -71,9 +75,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       status: response.status,
       statusText: response.statusText,
       data,
-      headers: Object.fromEntries(response.headers.entries()),
-      logTag: response.logTag,
-      sourceDestination: response.sourceDestination
+      headers: Object.fromEntries(response.headers.entries())
     };
   } catch (error) {
     logger.error('HTTP request failed', {

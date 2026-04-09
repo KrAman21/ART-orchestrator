@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 // Service configuration mappings
 export const SERVICE_MAP = {
   LSP: { baseUrl: process.env.LSP_URL || 'http://localhost:4232', name: 'LSP' },
@@ -6,30 +8,29 @@ export const SERVICE_MAP = {
 
 // API endpoint mapping based on (sourceDestination, logTag) combination
 // Key format: "sourceDestination|logTag" where sourceDestination is "SOURCE_DEST"
+// Optional headers field for custom headers per endpoint
 export const API_TO_ENDPOINT_MAP = {
-  'LSP_GW|POLLING API Request': { endpoint: '/api/polling', method: 'POST', service: 'GW' },
-  'LSP_GW|SUBMIT_APPLICATION': { endpoint: '/api/applications', method: 'POST', service: 'GW' },
-  'LSP_GW|STATUS_CHECK': { endpoint: '/api/status', method: 'GET', service: 'GW' },
-  'GW_LSP|POLLING API Response': { endpoint: '/api/polling/response', method: 'POST', service: 'LSP' },
-  'GW_LSP|LENDER_RESPONSE': { endpoint: '/api/callback/lender', method: 'POST', service: 'LSP' },
-  'GW_LSP|STATUS_CALLBACK': { endpoint: '/api/callback/status', method: 'POST', service: 'LSP' }
+  // 'LSP_GW|LSP-Eligibility_OUTGOING': { endpoint: '/v1/themis/eligibility', method: 'POST', service: 'GW', headers: {} },
+  // 'GW_LSP|LSP-Eligibility_INCOMING': { endpoint: '/v1/themis/eligibility/callback', method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-Eligibility_INCOMING': { endpoint: 'flipkart/eligibility', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
+  'APP_WRAPPER|FlipKart-EligibilityStatus_INCOMING': { endpoint: '/flipkart/eligibility/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
+  'LSP_APP|LSP-Eligibility_OUTGOING': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
+  'GW_LENDER|Themis-Eligibility Request': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'GATEWAY', headers: {} },
+  // 'LENDER_GW|Themis-Eligibility Response': { endpoint: '/v1/themis/gateway/response', method: 'POST', service: 'GW', headers: {} },
+  // 'LENDER_GW|ThemisGenerateOffersResponse Response': { endpoint: '/v1/themis/offers/response', method: 'POST', service: 'GW', headers: {} }
 };
 
-// Reverse mapping: endpoint -> (sourceDestination, logTag)
-// Used for looking up response log metadata from endpoint
-export const ENDPOINT_API_MAP = {
-  '/api/polling': { sourceDestination: 'GW_LSP', logTag: 'POLLING API Response' },
-  '/api/applications': { sourceDestination: 'GW_LSP', logTag: 'SUBMIT_APPLICATION Response' }
-};
-
-// API endpoint mapping: endpoint -> { logTag, api, sourceDestination }
+// API endpoint mapping: endpoint -> { logTag, api, sourceDestination, headers }
 export const API_TO_LOGTAG_MAP = {
-  '/api/polling': { logTag: 'POLLING API Request', api: '/api/polling', sourceDestination: 'LSP_GW' },
-  '/api/applications': { logTag: 'SUBMIT_APPLICATION', api: '/api/applications', sourceDestination: 'LSP_GW' },
-  '/api/status': { logTag: 'STATUS_CHECK', api: '/api/status', sourceDestination: 'LSP_GW' },
-  '/api/callback/lender': { logTag: 'LENDER_RESPONSE', api: '/api/callback/lender', sourceDestination: 'GW_LSP' },
-  '/api/callback/status': { logTag: 'STATUS_CALLBACK', api: '/api/callback/status', sourceDestination: 'GW_LSP' },
-  '/api/polling/response': { logTag: 'POLLING API Response', api: '/api/polling/response', sourceDestination: 'GW_LSP' }
+  // '/v1/themis/eligibility': { logTag: 'LSP-Eligibility_OUTGOING', api: '/v1/themis/eligibility', sourceDestination: 'LSP_GW', headers: {} },
+  // '/v1/themis/eligibility/callback': { logTag: 'LSP-Eligibility_INCOMING', api: '/v1/themis/eligibility/callback', sourceDestination: 'GW_LSP', headers: {} },
+  '/lsp/softEligibility': { logTag: 'Themis-Eligibility Request', api: '/lsp/softEligibility', sourceDestination: 'GW_LENDER', headers: {} },
+  '/gateway/v1.0/eligibility': { logTag: 'LSP-Eligibility_OUTGOING', api: '/gateway/v1.0/eligibility', sourceDestination: 'LSP_GW', headers: {} },
+  '/flipkart/eligibility': { logTag: 'FlipKart-Eligibility_INCOMING', api: '/flipkart/eligibility', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/eligibility/status': { logTag: 'FlipKart-EligibilityStatus_INCOMING', api: '/flipkart/eligibility/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  // '/v1/themis/gateway/request': { logTag: 'Themis-Eligibility Request', api: '/v1/themis/gateway/request', sourceDestination: 'GW_LENDER', headers: {} },
+  // '/v1/themis/gateway/response': { logTag: 'Themis-Eligibility Response', api: '/v1/themis/gateway/response', sourceDestination: 'LENDER_GW', headers: {} },
+  // '/v1/themis/offers/response': { logTag: 'ThemisGenerateOffersResponse Response', api: '/v1/themis/offers/response', sourceDestination: 'LENDER_GW', headers: {} }
 };
 
 // Destinations that should not be called (external services)
@@ -40,6 +41,14 @@ export const ORCHESTRATOR_CONFIG = {
   port: parseInt(process.env.PORT, 10) || 3001,
   timeoutMs: parseInt(process.env.TIMEOUT_MS, 10) || 30000,
   autoStart: process.env.AUTO_START !== 'false'
+};
+
+// Mock configuration
+export const MOCK_CONFIG = {
+  enabled: process.env.MOCK_ENABLED === 'true',
+  // When mocks are enabled, these URLs override SERVICE_MAP
+  mockLspUrl: process.env.MOCK_LSP_URL || 'http://127.0.0.1:4232',
+  mockGwUrl: process.env.MOCK_GW_URL || 'http://127.0.0.1:2344'
 };
 
 /**
@@ -88,12 +97,37 @@ export function getApiMapping(api) {
 }
 
 /**
+ * Get API endpoint for a log tag (reverse lookup from API_TO_LOGTAG_MAP)
+ * @param {string} logTag - The log tag
+ * @returns {string|null} - The API endpoint
+ */
+export function getApiForLogTag(logTag) {
+  const entry = Object.values(API_TO_LOGTAG_MAP).find(m => m.logTag === logTag);
+  return entry?.api || null;
+}
+
+/**
  * Get endpoint config for a logTag and sourceDestination
+ * Tries remapped version first (APP_LSP), falls back to original (APP_WRAPPER)
  * @param {string} sourceDestination
  * @param {string} logTag
  * @returns {Object|null}
  */
 export function getEndpointConfig(sourceDestination, logTag) {
+  // Try the provided sourceDestination first
   const key = `${sourceDestination}|${logTag}`;
-  return API_TO_ENDPOINT_MAP[key] || null;
+  if (API_TO_ENDPOINT_MAP[key]) {
+    return API_TO_ENDPOINT_MAP[key];
+  }
+  // If not found and it's a remapped version, try the original
+  const remappings = {
+    'APP_LSP': 'APP_WRAPPER',
+    'LSP_APP': 'WRAPPER_APP'
+  };
+  const original = remappings[sourceDestination];
+  if (original) {
+    const originalKey = `${original}|${logTag}`;
+    return API_TO_ENDPOINT_MAP[originalKey] || null;
+  }
+  return null;
 }

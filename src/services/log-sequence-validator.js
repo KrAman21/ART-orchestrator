@@ -14,18 +14,28 @@ class LogEntry {
     // Parse source_destination with WRAPPER remapping
     // Format: SOURCE_DEST (e.g., APP_LSP, LSP_GW)
     // APP_WRAPPER -> APP_LSP, WRAPPER_APP -> LSP_APP
-    let rawSourceDestination = this.message.source_destination || '';
-    rawSourceDestination = this.remapWrapperSourceDestination(rawSourceDestination);
-
-    this.sourceDestination = rawSourceDestination;
+    const rawSourceDestination = this.message.source_destination || '';
+    this.originalSourceDestination = rawSourceDestination; // Keep original for config lookups
+    this.sourceDestination = this.remapWrapperSourceDestination(rawSourceDestination);
     const parts = this.sourceDestination.split('_');
-    this.source = parts[0] || '';
-    this.destination = parts[1] || '';
 
-    // Log tag and type
+    // Log tag and type - determines if this is a request or response
     this.logTag = (this.message.log_tag || '').trim();
-    this.isRequest = this.logTag.endsWith('Request') || this.logTag.endsWith('_INCOMING');
-    this.isResponse = this.logTag.endsWith('Response') || this.logTag.endsWith('_OUTGOING');
+    const isIncoming = this.message.label === 'APP'? (this.logTag.endsWith('Request') || this.logTag.endsWith('INCOMING')) : (this.logTag.endsWith('Request') || this.logTag.endsWith('OUTGOING'));
+    const isOutgoing = this.message.label === 'APP'? (this.logTag.endsWith('Response') || this.logTag.endsWith('OUTGOING')) : (this.logTag.endsWith('Response') || this.logTag.endsWith('INCOMING'));
+    this.isRequest = isIncoming;
+    this.isResponse = isOutgoing;
+
+    // Parse source/destination - swap for responses since source_destination in logs
+    // always shows the request direction (e.g., APP_WRAPPER for both request and response)
+    if (this.isResponse) {
+      // For responses, swap source and destination (but keep sourceDestination unchanged for lookups)
+      this.source = parts[1] || '';
+      this.destination = parts[0] || '';
+    } else {
+      this.source = parts[0] || '';
+      this.destination = parts[1] || '';
+    }
 
     // Extract payload based on type
     this.payload = this.isRequest
@@ -193,6 +203,11 @@ export class LogSequenceValidator {
    */
   validateIncomingRequest(incoming) {
     const currentEntry = this.getCurrentEntry();
+    // return { valid: true, expectedEntry: currentEntry };
+    console.log('Validating incoming request', {
+      incoming,
+      currentEntry: currentEntry ? currentEntry.toString() : 'none'
+    });
 
     if (!currentEntry) {
       return {
@@ -224,7 +239,8 @@ export class LogSequenceValidator {
         entry.isRequest &&
         entry.source === incoming.source &&
         entry.destination === incoming.destination &&
-        entry.logTag === incoming.logTag
+        entry.logTag === incoming.logTag &&
+        this.matchesExpected(entry, incoming)
       );
 
       if (foundInLookahead) {
@@ -261,11 +277,30 @@ export class LogSequenceValidator {
    * Check if incoming request matches expected log entry
    */
   matchesExpected(expected, incoming) {
-    return (
-      expected.source === incoming.source &&
-      expected.destination === incoming.destination &&
-      expected.logTag === incoming.logTag
-    );
+    // Basic matching on source, destination, and log tag
+    if (
+      expected.source !== incoming.source ||
+      expected.destination !== incoming.destination ||
+      expected.logTag !== incoming.logTag
+    ) {
+      return false;
+    }
+
+    // Compare loanApplicationId if present in expected entry
+    if (expected.loanApplicationId && incoming.loanApplicationId) {
+      if (expected.loanApplicationId !== incoming.loanApplicationId) {
+        return false;
+      }
+    }
+
+    // Compare lenderOrgId if present in expected entry
+    if (expected.lenderOrgId && incoming.lenderOrgId) {
+      if (expected.lenderOrgId !== incoming.lenderOrgId) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   /**
