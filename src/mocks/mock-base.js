@@ -82,12 +82,17 @@ export class BaseMockService {
   /**
    * Find the log entry that matches an incoming request
    */
-  findMatchingRequestEntry(api, payload, loanApplicationId) {
+  findMatchingRequestEntry(api, payload, loanApplicationId, lenderOrgId) {
     return this.parsedLogs.find((entry, index) => {
       if (this.processedIndices.has(index)) return false;
 
       // Match by loan_application_id if provided
       if (loanApplicationId && entry.loanApplicationId !== loanApplicationId) {
+        return false;
+      }
+
+      // Match by lender_org_id if provided
+      if (lenderOrgId && entry.lenderOrgId !== lenderOrgId) {
         return false;
       }
 
@@ -261,20 +266,25 @@ export class BaseMockService {
    * This is the main entry point for mock behavior
    */
   async handleRequest(api, payload, requestId, loanApplicationId) {
+    // Extract lender_org_id from payload (could be nested in trace_request or at top level)
+    const lenderOrgId = payload?.lender_org_id || payload?.lenderOrgId || null;
+
     logger.info(`${this.name} mock received request`, {
       api,
       requestId,
       loanApplicationId,
+      lenderOrgId,
       processedIndices: Array.from(this.processedIndices)
     });
 
     // Find matching request entry in logs
-    const requestEntry = this.findMatchingRequestEntry(api, payload, loanApplicationId);
+    const requestEntry = this.findMatchingRequestEntry(api, payload, loanApplicationId, lenderOrgId);
 
     if (!requestEntry) {
       logger.warn(`${this.name} mock could not find matching request entry`, {
         api,
-        loanApplicationId
+        loanApplicationId,
+        lenderOrgId
       });
       return {
         status: 404,

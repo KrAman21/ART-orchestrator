@@ -4,7 +4,7 @@ import { logger } from '../utils/logger.js';
  * PendingRequest represents an in-flight request waiting for response
  */
 class PendingRequest {
-  constructor(correlationId, expectedLogEntry, timeoutMs = 30000) {
+  constructor(correlationId, expectedLogEntry, timeoutMs = 10000) {
     this.correlationId = correlationId;
     this.expectedLogEntry = expectedLogEntry;
     this.createdAt = Date.now();
@@ -60,13 +60,13 @@ export class StateManager {
 
     // Map<requestKey, requestData> - requests received but not yet processed
     // requestKey format: "source_destination|api|correlationId"
-    this.bufferedRequests = new Map();
+    this._bufferedRequests = new Map();
 
     // Map to store response headers per correlation key
     this.responseHeaders = new Map();
 
     this.config = {
-      defaultTimeoutMs: 30000,
+      defaultTimeoutMs: 10000,
       maxBufferedResponses: 100,
       maxBufferedRequests: 100,
       ...config
@@ -144,20 +144,20 @@ export class StateManager {
    * @param {Object} requestData - The request payload and metadata
    */
   bufferIncomingRequest(requestKey, requestData) {
-    if (this.bufferedRequests.size >= this.config.maxBufferedRequests) {
+    if (this._bufferedRequests.size >= this.config.maxBufferedRequests) {
       logger.warn('Buffered requests buffer full, dropping oldest');
-      const firstKey = this.bufferedRequests.keys().next().value;
-      this.bufferedRequests.delete(firstKey);
+      const firstKey = this._bufferedRequests.keys().next().value;
+      this._bufferedRequests.delete(firstKey);
     }
 
-    this.bufferedRequests.set(requestKey, {
+    this._bufferedRequests.set(requestKey, {
       data: requestData,
       receivedAt: Date.now()
     });
 
     logger.debug('Buffered early request', {
       requestKey,
-      bufferedCount: this.bufferedRequests.size
+      bufferedCount: this._bufferedRequests.size
     });
   }
 
@@ -167,9 +167,9 @@ export class StateManager {
    * @returns {Object|null} - The buffered request data or null
    */
   retrieveBufferedRequest(requestKey) {
-    const buffered = this.bufferedRequests.get(requestKey);
+    const buffered = this._bufferedRequests.get(requestKey);
     if (buffered) {
-      this.bufferedRequests.delete(requestKey);
+      this._bufferedRequests.delete(requestKey);
       logger.debug('Retrieved buffered request', { requestKey });
       return buffered.data;
     }
@@ -182,7 +182,7 @@ export class StateManager {
    * @returns {boolean}
    */
   hasBufferedRequest(requestKey) {
-    return this.bufferedRequests.has(requestKey);
+    return this._bufferedRequests.has(requestKey);
   }
 
   /**
@@ -191,13 +191,19 @@ export class StateManager {
    * @returns {Object|null} - { key, data } or null if not found
    */
   findBufferedRequest(criteria) {
-    for (const [key, entry] of this.bufferedRequests.entries()) {
+    for (const [key, entry] of this._bufferedRequests.entries()) {
       const data = entry.data;
       if (
         data.source === criteria.source &&
         data.destination === criteria.destination &&
         data.logTag === criteria.logTag
       ) {
+        // For async parallel calls, also check lenderOrgId if provided
+        if (criteria.lenderOrgId && data.lenderOrgId) {
+          if (data.lenderOrgId !== criteria.lenderOrgId) {
+            continue;
+          }
+        }
         return { key, data };
       }
     }
@@ -209,11 +215,26 @@ export class StateManager {
    * @param {string} requestKey - The key to remove
    */
   removeBufferedRequest(requestKey) {
-    const existed = this.bufferedRequests.delete(requestKey);
+    const existed = this._bufferedRequests.delete(requestKey);
     if (existed) {
       logger.debug('Removed buffered request', { requestKey });
     }
     return existed;
+  }
+
+  /**
+   * Find a buffered request by lenderOrgId
+   * @param {string} lenderOrgId - The lender org ID to match
+   * @returns {Object|null} - { key, data } or null
+   */
+  findBufferedRequestByLenderOrgId(lenderOrgId) {
+    for (const [key, entry] of this._bufferedRequests.entries()) {
+      const data = entry.data;
+      if (data.lenderOrgId === lenderOrgId) {
+        return { key, data };
+      }
+    }
+    return null;
   }
 
   /**
@@ -271,9 +292,9 @@ export class StateManager {
     const maxAge = this.config.defaultTimeoutMs * 2;
 
     // Clean old buffered requests
-    for (const [key, entry] of this.bufferedRequests.entries()) {
+    for (const [key, entry] of this._bufferedRequests.entries()) {
       if (now - entry.receivedAt > maxAge) {
-        this.bufferedRequests.delete(key);
+        this._bufferedRequests.delete(key);
         logger.debug('Cleaned up stale buffered request', { key });
       }
     }
@@ -284,7 +305,7 @@ export class StateManager {
     logger.info('StateManager cleanup completed', {
       pendingRequests: this.pendingRequests.size,
       pendingResponses: this.pendingResponses.size,
-      bufferedRequests: this.bufferedRequests.size
+      bufferedRequests: this._bufferedRequests.size
     });
   }
 
@@ -295,10 +316,20 @@ export class StateManager {
     return {
       pendingRequests: this.pendingRequests.size,
       pendingResponses: this.pendingResponses.size,
-      bufferedRequests: this.bufferedRequests.size,
+      bufferedRequests: this._bufferedRequests.size,
       pendingRequestIds: Array.from(this.pendingRequests.keys()),
       bufferedResponseIds: Array.from(this.pendingResponses.keys())
     };
+  }
+
+  /**
+   * Iterate over buffered requests
+   * @yields {[string, Object]} [key, entry] pairs
+   */
+  *iterateBufferedRequests() {
+    for (const [key, entry] of this._bufferedRequests) {
+      yield [key, entry];
+    }
   }
 }
 

@@ -71,11 +71,16 @@ export function createServer(orchestrator) {
       const destination = parts[1];
       const logTag = mapping.logTag;
 
-      console.log('Request headers: ', req.headers);
+      // console.log('Request headers: ', req.headers);
 
       // Extract correlation fields from payload for matching
       const loanApplicationId = payload?.loan_application_id;
-      const lenderOrgId = payload?.lender_org_id;
+      // lender_org_id can be at top level, nested in themisDetail, or in headers
+      const lenderOrgId = payload?.lender_org_id ||
+                          payload?.themisDetail?.lenderOrgId ||
+                          payload?.lenderOrgId ||
+                          req.headers['x-lender-org-id'] ||
+                          req.headers['X-Lender-Org-Id'];
 
       const result = await orchestrator.handleIncomingRequest({
         source,

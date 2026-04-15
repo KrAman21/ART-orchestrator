@@ -106,6 +106,15 @@ export const logger = {
     log('INFO', 'Health check', { service: serviceName, healthy });
   },
 
+  /**
+   * Log API call or mocked request/response
+   * Format: API LOG :: <SOURCE>-><DESTINATION> <API_NAME> <REQUEST/RESPONSE> <LOG_INDEX>
+   */
+  logApiCall: (source, destination, apiName, type, logIndex) => {
+    const arrow = source && destination ? `${source}->${destination}` : 'N/A';
+    log('INFO', `API LOG :: ${arrow} ${apiName} ${type} ${logIndex}`);
+  },
+
   logError: (error, context = {}) => {
     log('ERROR', error.message, { stack: error.stack, ...context });
   }

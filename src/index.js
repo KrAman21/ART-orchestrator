@@ -11,7 +11,7 @@ import { MOCK_CONFIG, SERVICE_MAP } from './config.js';
 const CONFIG = {
   PORT: process.env.PORT || 3001,
   LOGS_FILE_PATH: process.env.LOGS_FILE_PATH || 'data/logs.json',
-  TIMEOUT_MS: parseInt(process.env.TIMEOUT_MS, 10) || 30000,
+  TIMEOUT_MS: parseInt(process.env.TIMEOUT_MS, 10) || 10000,
   AUTO_START: process.env.AUTO_START !== 'false'
 };
 

@@ -14,7 +14,7 @@ export const API_TO_ENDPOINT_MAP = {
   // 'GW_LSP|LSP-Eligibility_INCOMING': { endpoint: '/v1/themis/eligibility/callback', method: 'POST', service: 'LSP', headers: {} },
   'APP_WRAPPER|FlipKart-Eligibility_INCOMING': { endpoint: 'flipkart/eligibility', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
   'APP_WRAPPER|FlipKart-EligibilityStatus_INCOMING': { endpoint: '/flipkart/eligibility/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
-  'LSP_APP|LSP-Eligibility_OUTGOING': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
+  'LSP_GW|LSP-Eligibility_OUTGOING': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
   'GW_LENDER|Themis-Eligibility Request': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'GATEWAY', headers: {} },
   // 'LENDER_GW|Themis-Eligibility Response': { endpoint: '/v1/themis/gateway/response', method: 'POST', service: 'GW', headers: {} },
   // 'LENDER_GW|ThemisGenerateOffersResponse Response': { endpoint: '/v1/themis/offers/response', method: 'POST', service: 'GW', headers: {} }
@@ -36,10 +36,33 @@ export const API_TO_LOGTAG_MAP = {
 // Destinations that should not be called (external services)
 export const SKIP_DESTINATIONS = ['APP', 'LENDER'];
 
+// Async/parallel API calls that can arrive out of order
+// Format: { sourceDestination: string, logTagPattern: string | RegExp }
+// These APIs are made in parallel by the source service and can arrive in any order
+export const ASYNC_PARALLEL_APIS = [
+  { sourceDestination: 'GW_LENDER', logTagPattern: /^Themis-Eligibility/ }
+];
+
+/**
+ * Check if an API call is async/parallel (can arrive out of order)
+ * @param {string} sourceDestination - Source to destination (e.g., "GW_LENDER")
+ * @param {string} logTag - The log tag for the API
+ * @returns {boolean}
+ */
+export function isAsyncParallelApi(sourceDestination, logTag) {
+  return ASYNC_PARALLEL_APIS.some(api => {
+    if (api.sourceDestination !== sourceDestination) return false;
+    if (typeof api.logTagPattern === 'string') {
+      return logTag === api.logTagPattern;
+    }
+    return api.logTagPattern.test(logTag);
+  });
+}
+
 // Orchestrator server configuration
 export const ORCHESTRATOR_CONFIG = {
   port: parseInt(process.env.PORT, 10) || 3001,
-  timeoutMs: parseInt(process.env.TIMEOUT_MS, 10) || 30000,
+  timeoutMs: parseInt(process.env.TIMEOUT_MS, 10) || 10000,
   autoStart: process.env.AUTO_START !== 'false'
 };
 

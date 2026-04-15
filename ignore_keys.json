@@ -1,0 +1,33 @@
+{
+  "*": [
+    "firstname",
+    "lastname",
+    "mobilenumber",
+    "phonenumber",
+    "phone",
+    "pan",
+    "pannumber",
+    "email",
+    "emailid",
+    "emailaddress",
+    "dateofbirth",
+    "dob",
+    "address",
+    "addressline1",
+    "addressline2",
+    "street",
+    "city",
+    "state",
+    "pincode",
+    "zipcode",
+    "postalcode",
+    "ipaddress",
+    "consentmessage",
+    "extensibledata",
+    "gatewayrefid",
+    "traceid",
+    "merchantcustomerid",
+    "customerid",
+    "userid"
+  ]
+}

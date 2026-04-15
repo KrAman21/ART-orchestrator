@@ -5,11 +5,23 @@ import { keyCheck } from './key-check.js';
 const IGNORE_KEYS_FILE = 'ignore_keys.json';
 
 /**
- * Load ignore_keys.json and return the set of paths to skip
- * for the given log_tag. Returns an empty set if the file
- * doesn't exist or the log_tag has no entries.
+ * Normalize a key for comparison (lowercase, remove underscores/camelCase separators).
+ * Converts "first_name", "firstName", "FIRSTNAME" all to "firstname".
+ * @param {string} key - The key to normalize
+ * @returns {string}
+ */
+function normalizeKey(key) {
+  return key.toLowerCase().replace(/[_-]/g, '');
+}
+
+/**
+ * Load ignore_keys.json and return the set of keys to skip.
+ * Supports:
+ *   - Global ignores under "*" key
+ *   - Log-tag specific ignores
+ *   - Both exact paths and simple key names (matches anywhere in path)
  * @param {string} logTag - The log tag to look up
- * @returns {Set<string>} - Set of paths to ignore
+ * @returns {Set<string>} - Set of normalized keys to ignore
  */
 function loadIgnoreKeys(logTag) {
   const filePath = resolve(process.cwd(), IGNORE_KEYS_FILE);
@@ -21,10 +33,49 @@ function loadIgnoreKeys(logTag) {
   try {
     const content = readFileSync(filePath, 'utf-8');
     const ignoreMap = JSON.parse(content);
-    return new Set(ignoreMap[logTag] || []);
+
+    // Collect global ignores ("*") and log-tag specific ignores
+    const globalIgnores = ignoreMap['*'] || [];
+    const tagSpecificIgnores = ignoreMap[logTag] || [];
+
+    // Combine and normalize all ignore keys
+    const combined = [...globalIgnores, ...tagSpecificIgnores];
+    return new Set(combined.map(normalizeKey));
   } catch {
     return new Set();
   }
+}
+
+/**
+ * Check if a path should be ignored based on the ignore set.
+ * Matches normalized key names anywhere in the path.
+ * @param {string} path - Dot-separated path
+ * @param {Set<string>} ignore - Set of normalized keys to ignore
+ * @returns {boolean}
+ */
+function shouldIgnore(path, ignore) {
+  if (!ignore || ignore.size === 0) {
+    return false;
+  }
+
+  // Normalize the full path and check for exact match
+  const normalizedPath = normalizeKey(path);
+  if (ignore.has(normalizedPath)) {
+    return true;
+  }
+
+  // Check if any path segment (normalized key name) is in the ignore set
+  const segments = path.split('.');
+  for (const segment of segments) {
+    // Extract bare key name from array notation (e.g., "items[0]" -> "items")
+    const keyName = segment.replace(/\[.*$/, '');
+    const normalizedKeyName = normalizeKey(keyName);
+    if (ignore.has(normalizedKeyName)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -53,9 +104,20 @@ function sortKey(item) {
 }
 
 /**
+ * Check if a value is a plain object (not null, not array)
+ * @param {*} val - Value to check
+ * @returns {boolean}
+ */
+function isPlainObject(val) {
+  return val !== null && typeof val === 'object' && !Array.isArray(val);
+}
+
+/**
  * Recursively compare two values.
- * @param {*} valA - Value from first object
- * @param {*} valB - Value from second object
+ * Asymmetric comparison: objA is the reference, objB can have additional fields.
+ * Only reports keys missing from objA, not keys only present in objB.
+ * @param {*} valA - Value from first object (reference/expected)
+ * @param {*} valB - Value from second object (actual)
  * @param {string} path - Dot-separated path for reporting
  * @param {string} key - The immediate key name that holds these values
  * @param {Set<string>} ignore - Set of dot-separated paths to skip entirely
@@ -65,7 +127,7 @@ function compareValues(valA, valB, path, key, ignore) {
   const diffs = [];
 
   // Skip ignored paths (entire subtree)
-  if (ignore && ignore.has(path)) {
+  if (shouldIgnore(path, ignore)) {
     return diffs;
   }
 
@@ -74,13 +136,39 @@ function compareValues(valA, valB, path, key, ignore) {
     return diffs;
   }
 
-  // Both objects -> recurse per key
-  if (
-    valA !== null && typeof valA === 'object' && !Array.isArray(valA) &&
-    valB !== null && typeof valB === 'object' && !Array.isArray(valB)
-  ) {
-    const allKeys = new Set([...Object.keys(valA), ...Object.keys(valB)]);
-    for (const k of Array.from(allKeys).sort()) {
+  // valA is an object but valB is not -> report object-level difference
+  if (isPlainObject(valA) && !isPlainObject(valB)) {
+    if (valB === null || valB === undefined) {
+      if (keyCheck(key, valA)) {
+        diffs.push([path, '[object]', valB]);
+      }
+    } else {
+      // Type mismatch: object vs primitive
+      if (keyCheck(key, valA) || keyCheck(key, valB)) {
+        diffs.push([path, valA, valB]);
+      }
+    }
+    return diffs;
+  }
+
+  // valB is an object but valA is not -> report object-level difference (only if valA exists)
+  if (isPlainObject(valB) && !isPlainObject(valA)) {
+    if (valA === null || valA === undefined) {
+      // valA is null/undefined but valB has an object - this is acceptable (new feature)
+      // Don't report as difference
+    } else {
+      // Type mismatch: primitive vs object
+      if (keyCheck(key, valA) || keyCheck(key, valB)) {
+        diffs.push([path, valA, valB]);
+      }
+    }
+    return diffs;
+  }
+
+  // Both objects -> recurse per key (only keys from valA, asymmetric comparison)
+  if (isPlainObject(valA) && isPlainObject(valB)) {
+    // Only iterate keys from valA (reference) - keys only in valB are new features, not differences
+    for (const k of Object.keys(valA).sort()) {
       const childPath = path ? `${path}.${k}` : k;
       const subA = valA[k];
       const subB = valB[k];
@@ -162,8 +250,8 @@ export function compareObjects(objA, objB, logTag) {
  */
 export function compareLog(expectedLog, actualResponse, logTag = '') {
   // Handle case where expectedLog has a nested response structure
-  const expected = expectedLog?.response?.data || expectedLog?.response || expectedLog;
-  let actual = actualResponse?.data || actualResponse;
+  const expected = expectedLog; // expectedLog?.response?.data || expectedLog?.response || expectedLog;
+  let actual = actualResponse; // actualResponse?.data || actualResponse;
 
   // If actual is a string, try to parse it as JSON (handles double-stringified WRAPPER responses)
   if (typeof actual === 'string') {
@@ -175,13 +263,21 @@ export function compareLog(expectedLog, actualResponse, logTag = '') {
   }
 
   // Perform deep comparison
-  const differences = compareObjects(expected, actual, logTag);
+  const diffArray = compareObjects(expected, actual, logTag);
+
+  // Transform differences array into object format
+  const differences = {};
+  for (const [path, expVal, actVal] of diffArray) {
+    const key = path || 'root';
+    differences[key] = {
+      expected: expVal,
+      actual: actVal
+    };
+  }
 
   return {
-    match: true, //differences.length === 0,
-    differences,
-    expected,
-    actual
+    match: true, // diffArray.length === 0,
+    differences
   };
 }
 
@@ -209,3 +305,34 @@ export default {
   compareLog,
   findMatchingLog
 };
+
+// let a =
+//   {
+//     "timestamp": "2026-04-09T19:34:24.763Z",
+//     "level": "INFO",
+//     "message": "External request response validated",
+//     "request": {
+//       "log_tag": "FlipKart-EligibilityStatus_INCOMING",
+//       "source_destination": "APP→LSP",
+//       "first_name": "John",
+//       "last_name": "Doe",
+//       "email": null
+//     },
+//     "response": "[13] FlipKart-EligibilityStatus LSP→APP",
+//   }
+
+// let b =
+//   {
+//     "timestamp": "2026-05-09T19:34:24.763Z",
+//     "level": "INFO",
+//     "message": "External request response validated",
+//     "request": {
+//       "log_tag": "FlipKart-EligibilityStatus_INCOMING",
+//       "source_destination": "APP→LSP",
+//       "first_name": "John",
+//       "email": "gasdlf@domain.com"
+//     },
+//     "response": "[13] FlipKart-EligibilityStatus LSP→APP",
+//   }
+
+// console.log(compareLog(a, b));

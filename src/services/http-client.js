@@ -6,9 +6,16 @@ import { MOCK_CONFIG } from '../config.js';
  * Routes to mock servers when MOCK_ENABLED is true
  */
 
-export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}) {
+export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null) {
   // Parse destination from sourceDestination (format: "SOURCE_DEST")
-  const dest = sourceDestination?.split('_')[1] || '';
+  const parts = sourceDestination?.split('_') || [];
+  const source = parts[0] || '';
+  const dest = parts[1] || '';
+
+  // Log API call if logIndex is provided
+  if (logIndex !== null) {
+    logger.logApiCall(source, dest, endpoint, 'REQUEST', logIndex);
+  }
 
   logger.info('Making HTTP request', {
     baseUrl,
@@ -88,6 +95,62 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       error: true,
       message: error.message,
       status: 0
+    };
+  }
+}
+
+/**
+ * Trigger a webhook to GW
+ * @param {string} gwBaseUrl - GW service base URL
+ * @param {string} lenderOrgId - Lender organization ID for the webhook endpoint
+ * @param {Object} payload - Webhook payload
+ * @param {Object} headers - Additional headers
+ * @returns {Promise<Object>} - Response from GW
+ */
+export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = {}) {
+  const endpoint = `/gateway/webhooks/${lenderOrgId}`;
+  const url = `${gwBaseUrl}${endpoint}`;
+
+  logger.info('Triggering webhook to GW', {
+    endpoint,
+    lenderOrgId,
+    payloadPreview: payload ? JSON.stringify(payload).substring(0, 200) : null
+  });
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...headers
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json().catch(() => null);
+
+    logger.info('Webhook triggered successfully', {
+      endpoint,
+      status: response.status
+    });
+
+    return {
+      status: response.status,
+      statusText: response.statusText,
+      data,
+      success: response.ok
+    };
+  } catch (error) {
+    logger.error('Failed to trigger webhook', {
+      url,
+      error: error.message
+    });
+
+    return {
+      error: true,
+      message: error.message,
+      success: false
     };
   }
 }
