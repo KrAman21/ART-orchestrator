@@ -22,12 +22,17 @@
     "zipcode",
     "postalcode",
     "ipaddress",
-    "consentmessage",
     "extensibledata",
-    "gatewayrefid",
-    "traceid",
-    "merchantcustomerid",
-    "customerid",
-    "userid"
+    "riskdetails",
+    "consents",
+    "orderjson",
+    "vintagedata",
+    "lenderextensibledata",
+    "borrowerserializerextensibledata",
+    "trace",
+    "fulllegalname",
+    "useridentifier",
+    "identifier",
+    "txnrefno"
   ]
 }
