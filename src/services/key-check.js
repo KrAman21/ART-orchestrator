@@ -6,10 +6,11 @@
  *   1. Keys ending with 'id' (case-insensitive) -> False,
  *      EXCEPT merchant_id / merchantId and keys ending with org_id / orgId.
  *   2. Keys ending with 'ipAddress' (case-insensitive) -> False.
- *   3. Value starts with 'XXX' (PI / masked data) -> False.
- *   4. Value matches an ISO 8601 timestamp -> False.
- *   5. trace_error_msg -> False.
- *   6. Everything else -> True.
+ *   3. Keys ending with 'message' (case-insensitive) -> False.
+ *   4. Value starts with 'XXX' (PI / masked data) -> False.
+ *   5. Value matches an ISO 8601 timestamp -> False.
+ *   6. trace_error_msg -> False.
+ *   7. Everything else -> True.
  */
 
 // ISO 8601 timestamp pattern (e.g. 2026-04-07T05:05:05.870799315Z)
@@ -51,25 +52,30 @@ export function keyCheck(key, value) {
     return false;
   }
 
+  // Rule 3: keys ending with "message" (normalized)
+  if (/message$/.test(normalized)) {
+    return false;
+  }
+
   // Only check value-based rules for string values
   if (typeof value === 'string') {
-    // Rule 3: value starts with "XXX" (PI / masked data)
-    if (value.startsWith('XXX')) {
+    // Rule 4: value starts with "XX" (PI / masked data)
+    if (value.startsWith('XX')) {
       return false;
     }
 
-    // Rule 4: value is a timestamp
+    // Rule 5: value is a timestamp
     if (TIMESTAMP_RE.test(value)) {
       return false;
     }
   }
 
-  // Rule 5: trace_error_msg (normalized: traceerrormsg)
+  // Rule 6: trace_error_msg (normalized: traceerrormsg)
   if (normalized === 'traceerrormsg') {
     return false;
   }
 
-  // Rule 6: everything else is safe
+  // Rule 7: everything else is safe
   return true;
 }
 
