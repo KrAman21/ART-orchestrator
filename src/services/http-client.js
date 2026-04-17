@@ -108,7 +108,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
  * @returns {Promise<Object>} - Response from GW
  */
 export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = {}) {
-  const endpoint = `/gateway/webhooks/${lenderOrgId}`;
+  const endpoint = `/gateway/webhook/${lenderOrgId}`;
   const url = `${gwBaseUrl}${endpoint}`;
 
   logger.info('Triggering webhook to GW', {

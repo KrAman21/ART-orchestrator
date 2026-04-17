@@ -16,6 +16,7 @@ export const API_TO_ENDPOINT_MAP = {
   'APP_WRAPPER|FlipKart-EligibilityStatus_INCOMING': { endpoint: '/flipkart/eligibility/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
   'LSP_GW|LSP-Eligibility_OUTGOING': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
   'GW_LENDER|Themis-Eligibility Request': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'GATEWAY', headers: {} },
+  'LENDER_GW|WEBHOOK Request': { endpoint: '/gateway/webhook', method: 'POST', service: 'GATEWAY', headers: {} },
   // 'LENDER_GW|Themis-Eligibility Response': { endpoint: '/v1/themis/gateway/response', method: 'POST', service: 'GW', headers: {} },
   // 'LENDER_GW|ThemisGenerateOffersResponse Response': { endpoint: '/v1/themis/offers/response', method: 'POST', service: 'GW', headers: {} }
 };

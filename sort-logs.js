@@ -17,8 +17,8 @@ function getSourceDestination(label, logTag) {
     if (label === 'APP') {
         const isIncoming = logTag.endsWith('Request') || logTag.endsWith('INCOMING');
         const isOutgoing = logTag.endsWith('Response') || logTag.endsWith('OUTGOING');
-        if (isIncoming) return 'APP_LSP';
-        if (isOutgoing) return 'LSP_APP';
+        if (isIncoming) return 'APP_WRAPPER';
+        if (isOutgoing) return 'WRAPPER_APP';
     }
     if (label === 'LENDER') {
         const isIncoming = logTag.endsWith('Response') || logTag.endsWith('INCOMING');
@@ -63,7 +63,7 @@ if (shouldApplyCustomLogic) {
     result = result.filter(item => {
         const label = item.message?.label;
         const logTag = item.message?.log_tag;
-        return VALID_LABELS.includes(label) && logTag != null;
+        return VALID_LABELS.includes(label) && logTag != null && logTag != 'ThemisGenerateOffersResponse Response';
     });
 
     result.forEach(item => {

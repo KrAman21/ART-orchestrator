@@ -194,7 +194,18 @@ export class ReplayOrchestrator {
   async triggerExternalRequest(entry) {
     try {
       const service = entry.destination;
-      const api = this.getApiForLogTag(entry.logTag);
+      let api;
+
+      // For LENDER->GW webhooks, use the endpoint from API_TO_ENDPOINT_MAP
+      if (entry.isLenderToGwWebhook && entry.isLenderToGwWebhook()) {
+        const webhookConfig = getEndpointConfig('LENDER_GW', 'WEBHOOK Request');
+        api = webhookConfig?.endpoint || '/gateway/webhook';
+        if (entry.lenderOrgId) {
+          api = `${api}/${entry.lenderOrgId}`;
+        }
+      } else {
+        api = this.getApiForLogTag(entry.logTag);
+      }
 
       // Get expected response for comparison later
       // Match by source/destination direction and correlation fields if present
@@ -259,6 +270,7 @@ export class ReplayOrchestrator {
 
         if (!comparison.match) {
           this.recordFailure('external_response_comparison', entry, comparison.differences);
+          throw new Error(`Payload comparison failed: ${JSON.stringify(comparison.differences)}`);
         } else {
           logger.info('External request response validated', {
             request: entry.toString(),
