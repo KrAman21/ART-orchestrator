@@ -12,18 +12,22 @@ class LogEntry {
     this.message = rawLog.message || {};
     this.xRequestId = rawLog.xRequestId;
 
-    // Parse source_destination with WRAPPER remapping
-    // Format: SOURCE_DEST (e.g., APP_LSP, LSP_GW)
-    // APP_WRAPPER -> APP_LSP, WRAPPER_APP -> LSP_APP
-    const rawSourceDestination = this.message.source_destination || '';
-    this.originalSourceDestination = rawSourceDestination; // Keep original for config lookups
-    this.sourceDestination = this.remapWrapperSourceDestination(rawSourceDestination);
+    // Parse source_destination from trace_route - use as-is without remapping
+    // Format: SOURCE_DEST (e.g., APP_CORE, CORE_GATEWAY, GATEWAY_CORE)
+    const traceRoute = this.message.trace_route || '';
+    this.sourceDestination = traceRoute;
     const parts = this.sourceDestination.split('_');
 
     // Log tag and type - determines if this is a request or response
+    // Case-insensitive matching for _REQUEST, _RESPONSE, INCOMING, OUTGOING suffixes
     this.logTag = (this.message.log_tag || '').trim();
-    const isIncoming = this.message.label === 'APP'? (this.logTag.endsWith('Request') || this.logTag.endsWith('INCOMING')) : (this.logTag.endsWith('Request') || this.logTag.endsWith('OUTGOING'));
-    const isOutgoing = this.message.label === 'APP'? (this.logTag.endsWith('Response') || this.logTag.endsWith('OUTGOING')) : (this.logTag.endsWith('Response') || this.logTag.endsWith('INCOMING'));
+    const normalizedLogTag = this.logTag.toLowerCase();
+    const isIncoming = this.message.label === 'APP' 
+      ? (normalizedLogTag.endsWith('_request') || normalizedLogTag.endsWith('_incoming')) 
+      : (normalizedLogTag.endsWith('_request') || normalizedLogTag.endsWith('_outgoing'));
+    const isOutgoing = this.message.label === 'APP' 
+      ? (normalizedLogTag.endsWith('_response') || normalizedLogTag.endsWith('_outgoing')) 
+      : (normalizedLogTag.endsWith('_response') || normalizedLogTag.endsWith('_incoming'));
     this.isRequest = isIncoming;
     this.isResponse = isOutgoing;
 
@@ -64,36 +68,38 @@ class LogEntry {
   }
 
   /**
-   * Remap WRAPPER source_destination to actual service equivalents
-   * - APP_WRAPPER -> APP_LSP
-   * - WRAPPER_APP -> LSP_APP
-   * Others remain unchanged
+   * Convert trace_route to source_destination format
+   * Uses trace_route directly without remapping
+   */
+  convertTraceRoute() {
+    return this.message.trace_route || '';
+  }
+
+  /**
+   * @deprecated No longer needed - trace_route is used as-is
    */
   remapWrapperSourceDestination(sourceDestination) {
-    const remappings = {
-      'APP_WRAPPER': 'APP_LSP',
-      'WRAPPER_APP': 'LSP_APP'
-    };
-    return remappings[sourceDestination] || sourceDestination;
+    return sourceDestination;
   }
 
   /**
    * Check if this log entry should be skipped
-   * Skip if source or destination is WRAPPER (except remapped cases)
+   * Skip entries with WRAPPER in trace_route or missing log_tag (not actual service calls)
    */
   shouldSkip() {
-    // Original source_destination before remapping
-    const original = this.message.source_destination || '';
-    const originalParts = original.split('_');
-    const originalSource = originalParts[0] || '';
-    const originalDest = originalParts[1] || '';
-
-    // Skip if WRAPPER is involved (and wasn't remapped)
-    if (originalSource === 'WRAPPER' || originalDest === 'WRAPPER') {
-      // Check if it was remapped (remapped values don't have WRAPPER)
-      return !original.startsWith('APP_WRAPPER') && !original.startsWith('WRAPPER_APP');
+    const traceRoute = this.message.trace_route || '';
+    const logTag = this.message.log_tag || '';
+    
+    // Skip WRAPPER entries - they're not actual service-to-service calls
+    if (traceRoute.includes('WRAPPER')) {
+      return true;
     }
-
+    
+    // Skip entries without log_tag (checkpoint events, etc.)
+    if (!logTag || logTag.trim() === '') {
+      return true;
+    }
+    
     return false;
   }
 
@@ -119,8 +125,8 @@ class LogEntry {
   isWebhook() {
     if (this.logTag?.includes('Webhook')) return true;
 
-    // APP->GW or LENDER->GW requests that are callbacks/notifications
-    if ((this.source === 'APP' || this.source === 'LENDER') && this.destination === 'GW') {
+    // APP->GATEWAY or LENDER->GATEWAY requests that are callbacks/notifications
+    if ((this.source === 'APP' || this.source === 'LENDER') && this.destination === 'GATEWAY') {
       // Exclude main request-response pairs (these would be tracked normally)
       // Webhooks typically have status/update/callback in their name
       const webhookIndicators = ['Status', 'Callback', 'Notification', 'Update', 'Event', 'Webhook'];
@@ -133,10 +139,10 @@ class LogEntry {
   }
 
   /**
-   * Check if this log entry is a LENDER->GW webhook
+   * Check if this log entry is a LENDER->GATEWAY webhook
    */
   isLenderToGwWebhook() {
-    return this.isWebhook() && this.source === 'LENDER' && this.destination === 'GW';
+    return this.isWebhook() && this.source === 'LENDER' && this.destination === 'GATEWAY';
   }
 
   toString() {
@@ -153,48 +159,108 @@ export class LogSequenceValidator {
     this.entries = [];
     this.currentIndex = 0;
     this.processedIndices = new Set();
+    // Track seen entries to skip duplicates during processing
+    this.seenRequestKeys = new Set();
+    this.duplicatesSkipped = 0;
 
     this.parseLogs();
   }
 
   /**
    * Parse raw logs into LogEntry objects
+   * All logs are parsed, duplicates are tracked and skipped during processing
    */
   parseLogs() {
     this.entries = this.rawLogs.map((log, index) => new LogEntry(log, index));
+    
     logger.info('Parsed log entries', { count: this.entries.length });
+  }
+
+  /**
+   * Get unique key for an entry (for duplicate detection)
+   */
+  getEntryKey(entry) {
+    return `${entry.requestId || 'no-id'}_${entry.logTag}_${entry.source}_${entry.destination}`;
+  }
+
+  /**
+   * Check if this entry is a duplicate (same requestId + logTag + source + destination)
+   * Does NOT modify the seen set - just checks
+   */
+  checkDuplicate(entry) {
+    const uniqueKey = this.getEntryKey(entry);
+    const isDup = this.seenRequestKeys.has(uniqueKey);
+    logger.info('Checking duplicate', {
+      position: this.currentIndex,
+      logTag: entry.logTag,
+      key: uniqueKey.substring(0, 60),
+      isDuplicate: isDup,
+      seenCount: this.seenRequestKeys.size
+    });
+    return isDup;
+  }
+
+  /**
+   * Mark entry as seen (prevents future duplicates)
+   */
+  markEntrySeen(entry) {
+    const uniqueKey = this.getEntryKey(entry);
+    this.seenRequestKeys.add(uniqueKey);
+    logger.debug('Marked entry as seen', {
+      logTag: entry.logTag,
+      seenCount: this.seenRequestKeys.size
+    });
   }
 
   /**
    * Get the current log entry we're expecting to process next
    */
   getCurrentEntry() {
-    // Skip entries that should be skipped or are already processed
-    while (
-      this.currentIndex < this.entries.length &&
-      (this.entries[this.currentIndex].shouldSkip() ||
-       this.processedIndices.has(this.currentIndex))
-    ) {
-      if (this.entries[this.currentIndex].shouldSkip()) {
-        logger.debug('Skipping WRAPPER entry', {
-          index: this.currentIndex,
-          entry: this.entries[this.currentIndex].toString()
+    // Skip entries that should be skipped, are already processed, or are duplicates
+    while (this.currentIndex < this.entries.length) {
+      const entry = this.entries[this.currentIndex];
+      const shouldSkipEntry = entry.shouldSkip();
+      const isProcessed = this.processedIndices.has(this.currentIndex);
+      const isDuplicate = this.checkDuplicate(entry);
+      
+      logger.debug('Checking entry', {
+        position: this.currentIndex,
+        logTag: entry.logTag,
+        isDuplicate: isDuplicate
+      });
+      
+      if (!shouldSkipEntry && !isProcessed && !isDuplicate) {
+        // Return entry without marking as seen
+        // Will be marked in advance() when actually processed
+        return entry;
+      }
+      
+      if (shouldSkipEntry) {
+        logger.info('Skipping WRAPPER entry', {
+          position: this.currentIndex,
+          originalIndex: entry.index,
+          traceRoute: entry.message?.trace_route
+        });
+      } else if (isDuplicate) {
+        this.duplicatesSkipped++;
+        logger.info('Skipping duplicate entry', {
+          position: this.currentIndex,
+          originalIndex: entry.index,
+          logTag: entry.logTag,
+          duplicatesSkipped: this.duplicatesSkipped
         });
       } else {
-        logger.debug('Skipping already processed entry', {
-          index: this.currentIndex,
-          entry: this.entries[this.currentIndex].toString()
+        logger.info('Skipping already processed entry', {
+          position: this.currentIndex,
+          originalIndex: entry.index
         });
       }
+      
       this.processedIndices.add(this.currentIndex);
       this.currentIndex++;
     }
 
-    if (this.currentIndex >= this.entries.length) {
-      return null;
-    }
-
-    return this.entries[this.currentIndex];
+    return null;
   }
 
   /**
@@ -485,8 +551,8 @@ export class LogSequenceValidator {
       // Skip entries that should be skipped
       if (entry.shouldSkip()) continue;
 
-      // Check if this is the parent response (GW->LSP response)
-      if (entry.isResponse && entry.source === 'GW' && entry.destination === 'LSP') {
+      // Check if this is the parent response (GATEWAY->CORE response)
+      if (entry.isResponse && entry.source === 'GATEWAY' && entry.destination === 'CORE') {
         // Check if it matches the parent context
         const entryContextKey = this.getContextKeyForMatching(entry);
         if (!parentContextKey || entryContextKey === parentContextKey || this.contextsMatchByKey(parentContextKey, entryContextKey)) {
@@ -527,10 +593,8 @@ export class LogSequenceValidator {
       if (this.processedIndices.has(i)) continue;
       if (entry.shouldSkip()) continue;
 
-      // Look for GW->LSP response or GW->APP response
-      if (entry.isResponse &&
-          ((entry.source === 'GW' && entry.destination === 'LSP') ||
-           (entry.source === 'GW' && entry.destination === 'APP'))) {
+      // Look for GATEWAY->CORE response
+      if (entry.isResponse && entry.source === 'GATEWAY' && entry.destination === 'CORE') {
         const entryContextKey = this.getContextKeyForMatching(entry);
         if (entryContextKey === requestContextKey || this.contextsMatchByKey(requestContextKey, entryContextKey)) {
           return entry;
@@ -575,8 +639,10 @@ export class LogSequenceValidator {
    * Mark current entry as processed and advance
    */
   advance() {
-    const entry = this.getCurrentEntry();
-    if (entry) {
+    const entry = this.entries[this.currentIndex];
+    if (entry && !this.processedIndices.has(this.currentIndex)) {
+      // Mark as seen to detect duplicates
+      this.markEntrySeen(entry);
       this.processedIndices.add(this.currentIndex);
       this.currentIndex++;
       logger.debug('Advanced to next entry', {
@@ -591,26 +657,32 @@ export class LogSequenceValidator {
    * Mark a specific entry as processed (for out-of-order handling)
    */
   markProcessed(entry) {
-    const index = entry.index;
-    if (index === this.currentIndex) {
+    // Find the position of this entry in the filtered entries array
+    const position = this.entries.findIndex(e => e.index === entry.index);
+    if (position === -1) {
+      logger.warn('Entry not found in filtered list', { entry: entry.toString() });
+      return;
+    }
+    
+    logger.info('Marking entry as processed', {
+      entry: entry.toString(),
+      position,
+      currentIndex: this.currentIndex
+    });
+    
+    if (position === this.currentIndex) {
       // Normal case - advance
       return this.advance();
     }
 
     // Out of order - just mark as processed
-    this.processedIndices.add(index);
+    // Do NOT advance currentIndex - let normal flow handle it
+    this.processedIndices.add(position);
     logger.debug('Marked out-of-order entry as processed', {
       entry: entry.toString(),
-      index
+      position,
+      currentIndex: this.currentIndex
     });
-
-    // Advance current if we've caught up
-    while (
-      this.currentIndex < this.entries.length &&
-      this.processedIndices.has(this.currentIndex)
-    ) {
-      this.currentIndex++;
-    }
   }
 
   /**

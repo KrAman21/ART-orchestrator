@@ -207,6 +207,46 @@ export class ReplayOrchestrator {
       return;
     }
 
+    // Handle entries that should be skipped (e.g., WRAPPER entries that weren't filtered)
+    if (entry.shouldSkip()) {
+      logger.info('Skipping entry', { entry: entry.toString() });
+      this.validator.markProcessed(entry);
+      // Continue to next entry
+      if (this.isRunning) {
+        setImmediate(() => {
+          this.processNextLogEntry().catch(err => {
+            logger.error('Error processing next log entry after skip', { error: err.message });
+          });
+        });
+      }
+      return;
+    }
+
+    // Handle internal LSP calls (CORE_EULER, CORE_THEMIS) - auto-mock them
+    const isInternalLspCall = entry.sourceDestination === 'CORE_EULER' || 
+                              entry.sourceDestination === 'CORE_THEMIS' ||
+                              (entry.source === 'CORE' && entry.destination === 'EULER') ||
+                              (entry.source === 'CORE' && entry.destination === 'THEMIS');
+    
+    if (isInternalLspCall && entry.isRequest) {
+      logger.info('Internal LSP call - mocking request/response', {
+        entry: entry.toString()
+      });
+      await this.mockInternalLspRequest(entry);
+      return;
+    }
+
+    // Handle CORE->GATEWAY calls (LSP calling Gateway) - trigger them
+    const isLspToGatewayCall = entry.source === 'CORE' && entry.destination === 'GATEWAY';
+    
+    if (isLspToGatewayCall && entry.isRequest) {
+      logger.info('CORE to GATEWAY call - triggering from orchestrator', {
+        entry: entry.toString()
+      });
+      await this.triggerExternalRequest(entry);
+      return;
+    }
+
     // If source is external (APP, LENDER), orchestrator needs to trigger the request
     if (entry.isExternalSource() && entry.isRequest) {
       logger.info('External source request - triggering from orchestrator', {
@@ -215,7 +255,7 @@ export class ReplayOrchestrator {
 
       await this.triggerExternalRequest(entry);
     } else {
-      logger.debug('Not an external source request, waiting for incoming', {
+      logger.debug('Not an external/internal request, waiting for incoming', {
         entry: entry.toString()
       });
     }
@@ -241,9 +281,10 @@ export class ReplayOrchestrator {
         api = this.getApiForLogTag(entry.logTag);
       }
 
-      // Get expected response for comparison later
+      // Get expected response(s) for comparison later
       // Match by source/destination direction and correlation fields if present
-      const expectedResponse = this.validator.peekNext(100).find(e => {
+      // Find ALL matching responses to handle duplicates
+      const expectedResponses = this.validator.peekNext(100).filter(e => {
         // Basic direction match
         if (!(e.source === entry.destination &&
           e.destination === entry.source &&
@@ -264,6 +305,8 @@ export class ReplayOrchestrator {
 
         return true;
       });
+      
+      const expectedResponse = expectedResponses[0]; // Primary response for comparison
 
       // Get endpoint config for custom headers
       const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
@@ -314,9 +357,13 @@ export class ReplayOrchestrator {
           this.recordSuccess('external_response_validation', expectedResponse);
         }
 
-        // Mark both request and response as processed
+        // Mark request as processed
         this.validator.advance(); // request
-        this.validator.markProcessed(expectedResponse); // response
+        
+        // Mark ALL matching responses as processed (handles duplicates)
+        for (const response of expectedResponses) {
+          this.validator.markProcessed(response);
+        }
       } else {
         this.validator.advance();
       }
@@ -562,8 +609,8 @@ export class ReplayOrchestrator {
     }
 
     // Initialize async tracking for parent requests that will trigger async child calls
-    // This happens when LSP->GW comes in and we expect GW->LENDER calls to follow
-    if (expectedEntry.source === 'LSP' && expectedEntry.destination === 'GW') {
+    // This happens when CORE->GATEWAY comes in and we expect GATEWAY->LSP (Themis) calls to follow
+    if (expectedEntry.source === 'CORE' && expectedEntry.destination === 'GATEWAY') {
       const contextKey = this.getContextKey(expectedEntry);
       const existingTracker = this.asyncCallTracker.get(contextKey);
       if (!existingTracker) {
@@ -1236,6 +1283,54 @@ export class ReplayOrchestrator {
   }
 
   /**
+   * Mock an internal LSP→LSP request
+   * Internal LSP calls don't go through the orchestrator's HTTP endpoints,
+   * so we simulate them by marking both request and response as processed
+   */
+  async mockInternalLspRequest(expectedEntry) {
+    logger.info('Mocking internal LSP request', {
+      entry: expectedEntry.toString()
+    });
+
+    // Find ALL corresponding responses (there may be duplicates)
+    const responseEntries = this.findAllCorrespondingResponses(expectedEntry);
+
+    if (responseEntries.length === 0) {
+      throw new Error(`No corresponding response found for internal LSP call ${expectedEntry.toString()}`);
+    }
+
+    // Mark request as processed
+    this.validator.markProcessed(expectedEntry);
+    
+    // Mark ALL response entries as processed (handles duplicate responses)
+    for (const responseEntry of responseEntries) {
+      this.validator.markProcessed(responseEntry);
+    }
+
+    // Record success
+    this.recordSuccess('internal_request_mocked', expectedEntry);
+    for (const responseEntry of responseEntries) {
+      this.recordSuccess('internal_response_mocked', responseEntry);
+    }
+
+    logger.info('Internal LSP request mocked successfully', {
+      request: expectedEntry.toString(),
+      requestIndex: expectedEntry.index,
+      responsesFound: responseEntries.length,
+      responses: responseEntries.map(e => ({str: e.toString(), index: e.index}))
+    });
+
+    // Trigger next log entry processing after internal mock completes
+    if (this.isRunning) {
+      setImmediate(() => {
+        this.processNextLogEntry().catch(err => {
+          logger.error('Error processing next log entry after internal LSP mock', { error: err.message });
+        });
+      });
+    }
+  }
+
+  /**
    * Handle response from an external service (e.g., LENDER→GW callback)
    * Matches by context (loan_application_id, lender_org_id) to find the corresponding request
    */
@@ -1869,9 +1964,39 @@ export class ReplayOrchestrator {
   }
 
   /**
+   * Find ALL response entries corresponding to a request (handles duplicate responses)
+   */
+  findAllCorrespondingResponses(requestEntry) {
+    const direction = `${requestEntry.source}_${requestEntry.destination}`;
+    const matchingResponses = [];
+
+    // Search through all entries
+    for (const entry of this.validator.entries) {
+      if (
+        entry.isResponse &&
+        entry.sourceDestination === direction &&
+        this.matchesRequestContext(requestEntry, entry)
+      ) {
+        matchingResponses.push(entry);
+      }
+    }
+
+    return matchingResponses;
+  }
+
+  /**
    * Check if response matches request context (loan application ID, etc.)
    */
   matchesRequestContext(requestEntry, responseEntry) {
+    // Match by log tag pattern - response should correspond to the request
+    // e.g., "XXX_REQUEST" matches "XXX_RESPONSE"
+    const requestTag = requestEntry.logTag.replace(/_REQUEST$/i, '').replace(/REQUEST$/i, '');
+    const responseTag = responseEntry.logTag.replace(/_RESPONSE$/i, '').replace(/RESPONSE$/i, '');
+    
+    if (requestTag !== responseTag) {
+      return false;
+    }
+
     // Match by loan_application_id if present
     if (
       requestEntry.loanApplicationId &&
@@ -1880,7 +2005,7 @@ export class ReplayOrchestrator {
     ) {
       return false;
     }
-    // Match by loan_application_id if present
+    // Match by lender_org_id if present
     if (
       requestEntry.lenderOrgId &&
       responseEntry.lenderOrgId &&

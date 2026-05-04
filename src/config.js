@@ -138,6 +138,7 @@ export const API_TO_ENDPOINT_MAP = {
   'APP_CORE|LSP-Rules_INCOMING': { endpoint: '/api/themis/rules', method: 'POST', service: 'LSP', headers: {} },
   
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing) ====================
+  // Original OUTGOING mappings (kept for compatibility)
   'CORE_GATEWAY|LSP-Eligibility_OUTGOING': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-SelectOffer_OUTGOING': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-CreatePayment_OUTGOING': { endpoint: '/gateway/v1.0/createPayment', method: 'POST', service: 'GW', headers: {} },
@@ -169,14 +170,35 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_GATEWAY|LSP-GetCustomer_OUTGOING': { endpoint: '/gateway/v1.0/getCustomer', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-GetApplicant_OUTGOING': { endpoint: '/gateway/v1.0/getApplicant', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-GetGuarantor_OUTGOING': { endpoint: '/gateway/v1.0/getGuarantor', method: 'POST', service: 'GW', headers: {} },
+  // REQUEST/RESPONSE mappings (actual log format from production)
+  'CORE_GATEWAY|LSP-Eligibility_REQUEST': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|LSP-Eligibility_RESPONSE': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|GetRefundDetails-LSP_REQUEST': { endpoint: '/gateway/v1.0/getRefundDetails', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|GetRefundDetails-LSP_RESPONSE': { endpoint: '/gateway/v1.0/getRefundDetails', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|RefundStatusGatewayPT_REQUEST': { endpoint: '/gateway/v1.0/refundStatus', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|RefundStatusGatewayPT_RESPONSE': { endpoint: '/gateway/v1.0/refundStatus', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|Lsp-LoanStatusRequest_REQUEST': { endpoint: '/gateway/v1.0/loanStatus', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|Lsp-LoanStatusRequest_RESPONSE': { endpoint: '/gateway/v1.0/loanStatus', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|SetOffer-LSP_REQUEST': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|SetOffer-LSP_RESPONSE': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|GenerateOfferRequest-LSP_REQUEST': { endpoint: '/gateway/v1.0/createOffer', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|GenerateOfferRequest-LSP_RESPONSE': { endpoint: '/gateway/v1.0/createOffer', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|CreateLoanApplication_V4_1-LSP_REQUEST': { endpoint: '/gateway/v1.0/createLoanApplication', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|CreateLoanApplication_V4_1-LSP_RESPONSE': { endpoint: '/gateway/v1.0/createLoanApplication', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|TriggerRefund-LSP_REQUEST': { endpoint: '/gateway/v1.0/refund', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|TriggerRefund-LSP_RESPONSE': { endpoint: '/gateway/v1.0/refund', method: 'POST', service: 'GW', headers: {} },
   
   // ==================== GATEWAY_CORE (Gateway to Core - Responses/Callbacks) ====================
   'GATEWAY_CORE|LSP-Eligibility_INCOMING': { endpoint: '/v1/themis/eligibility/callback', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_CORE|LSP-Eligibility_RESPONSE': { endpoint: '/v1/themis/eligibility/callback', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_CORE|LSP-GrantLoanRequest_INCOMING': { endpoint: '/v1/themis/grantLoan/callback', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_CORE|LSP-TriggerDisbursementAuth_INCOMING': { endpoint: '/v1/themis/disbursement/callback', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_CORE|Eligibility Response': { endpoint: '/v1/themis/gateway/response', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_CORE|LoanStatus Response': { endpoint: '/v1/themis/loanStatus/response', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_CORE|Disbursement Response': { endpoint: '/v1/themis/disbursement/response', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_CORE|GATEWAY_WEBHOOK_V4_1_RESPONSE': { endpoint: '/v1/themis/gateway/webhook', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_CORE|ASYNC_RESPONSE_LSP-FetchOfferResponse_REQUEST': { endpoint: '/v1/themis/async/fetchOffer', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_CORE|CreateLoanApplicationResponse-V4_1_RESPONSE': { endpoint: '/v1/themis/createLoanApplication/response', method: 'POST', service: 'LSP', headers: {} },
   
   // ==================== CORE_THEMIS (Core to Themis) ====================
   'CORE_THEMIS|Themis-Eligibility Request': { endpoint: '/themis/v5/sortLenders', method: 'POST', service: 'THEMIS', headers: {} },
@@ -405,7 +427,8 @@ export const SKIP_DESTINATIONS = ['APP', 'LENDER'];
 // Format: { sourceDestination: string, logTagPattern: string | RegExp }
 // These APIs are made in parallel by the source service and can arrive in any order
 export const ASYNC_PARALLEL_APIS = [
-  { sourceDestination: 'GW_LENDER', logTagPattern: /^Themis-Eligibility/ }
+  { sourceDestination: 'GATEWAY_LSP', logTagPattern: /^Themis-Eligibility/ },
+  { sourceDestination: 'GATEWAY_THEMIS', logTagPattern: /^Themis-Eligibility/ }
 ];
 
 /**
