@@ -75,7 +75,7 @@ export function createServer(orchestrator) {
       // console.log('Request headers: ', req.headers);
       
       // Log incoming request details
-      logger.info('=== INCOMING REQUEST FROM LSP ===', {
+      logger.info(`=== INCOMING REQUEST FROM ${source} ===`, {
         path: req.path,
         api: api,
         source: source,

@@ -103,23 +103,45 @@ export async function filterAndSortLogs(logs, outputPath = null) {
 
   const seen = new Set();
   const duplicates = [];
-  
+  const missingPayloadLogs = [];
+
   const filtered = logs.filter((log, index) => {
     const msg = log?.message || {};
+
+    const hasTraceRequest = msg.trace_request !== undefined && msg.trace_request !== null;
+    const hasTraceResponse = msg.trace_response !== undefined && msg.trace_response !== null;
+    const hasTraceError = msg.trace_error_msg !== undefined && msg.trace_error_msg !== null;
+
+    if (!hasTraceRequest && !hasTraceResponse && !hasTraceError) {
+      missingPayloadLogs.push({
+        index,
+        requestId: msg.request_id || log?.xRequestId || '',
+        logTag: (msg.log_tag || '').trim(),
+        traceRoute: msg.trace_route || '',
+        checkpoint: msg.checkpoint || 'N/A'
+      });
+      return false;
+    }
+
     const requestId = msg.request_id || log?.xRequestId || '';
     const logTag = (msg.log_tag || '').trim();
     const traceRoute = msg.trace_route || '';
-    
+
     const key = `${requestId}_${logTag}_${traceRoute}`;
-    
+
     if (seen.has(key)) {
       duplicates.push({ index, key: key.substring(0, 60), logTag });
       return false;
     }
-    
+
     seen.add(key);
     return true;
   });
+
+  if (missingPayloadLogs.length > 0) {
+    console.log(`Removed ${missingPayloadLogs.length} logs without trace_request/trace_response (checkpoint/metadata logs)`);
+    console.log(`Sample logs removed:`, missingPayloadLogs.slice(0, 3));
+  }
 
   // Sort by created_at timestamp
   const sorted = filtered.sort((a, b) => {

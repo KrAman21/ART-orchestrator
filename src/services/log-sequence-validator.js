@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger.js';
-import { isAsyncParallelApi } from '../config.js';
+import { isAsyncParallelApi, normalizeSourceDestination } from '../config.js';
 
 /**
  * LogEntry represents a parsed log entry from the trace
@@ -12,10 +12,10 @@ class LogEntry {
     this.message = rawLog.message || {};
     this.xRequestId = rawLog.xRequestId;
 
-    // Parse source_destination from trace_route - use as-is without remapping
-    // Format: SOURCE_DEST (e.g., APP_CORE, CORE_GATEWAY, GATEWAY_CORE)
     const traceRoute = this.message.trace_route || '';
-    this.sourceDestination = traceRoute;
+    const logTag = (this.message.log_tag || '').trim();
+    this.sourceDestination = normalizeSourceDestination(traceRoute, logTag);
+    this.originalTraceRoute = traceRoute;
     const parts = this.sourceDestination.split('_');
 
     // Log tag and type - determines if this is a request or response

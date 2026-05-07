@@ -19,7 +19,8 @@ export function getLenderId(orgId) {
 // Service configuration mappings
 export const SERVICE_MAP = {
   LSP: { baseUrl: process.env.LSP_URL || 'http://localhost:4232', name: 'LSP' },
-  GW: { baseUrl: process.env.GW_URL || 'http://localhost:2344', name: 'Gateway' }
+  GW: { baseUrl: process.env.GW_URL || 'http://localhost:2344', name: 'Gateway' },
+  GATEWAY: { baseUrl: process.env.GW_URL || 'http://localhost:2344', name: 'Gateway' }
 };
 
 // API endpoint mapping based on (sourceDestination, logTag) combination
@@ -260,15 +261,24 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_APP|LSP-LoanStatus_OUTGOING': { endpoint: '/v1/lsp/loanStatus/response', method: 'POST', service: 'APP', headers: {} },
   'CORE_APP|LSP-Callback Response': { endpoint: '/webhook/lsp/callback', method: 'POST', service: 'APP', headers: {} },
   
-  // ==================== GATEWAY_LENDER (Gateway to Lender - Lender Side) ====================
-  'GATEWAY_LENDER|Themis-Eligibility Request': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'GATEWAY', headers: {} },
-  'GATEWAY_LENDER|Themis-HardEligibility Request': { endpoint: '/lsp/hardEligibility', method: 'POST', service: 'GATEWAY', headers: {} },
-  'GATEWAY_LENDER|Themis-GrantLoan Request': { endpoint: '/lsp/grantLoan', method: 'POST', service: 'GATEWAY', headers: {} },
-  'GATEWAY_LENDER|Themis-Disbursement Request': { endpoint: '/lsp/disbursement', method: 'POST', service: 'GATEWAY', headers: {} },
-  'GATEWAY_LENDER|Themis-FetchOffer Request': { endpoint: '/lsp/fetchOffer', method: 'POST', service: 'GATEWAY', headers: {} },
-  'GATEWAY_LENDER|Themis-SelectOffer Request': { endpoint: '/lsp/selectOffer', method: 'POST', service: 'GATEWAY', headers: {} },
-  'GATEWAY_LENDER|Themis-KYC Request': { endpoint: '/lsp/kyc', method: 'POST', service: 'GATEWAY', headers: {} },
-  'GATEWAY_LENDER|Themis-Repayment Request': { endpoint: '/lsp/repayment', method: 'POST', service: 'GATEWAY', headers: {} },
+  // ==================== GATEWAY_LENDER/GATEWAY_LSP (Gateway to Lender/LSP - Lender Side) ====================
+  // Support both formats: "Themis-Eligibility Request" (incoming) and "Themis-Eligibility_REQUEST" (logs)
+  'GATEWAY_LENDER|Themis-Eligibility Request': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-Eligibility_REQUEST': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-HardEligibility Request': { endpoint: '/lsp/hardEligibility', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-HardEligibility_REQUEST': { endpoint: '/lsp/hardEligibility', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-GrantLoan Request': { endpoint: '/lsp/grantLoan', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-GrantLoan_REQUEST': { endpoint: '/lsp/grantLoan', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-Disbursement Request': { endpoint: '/lsp/disbursement', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-Disbursement_REQUEST': { endpoint: '/lsp/disbursement', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-FetchOffer Request': { endpoint: '/lsp/fetchOffer', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-FetchOffer_REQUEST': { endpoint: '/lsp/fetchOffer', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-SelectOffer Request': { endpoint: '/lsp/selectOffer', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-SelectOffer_REQUEST': { endpoint: '/lsp/selectOffer', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-KYC Request': { endpoint: '/lsp/kyc', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-KYC_REQUEST': { endpoint: '/lsp/kyc', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-Repayment Request': { endpoint: '/lsp/repayment', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-Repayment_REQUEST': { endpoint: '/lsp/repayment', method: 'POST', service: 'LSP', headers: {} },
   
   // ==================== LENDER_GATEWAY (Lender to Gateway - Callbacks/Webhooks) ====================
   'LENDER_GATEWAY|WEBHOOK Request': { endpoint: '/gateway/webhook', method: 'POST', service: 'GATEWAY', headers: {} },
@@ -491,15 +501,14 @@ export const API_TO_LOGTAG_MAP = {
   '/v1/lsp/loanStatus/response': { logTag: 'LSP-LoanStatus_OUTGOING', api: '/v1/lsp/loanStatus/response', sourceDestination: 'CORE_APP', headers: {} },
   '/webhook/lsp/callback': { logTag: 'LSP-Callback Response', api: '/webhook/lsp/callback', sourceDestination: 'CORE_APP', headers: {} },
   
-  // ==================== GATEWAY_LENDER (Gateway to Lender - Lender Side) ====================
-  '/lsp/softEligibility': { logTag: 'Themis-Eligibility Request', api: '/lsp/softEligibility', sourceDestination: 'GATEWAY_LENDER', headers: {} },
-  '/lsp/hardEligibility': { logTag: 'Themis-HardEligibility Request', api: '/lsp/hardEligibility', sourceDestination: 'GATEWAY_LENDER', headers: {} },
-  '/lsp/grantLoan': { logTag: 'Themis-GrantLoan Request', api: '/lsp/grantLoan', sourceDestination: 'GATEWAY_LENDER', headers: {} },
-  '/lsp/disbursement': { logTag: 'Themis-Disbursement Request', api: '/lsp/disbursement', sourceDestination: 'GATEWAY_LENDER', headers: {} },
-  '/lsp/fetchOffer': { logTag: 'Themis-FetchOffer Request', api: '/lsp/fetchOffer', sourceDestination: 'GATEWAY_LENDER', headers: {} },
-  '/lsp/selectOffer': { logTag: 'Themis-SelectOffer Request', api: '/lsp/selectOffer', sourceDestination: 'GATEWAY_LENDER', headers: {} },
-  '/lsp/kyc': { logTag: 'Themis-KYC Request', api: '/lsp/kyc', sourceDestination: 'GATEWAY_LENDER', headers: {} },
-  '/lsp/repayment': { logTag: 'Themis-Repayment Request', api: '/lsp/repayment', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/lsp/softEligibility': { logTag: 'Themis-Eligibility_REQUEST', api: '/lsp/softEligibility', sourceDestination: 'GATEWAY_LSP', headers: {} },
+  '/lsp/hardEligibility': { logTag: 'Themis-HardEligibility_REQUEST', api: '/lsp/hardEligibility', sourceDestination: 'GATEWAY_LSP', headers: {} },
+  '/lsp/grantLoan': { logTag: 'Themis-GrantLoan_REQUEST', api: '/lsp/grantLoan', sourceDestination: 'GATEWAY_LSP', headers: {} },
+  '/lsp/disbursement': { logTag: 'Themis-Disbursement_REQUEST', api: '/lsp/disbursement', sourceDestination: 'GATEWAY_LSP', headers: {} },
+  '/lsp/fetchOffer': { logTag: 'Themis-FetchOffer_REQUEST', api: '/lsp/fetchOffer', sourceDestination: 'GATEWAY_LSP', headers: {} },
+  '/lsp/selectOffer': { logTag: 'Themis-SelectOffer_REQUEST', api: '/lsp/selectOffer', sourceDestination: 'GATEWAY_LSP', headers: {} },
+  '/lsp/kyc': { logTag: 'Themis-KYC_REQUEST', api: '/lsp/kyc', sourceDestination: 'GATEWAY_LSP', headers: {} },
+  '/lsp/repayment': { logTag: 'Themis-Repayment_REQUEST', api: '/lsp/repayment', sourceDestination: 'GATEWAY_LSP', headers: {} },
   
   // ==================== LENDER_GATEWAY (Lender to Gateway - Callbacks/Webhooks) ====================
   '/gateway/webhook': { logTag: 'WEBHOOK Request', api: '/gateway/webhook', sourceDestination: 'LENDER_GATEWAY', headers: {} },
@@ -609,28 +618,51 @@ export function getApiForLogTag(logTag) {
   return entry?.api || null;
 }
 
-/**
- * Get endpoint config for a logTag and sourceDestination
- * Tries remapped version first (APP_LSP), falls back to original (APP_WRAPPER)
- * @param {string} sourceDestination
- * @param {string} logTag
- * @returns {Object|null}
- */
+export function normalizeSourceDestination(sourceDestination, logTag) {
+  const normalizedLogTag = (logTag || '').toLowerCase();
+  const normalizedSD = sourceDestination.toUpperCase();
+
+  if (normalizedLogTag.startsWith('themis-eligibility')) {
+    if (normalizedSD === 'GATEWAY_LSP') {
+      return 'GATEWAY_THEMIS';
+    }
+    if (normalizedSD === 'GATEWAY_LENDER') {
+      return 'GATEWAY_LSP';
+    }
+  }
+
+  if (normalizedSD === 'GATEWAY' || normalizedSD === 'GATEWAY_CORE') {
+    return 'CORE_GATEWAY';
+  }
+
+  if (normalizedSD === 'CORE_GATEWAY') {
+    return 'CORE_GATEWAY';
+  }
+
+  return sourceDestination;
+}
+
 export function getEndpointConfig(sourceDestination, logTag) {
-  // Try the provided sourceDestination first
-  const key = `${sourceDestination}|${logTag}`;
+  const normalizedSD = normalizeSourceDestination(sourceDestination, logTag);
+
+  const key = `${normalizedSD}|${logTag}`;
   if (API_TO_ENDPOINT_MAP[key]) {
     return API_TO_ENDPOINT_MAP[key];
   }
-  // If not found and it's a remapped version, try the original
+
+  const originalKey = `${sourceDestination}|${logTag}`;
+  if (API_TO_ENDPOINT_MAP[originalKey]) {
+    return API_TO_ENDPOINT_MAP[originalKey];
+  }
+
   const remappings = {
     'APP_LSP': 'APP_WRAPPER',
     'LSP_APP': 'WRAPPER_APP'
   };
   const original = remappings[sourceDestination];
   if (original) {
-    const originalKey = `${original}|${logTag}`;
-    return API_TO_ENDPOINT_MAP[originalKey] || null;
+    const fallbackKey = `${original}|${logTag}`;
+    return API_TO_ENDPOINT_MAP[fallbackKey] || null;
   }
   return null;
 }
