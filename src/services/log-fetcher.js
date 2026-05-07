@@ -1,4 +1,4 @@
-import { readFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { resolve } from 'path';
 
 /**
@@ -89,6 +89,65 @@ export async function fetchLogsFromJSONFile(filePath) {
 }
 
 /**
+ * Filter and sort logs by removing duplicates and sorting by created_at
+ * Duplicate key: request_id + log_tag + trace_route
+ * Keeps first occurrence, removes subsequent duplicates
+ * @param {Array} logs - Raw logs array
+ * @param {string} outputPath - Optional path to save filtered logs (e.g., 'data/filtered-logs.json')
+ * @returns {Array} - Filtered and sorted logs
+ */
+export async function filterAndSortLogs(logs, outputPath = null) {
+  if (!Array.isArray(logs) || logs.length === 0) {
+    return [];
+  }
+
+  const seen = new Set();
+  const duplicates = [];
+  
+  const filtered = logs.filter((log, index) => {
+    const msg = log?.message || {};
+    const requestId = msg.request_id || log?.xRequestId || '';
+    const logTag = (msg.log_tag || '').trim();
+    const traceRoute = msg.trace_route || '';
+    
+    const key = `${requestId}_${logTag}_${traceRoute}`;
+    
+    if (seen.has(key)) {
+      duplicates.push({ index, key: key.substring(0, 60), logTag });
+      return false;
+    }
+    
+    seen.add(key);
+    return true;
+  });
+
+  // Sort by created_at timestamp
+  const sorted = filtered.sort((a, b) => {
+    const timeA = a.message?.created_at || '';
+    const timeB = b.message?.created_at || '';
+    return new Date(timeA) - new Date(timeB);
+  });
+
+  console.log(`Filtered logs: ${logs.length} -> ${sorted.length} (removed ${duplicates.length} duplicates)`);
+  if (duplicates.length > 0) {
+    console.log(`Sample duplicates removed:`, duplicates.slice(0, 3));
+  }
+
+  // Save filtered logs to file if outputPath provided
+  if (outputPath) {
+    try {
+      const absolutePath = resolve(process.cwd(), outputPath);
+      await writeFile(absolutePath, JSON.stringify(sorted, null, 2), 'utf-8');
+      console.log(`Saved filtered logs to: ${outputPath}`);
+    } catch (error) {
+      console.error(`Failed to save filtered logs: ${error.message}`);
+    }
+  }
+
+  return sorted;
+}
+
+/**
  * Fetch order IDs from ClickHouse via API
  * @param {string} clickhouseApiUrl - API endpoint to fetch order IDs
  * @param {Object} filters - Optional filters (date range, merchant, etc.)
@@ -96,7 +155,7 @@ export async function fetchLogsFromJSONFile(filePath) {
  */
 export async function fetchOrderIdsFromClickHouse(clickhouseApiUrl, filters = {}) {
   try {
-    const response = await fetch(clickhouseApiUrl, {
+    const response = await fetch(clickApiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

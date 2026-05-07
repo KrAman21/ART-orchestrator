@@ -14,7 +14,7 @@ const LOG_LEVELS = {
 };
 
 const CURRENT_LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase()] ?? LOG_LEVELS.INFO;
-const LOG_FILE = process.env.LOG_FILE || 'art-orchestrator.log';
+const LOG_FILE = process.env.LOG_FILE || 'orchestrator-output.log';
 const LOG_TO_FILE = process.env.LOG_TO_FILE !== 'false'; // Default to true
 
 // Resolve log file path relative to cwd

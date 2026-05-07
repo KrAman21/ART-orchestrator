@@ -1,0 +1,317 @@
+ % npm start                      
+
+> art-orchestrator@1.0.0 start
+> node src/index.js
+
+Loading logs from file...
+Loaded 123 logs from data/logs.json
+Loaded 123 logs
+Filtering and sorting logs...
+Filtered logs: 123 -> 39 (removed 84 duplicates)
+Sample duplicates removed: [
+  {
+    index: 1,
+    key: 'e13eba47-f231-4897-a8e2-cdc136038302_FlipKart-Eligibility_RE',
+    logTag: 'FlipKart-Eligibility_REQUEST'
+  },
+  {
+    index: 2,
+    key: 'e13eba47-f231-4897-a8e2-cdc136038302_FlipKart-Eligibility_RE',
+    logTag: 'FlipKart-Eligibility_REQUEST'
+  },
+  {
+    index: 4,
+    key: '4709ebbf-5d48-4778-a4cd-c687a27b2bac_TXN_INTENT_CREATE_REQUE',
+    logTag: 'TXN_INTENT_CREATE_REQUEST'
+  }
+]
+Saved filtered logs to: data/filtered-logs.json
+Ready to replay 39 unique logs
+{"timestamp":"2026-05-06T18:05:37.599Z","level":"INFO","message":"Parsed log entries","count":39}
+✅ Replay auto-started
+{"timestamp":"2026-05-06T18:05:37.601Z","level":"INFO","message":"Extracted merchantId and orderId from logs","merchantId":"flipkart","orderId":"202605061115232272"}
+{"timestamp":"2026-05-06T18:05:37.601Z","level":"INFO","message":"Extracted lender org ID to ID mapping from logs","count":12,"orgIds":["MOCK_HDB","CHOLA","FFPL","OLYV","SMICC","DMI","PAYU","HDB","MOCK_LENDER_NF","MOCK_LENDER","TVS_CREDIT","FIBE"]}
+{"timestamp":"2026-05-06T18:05:37.601Z","level":"INFO","message":"Clearing LSP data via art/data/clear"}
+
+🚀 ART Orchestrator Server running on port 3002
+
+Endpoints:
+  - Health:  http://localhost:3002/health
+  - Status:  http://localhost:3002/status
+  - LSP:     http://localhost:3002/lsp/*
+  - GW:      http://localhost:3002/gw/*
+  - Control: http://localhost:3002/control/{start|stop}
+
+Replay ready. Call /control/start to begin.
+
+{"timestamp":"2026-05-06T18:05:37.629Z","level":"INFO","message":"LSP data cleared successfully","status":200}
+{"timestamp":"2026-05-06T18:05:37.629Z","level":"INFO","message":"Onboarding seed data to LSP: ","baseUrl":"http://localhost:8020/art/configs/set","merchantId":"flipkart","lenderCount":12}
+{"timestamp":"2026-05-06T18:05:37.629Z","level":"INFO","message":"Making HTTP request","baseUrl":"http://localhost:8020","endpoint":"/art/configs/set","method":"POST","requestId":null,"sourceDestination":null,"dest":"","logTag":null,"merchantId":"flipkart","customHeaders":{}}
+{"timestamp":"2026-05-06T18:05:37.629Z","level":"INFO","message":"Request body prepared","bodyPreview":"{\"merchantId\":\"flipkart\",\"lender_org_id_to_id_map\":{\"MOCK_HDB\":\"LSP7e0261e4a1854d708da1bc4e968f7ae0\",\"CHOLA\":\"LSP5e6bbd0153fc4f6b85855574cd996e81\",\"FFPL\":\"LSP0bcc0081817c46c1b4dc2e191b45503e\",\"OLYV\":\"...","contentType":"application/json"}
+{"timestamp":"2026-05-06T18:05:37.631Z","level":"INFO","message":"Seed data onboarding successful","merchantId":"flipkart","lenderMapSize":12,"status":200}
+{"timestamp":"2026-05-06T18:05:37.631Z","level":"INFO","message":"Checking duplicate","position":0,"logTag":"FlipKart-Eligibility_REQUEST","key":"e13eba47-f231-4897-a8e2-cdc136038302_FlipKart-Eligibility_RE","isDuplicate":false,"seenCount":0}
+{"timestamp":"2026-05-06T18:05:37.631Z","level":"INFO","message":"Replay orchestrator started","totalLogs":39,"validator":{"total":31,"processed":0,"remaining":31,"currentEntry":"[0] FlipKart-Eligibility_REQUEST APP→WRAPPER","progress":"0%"}}
+{"timestamp":"2026-05-06T18:05:37.631Z","level":"INFO","message":"Checking duplicate","position":0,"logTag":"FlipKart-Eligibility_REQUEST","key":"e13eba47-f231-4897-a8e2-cdc136038302_FlipKart-Eligibility_RE","isDuplicate":false,"seenCount":0}
+{"timestamp":"2026-05-06T18:05:37.631Z","level":"INFO","message":"processNextLogEntry called","currentEntry":"[0] FlipKart-Eligibility_REQUEST APP→WRAPPER","isExternalSource":true,"isRequest":true}
+{"timestamp":"2026-05-06T18:05:37.631Z","level":"INFO","message":"External source request - triggering from orchestrator","entry":"[0] FlipKart-Eligibility_REQUEST APP→WRAPPER","source":"APP"}
+{"timestamp":"2026-05-06T18:05:37.632Z","level":"INFO","message":"Transformed masked values in request","context":"FlipKart-Eligibility_REQUEST","count":11,"transforms":[{"path":"user_details.last_name","key":"last_name","oldValue":"XXXXXanan","newValue":"TestLast"},{"path":"user_details.mobile_number","key":"mobile_number","oldValue":"XXXXX09360","newValue":"9876543210"},{"path":"user_details.date_of_birth","key":"date_of_birth","oldValue":"XXXXX-2002","newValue":"01-01-1990"},{"path":"user_details.pan_number","key":"pan_number","oldValue":"XXXXX7649F","newValue":"EHZPA1234F"},{"path":"user_details.email_id","key":"email_id","oldValue":"XXXXXXXXXXjuspay.in","newValue":"test@juspay.in"},{"path":"user_details.first_name","key":"first_name","oldValue":"XXXXita","newValue":"TestFirst"},{"path":"delivery_address.address_line_2","key":"address_line_2","oldValue":"XXXXXX Park","newValue":"Near Test Park"},{"path":"delivery_address.address_line_1","key":"address_line_1","oldValue":"XXXXXXXar Near","newValue":"123 Test Street"},{"path":"delivery_address.state","key":"state","oldValue":"XXXXXXshtra","newValue":"Maharashtra"},{"path":"delivery_address.city","key":"city","oldValue":"XXne","newValue":"Pune"},{"path":"delivery_address.address_type","key":"address_type","oldValue":"XXXXVERY","newValue":"PERMANENT"}]}
+{"timestamp":"2026-05-06T18:05:37.632Z","level":"INFO","message":"Transformed expiry times in request","context":"FlipKart-Eligibility_REQUEST","minutesFromNow":10,"transforms":[{"path":"order_expiry_time","key":"order_expiry_time","oldValue":"2026-05-06T11:30:05.156Z","newValue":"2026-05-06T18:15:37.632Z","description":"Updated expiry time to +10 minutes"}]}
+{"timestamp":"2026-05-06T18:05:37.632Z","level":"INFO","message":"API LOG :: APP->WRAPPER /flipkart/eligibility REQUEST 0"}
+{"timestamp":"2026-05-06T18:05:37.632Z","level":"INFO","message":"ORCH_SENDING","destination":"LSP","baseUrl":"http://localhost:8020","api":"/flipkart/eligibility","source":"APP","dest":"WRAPPER","logTag":"FlipKart-Eligibility_REQUEST","requestId":"e13eba47-f231-4897-a8e2-cdc136038302","headers":{"disable_encryption":"TRUE","authorization":"Basic flipkart"},"payload":{"order_basket":[{"sub_category":"BabyCare","unit":1,"product_price":50000,"brand":"Example Brand","no_cost_details":null,"total_amount":50000,"product_name":"XXXXXXXXXXptop Model","category":"BGM"}],"skip_line_lender":null,"user_details":{"last_name":"TestLast","mobile_number":"9876543210","marital_status":"SINGLE","monthly_income":7100000,"date_of_birth":"01-01-1990","pan_number":"EHZPA1234F","employment_type":"SALARIED","bureau":{"value":"+wig///FP0rLnIl2b2Mu0mx/js6l7qhF7qxjx3AsxWN4k8XWBn/LewPdWAuro/ihgrZbKJqhghgfac66PexHTjShrdY1BKAbWrSSlK4iIQwrHaGazp8a8mz9uV6cKeooXnP6F5M5XTf/04KMEel0NX9ly7H21DrmKHcMUwkQWPUmpc6qfPV8JnvVwrwnYzZ/xSl5BECK2Akn8kNbteljcn65+k7hLiW8Q8+b4TeCRJQyn5acOsk5ctOBoU7BdLck2qTxoPu+FlX3cMW9DvwBy9RWW6XxBaCgPyK+EvNL8bIGKSaxOJTmxb+8O8oScqWs8edJ985OcP9+rd7qeeIfM9YJUMqEsd2Cin0ldWNS8IMO7vHXt7daVJZuXSZ4qdYesvFqEjHVUlLPL/Ap0XpT8ceY3p1/FjnTVX155KnQ+CL0kjhAlJxBdEDRRV97Ua82EwuLJil+gd5QPkMnUIMJQK1W/Tu8DxwJpg6MZFMl8afeHi9aR+IIMfMDm/54UfNrE2LgBYO4NTfw86V/gwwBe61Hl0VwBHLVPsbZbPVQqnOvLnxdjpbXN/VqZxuDpbC+ZQxjBq/9haN3/+CiMwFec4yThJ/ogg0kT6W7zws1PYRe7sAyLT/iX5PGCj6cytNNg4rEPlE/duNZv+PXQOI4jRfM0JSgN2s4dfARf/5AG/B/VtXgiU6t3LNQaCUp4/CCdkC1NoX2fLtqogLuNEYAHPPhgqf9IImzFO/71qo2UDcIxlFG8ueSh70asGgNywvrcErAhXtkcOe4mNCgruA16DvYYxMgjG2M070UU+QXRzMJK/yw6DCqaGFdeiFOw8XTWo9oYMw42go22ifSgbDPoLIxhhY0gund1V48gfTut23BaINbPsciyo7nNdZnZbo8wRBSSZVCCLJEm9oL6sIst6iXsE94HyJXd40gMaKy2HDRbKb1Br66N3rG+BR5K8Cvqge9zm7EEA3Ms1opr98DuizO4qbcGMqgUFSfpBxkUyN021IHoKE6N+M5evwtH04RB9wqVuuD7/b7X0RCknyrMWGFrrd0cM5/ZeSo7Ekc+CVBumTLhgQWFerhxKo+RxnXDbBKqGvOmtGre1BuNsxDxo1oTS2AQfUmAvH8GWfEera5Z3/ibt4q9v7aVcqCngrySne8VkbEUMJVcpTQN3e+xrNcd3JLZi2rVaF7jiendjcxXunJTWbFJnwoe7DwAcrwL2Mb3oVzv553LboM2BcII8CuyKukQTGULx42fqHKpcgtrFH0wIepBXWs5z/NDBPP/pO59DGj5Glzr2QZXrITHMpnzbVkZg9RZ38AVBlDLlXz4t6MbbKkgeLVxVHGrmZ8FS1KSarPl5nRsxvZEBjsuq8Q5VCYen6WLow9nxpVQTRrk30y5F+eH0LJSci4peWdhjiWm7wLe9wL41ad1olNTzwwgr8FhF72ksTQffOqTtzG3FUvFJs/oJ7ND6gJx1xbFuCafAgyhbX/JvrTO7JwGxntkkzuUeUcoExiKkI6Tl1tlJOCmsdwnVIbcpbXjh2LfS/lcJDNmXItJX047YNsVUQdOX7aFfkR7eP9aBCNmqeqoeb2pePmBdnGmiVOManBStTA618ioLcn9pqNUO+EifCUehePAMra6zBxA2QXfsx9cPXF55h+obATkW7AVOhDX/jkUt5vpCL/Y9zwy9Z79bE+I+ByMETdpNGIomZqoQ6IEk3TfxxKfAyPctwaFYfB82xRDv6d5Fp5De2X88kJ91c6Lwm4SRXVPB6e6A7xtGlUl2E3LsLm4RnwYdAT3Z2YOeJhI7NO0Qxwpg1WPlCUXZIkKBlmmL0DuWI0MIuRW0wknUL0VOaFjqEOanYdsIkt1lgvT3PYgUV8GU4fU6YeYfbFtzc1wieLes1utq/0tC3EUjAFoMJB1SRsvqpLCKyn8SLksUR1xoxiTLDku1W7a26ngT+lY2uzC3zbDcq37C","source":"CIBIL","format":"JSON","is_encrypted":true},"gender":"FEMALE","email_id":"test@juspay.in","first_name":"TestFirst"},"expected_emi_plans":[],"delivery_address":{"pincode":"560048","address_line_2":"Near Test Park","address_line_1":"123 Test Street","state":"Maharashtra","city":"Pune","address_type":"PERMANENT"},"risk_details":{"add_type_others":"0","pcd_gmv_value_24m":"55940.0","add_age":"1276","pcd_orders_count_24m":"6","freq_delivered_pincode":"XXX405","account_age":"XX21","add_is_default_shipping_contact_flag":"false","add_long":"83.8099116","device_id":"zcxdvfbcgnvhmbj","add_gmv_value_24m":"42781.0","pcd_uniq_addresses_pincode_cnt_ever":"X","add_month_since_first_delivery_date":"42","pcd_uniq_pincode_address_cnt_24m":"X","add_numericals":"0","score_2_bucket":"1","add_type_work":"0","pcd_gmv_share_24m":"0.3864","add_lat":"26.572351","add_char":"56","affluence_score":"H","recent_pincode":"XXX001","pcd_month_since_last_delivery_date":"3","add_orders_count_24m":"3","add_gmv_share_24m":"0.2955","add_month_since_last_delivery_date":"3","fk_bnpl_emi":"null","add_type_home":"0","score_1_bucket":"1","add_order_share_24m":"0.2143","pcd_order_share_24m":"0.4286","max_cart_value":"42576.0","pcd_month_since_first_delivery_date":"119","add_uniq_addresses_cnt_24m":"X0","pcd_age":"3598"},"lender_metadata":null,"order_expiry_time":"2026-05-06T18:15:37.632Z","consents":[{"ip_address":"XXXXXX8.1.1","consent_type":"MFI","timestamp":"2025-02-20T10:00:00Z","consent_message":"text"}],"amount":1501200,"address":null,"order_id":"202605061115232272","order_amount_breakup":{"delivery_fee":4900,"other_fee":4900,"platform_fee":4900,"total_product_amount":1000000,"offer_handling_fee":20000,"packaging_fee":4900},"customer_id":null}}
+{"timestamp":"2026-05-06T18:05:37.632Z","level":"INFO","message":"API LOG :: APP->WRAPPER /flipkart/eligibility REQUEST 0"}
+{"timestamp":"2026-05-06T18:05:37.632Z","level":"INFO","message":"Making HTTP request","baseUrl":"http://localhost:8020","endpoint":"/flipkart/eligibility","method":"POST","requestId":"e13eba47-f231-4897-a8e2-cdc136038302","sourceDestination":"APP_WRAPPER","dest":"WRAPPER","logTag":"FlipKart-Eligibility_REQUEST","merchantId":null,"customHeaders":{"disable_encryption":"TRUE","authorization":"Basic flipkart"}}
+{"timestamp":"2026-05-06T18:05:37.632Z","level":"INFO","message":"Double-stringified body for WRAPPER destination"}
+{"timestamp":"2026-05-06T18:05:37.632Z","level":"INFO","message":"Request body prepared","bodyPreview":"\"{\\\"order_basket\\\":[{\\\"sub_category\\\":\\\"BabyCare\\\",\\\"unit\\\":1,\\\"product_price\\\":50000,\\\"brand\\\":\\\"Example Brand\\\",\\\"no_cost_details\\\":null,\\\"total_amount\\\":50000,\\\"product_name\\\":\\\"XXXXXXXXXXptop Mode...","contentType":"application/json"}
+{"timestamp":"2026-05-06T18:05:37.710Z","level":"INFO","message":"=== RESPONSE RECEIVED FROM DESTINATION ===","service":"LSP","baseUrl":"http://localhost:8020","api":"/flipkart/eligibility","status":200,"statusText":"OK","hasData":true,"dataKeys":["0","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30","31","32"],"hasError":false,"errorMessage":null,"requestId":"e13eba47-f231-4897-a8e2-cdc136038302"}
+{"timestamp":"2026-05-06T18:05:37.710Z","level":"INFO","message":"API LOG :: WRAPPER->APP /flipkart/eligibility RESPONSE 5"}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"External request response validated","request":"[0] FlipKart-Eligibility_REQUEST APP→WRAPPER","response":"[5] FlipKart-Eligibility_RESPONSE WRAPPER→APP","actualResponse":"{\"status\":\"SUCCESS\",\"error\":null}"}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Marking entry as processed","entry":"[5] FlipKart-Eligibility_RESPONSE WRAPPER→APP","position":5,"currentIndex":1}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Checking duplicate","position":1,"logTag":"TXN_INTENT_CREATE_REQUEST","key":"4709ebbf-5d48-4778-a4cd-c687a27b2bac_TXN_INTENT_CREATE_REQUE","isDuplicate":false,"seenCount":1}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Skipping WRAPPER entry","position":1,"originalIndex":1,"traceRoute":"WRAPPER_CORE"}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Checking duplicate","position":2,"logTag":"","key":"LSPTICDBYlP3p7apXBWYB4zhTIWuZq___","isDuplicate":false,"seenCount":1}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Skipping WRAPPER entry","position":2,"originalIndex":2}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Checking duplicate","position":3,"logTag":"TXN_INTENT_CREATE_RESPONSE","key":"91bfd975-3929-444e-a21d-45d0cd5a9a5a_TXN_INTENT_CREATE_RESPO","isDuplicate":false,"seenCount":1}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Skipping WRAPPER entry","position":3,"originalIndex":3,"traceRoute":"WRAPPER_CORE"}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Checking duplicate","position":4,"logTag":"CREATE_LOAN_REQUEST_INFO_REQUEST","key":"d2925fcc-67af-4416-ba4c-16b05cc17e90_CREATE_LOAN_REQUEST_INF","isDuplicate":false,"seenCount":1}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Skipping WRAPPER entry","position":4,"originalIndex":4,"traceRoute":"WRAPPER_CORE"}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Checking duplicate","position":5,"logTag":"FlipKart-Eligibility_RESPONSE","key":"5191b066-45e8-446e-b050-1ab174016aa0_FlipKart-Eligibility_RE","isDuplicate":false,"seenCount":1}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Skipping already processed entry","position":5,"originalIndex":5}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Checking duplicate","position":6,"logTag":"CREATE_LOAN_REQUEST_INFO_RESPONSE","key":"8565b9c8-d8da-40f1-9889-b5ca4a3aac12_CREATE_LOAN_REQUEST_INF","isDuplicate":false,"seenCount":1}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Skipping WRAPPER entry","position":6,"originalIndex":6,"traceRoute":"WRAPPER_CORE"}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Checking duplicate","position":7,"logTag":"ELIGIBILITY_REQUEST","key":"cdf16d57-53ce-4c37-b0fe-0fc8d97a2227_ELIGIBILITY_REQUEST_WRA","isDuplicate":false,"seenCount":1}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Skipping WRAPPER entry","position":7,"originalIndex":7,"traceRoute":"WRAPPER_CORE"}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Checking duplicate","position":8,"logTag":"LSP-Eligibility_REQUEST","key":"0656e9e8-ba26-4f0b-8163-f2ec440524d8_LSP-Eligibility_REQUEST","isDuplicate":false,"seenCount":1}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"processNextLogEntry called","currentEntry":"[8] LSP-Eligibility_REQUEST CORE→GATEWAY","isExternalSource":false,"isRequest":true}
+{"timestamp":"2026-05-06T18:05:37.711Z","level":"INFO","message":"Waiting for incoming request from service","entry":"[8] LSP-Eligibility_REQUEST CORE→GATEWAY","source":"CORE","destination":"GATEWAY"}
+Received request on / with body: {
+  lenderMetadata: null,
+  applicationType: 'CHECKOUT',
+  applicants: [
+    {
+      organizationDetails: {},
+      userData: [Object],
+      businessDetails: [Object],
+      vintageData: [Object]
+    }
+  ],
+  orderJson: 'eyJ1ZGY0IjpudWxsLCJvcmRlcl9wcmltYXJ5X2lkIjpudWxsLCJsYXN0X25hbWUiOiJUZXN0TGFzdCIsInVkZjgiOm51bGwsIm9yZGVyX3N0YXR1c19tZXRhZGF0YSI6bnVsbCwidWRmMyI6bnVsbCwidWRmNiI6bnVsbCwicmV0dXJuX3VybCI6bnVsbCwiZXhwaXJ5X2F0IjoiMjAyNi0wNS0wNlQxODoxNTozNy42MzJaIiwiZXVsZXJfb3JkZXJfaWQiOm51bGwsInNvdXJjZSI6IkxTUCIsIm1ldGFkYXRhIjp7Im9yZGVyX2Jhc2tldCI6W3sic3ViX2NhdGVnb3J5IjoiQmFieUNhcmUiLCJ1bml0IjoxLCJwcm9kdWN0X3ByaWNlIjo1MDAwMCwiYnJhbmQiOiJFeGFtcGxlIEJyYW5kIiwibm9fY29zdF9kZXRhaWxzIjpudWxsLCJ0b3RhbF9hbW91bnQiOjUwMDAwLCJwcm9kdWN0X25hbWUiOiJYWFhYWFhYWFhYcHRvcCBNb2RlbCIsImNhdGVnb3J5IjoiQkdNIn1dLCJ1c2VyX2RldGFpbHMiOnsibGFzdF9uYW1lIjoiVGVzdExhc3QiLCJtb2JpbGVfbnVtYmVyIjoiOTg3NjU0MzIxMCIsIm1hcml0YWxfc3RhdHVzIjoiU0lOR0xFIiwibW9udGhseV9pbmNvbWUiOjcxMDAwMDAsImRhdGVfb2ZfYmlydGgiOiIwMS0wMS0xOTkwIiwicGFuX251bWJlciI6IkVIWlBBMTIzNEYiLCJlbXBsb3ltZW50X3R5cGUiOiJTQUxBUklFRCIsImdlbmRlciI6IkZFTUFMRSIsImVtYWlsX2lkIjoidGVzdEBqdXNwYXkuaW4iLCJmaXJzdF9uYW1lIjoiVGVzdEZpcnN0In0sImV4cGVjdGVkX2VtaV9wbGFucyI6W10sImRlbGl2ZXJ5X2FkZHJlc3MiOnsicGluY29kZSI6IjU2MDA0OCIsImFkZHJlc3NfbGluZV8yIjoiTmVhciBUZXN0IFBhcmsiLCJhZGRyZXNzX2xpbmVfMSI6IjEyMyBUZXN0IFN0cmVldCIsInN0YXRlIjoiTWFoYXJhc2h0cmEiLCJjaXR5IjoiUHVuZSIsImFkZHJlc3NfdHlwZSI6IlBFUk1BTkVOVCJ9LCJ2aW50YWdlX2RldGFpbHMiOnsiYWRkX3R5cGVfb3RoZXJzIjoiMCIsInBjZF9nbXZfdmFsdWVfMjRtIjoiNTU5NDAuMCIsImFkZF9hZ2UiOiIxMjc2IiwicGNkX29yZGVyc19jb3VudF8yNG0iOiI2IiwiZnJlcV9kZWxpdmVyZWRfcGluY29kZSI6IlhYWDQwNSIsImFjY291bnRfYWdlIjoiWFgyMSIsImFkZF9pc19kZWZhdWx0X3NoaXBwaW5nX2NvbnRhY3RfZmxhZyI6ImZhbHNlIiwiYWRkX2xvbmciOiI4My44MDk5MTE2IiwiZGV2aWNlX2lkIjoiemN4ZHZmYmNnbnZobWJqIiwiYWRkX2dtdl92YWx1ZV8yNG0iOiI0Mjc4MS4wIiwicGNkX3VuaXFfYWRkcmVzc2VzX3BpbmNvZGVfY250X2V2ZXIiOiJYIiwiYWRkX21vbnRoX3NpbmNlX2ZpcnN0X2RlbGl2ZXJ5X2RhdGUiOiI0MiIsInBjZF91bmlxX3BpbmNvZGVfYWRkcmVzc19jbnRfMjRtIjoiWCIsImFkZF9udW1lcmljYWxzIjoiMCIsInNjb3JlXzJfYnVja2V0IjoiMSIsImFkZF90eXBlX3dvcmsiOiIwIiwicGNkX2dtdl9zaGFyZV8yNG0iOiIwLjM4NjQiLCJhZGRfbGF0IjoiMjYuNTcyMzUxIiwiYWRkX2NoYXIiOiI1NiIsImFmZmx1ZW5jZV9zY29yZSI6IkgiLCJyZWNlbnRfcGluY29kZSI6IlhYWDAwMSIsInBjZF9tb250aF9zaW5jZV9sYXN0X2RlbGl2ZXJ5X2RhdGUiOiIzIiwiYWRkX29yZGVyc19jb3VudF8yNG0iOiIzIiwiYWRkX2dtdl9zaGFyZV8yNG0iOiIwLjI5NTUiLCJhZGRfbW9udGhfc2luY2VfbGFzdF9kZWxpdmVyeV9kYXRlIjoiMyIsImZrX2JucGxfZW1pIjpudWxsLCJhZGRfdHlwZV9ob21lIjoiMCIsInNjb3JlXzFfYnVja2V0IjoiMSIsImFkZF9vcmRlcl9zaGFyZV8yNG0iOiIwLjIxNDMiLCJwY2Rfb3JkZXJfc2hhcmVfMjRtIjoiMC40Mjg2IiwibWF4X2NhcnRfdmFsdWUiOiI0MjU3Ni4wIiwicGNkX21vbnRoX3NpbmNlX2ZpcnN0X2RlbGl2ZXJ5X2RhdGUiOiIxMTkiLCJhZGRfdW5pcV9hZGRyZXNzZXNfY250XzI0bSI6IlgwIiwicGNkX2FnZSI6IjM1OTgifSwib3JkZXJfZXhwaXJ5X3RpbWUiOiIyMDI2LTA1LTA2VDE4OjE1OjM3LjYzMloiLCJjb25zZW50cyI6W3siaXBfYWRkcmVzcyI6IlhYWFhYWDguMS4xIiwiY29uc2VudF90eXBlIjoiTUZJIiwidGltZXN0YW1wIjoiMjAyNS0wMi0yMFQxMDowMDowMFoiLCJjb25zZW50X21lc3NhZ2UiOiJ0ZXh0In1dLCJhbW91bnQiOjE1MDEyMDAsIm9yZGVyX2lkIjoiMjAyNjA1MDYxMTE1MjMyMjcyIiwib3JkZXJfYW1vdW50X2JyZWFrdXAiOnsiZGVsaXZlcnlfZmVlIjo0OTAwLCJvdGhlcl9mZWUiOjQ5MDAsInBsYXRmb3JtX2ZlZSI6NDkwMCwidG90YWxfcHJvZHVjdF9hbW91bnQiOjEwMDAwMDAsIm9mZmVyX2hhbmRsaW5nX2ZlZSI6MjAwMDAsInBhY2thZ2luZ19mZWUiOjQ5MDB9fSwiY3VycmVuY3kiOm51bGwsInVkZjIiOm51bGwsImN1c3RvbWVyX2VtYWlsIjoidGVzdEBqdXNwYXkuaW4iLCJjdXN0b21lcl9waG9uZSI6Ijk4NzY1NDMyMTAiLCJ1ZGY1IjpudWxsLCJwcm9kdWN0cyI6bnVsbCwidGltZXN0YW1wIjpudWxsLCJtZXJjaGFudF9pZCI6ImZsaXBrYXJ0IiwiZ2F0ZXdheV9yZWZfaWQiOm51bGwsInVkZjkiOm51bGwsImFtb3VudCI6IjE1MDEyLjAwIiwib3JkZXJfaWQiOiIyMDI2MDUwNjExMTUyMzIyNzIiLCJ1ZGY3IjpudWxsLCJkb3duX3BheW1lbnRfYW1vdW50IjpudWxsLCJ1ZGYxMCI6bnVsbCwiY3VzdG9tZXJfaWQiOiI3NjE5ZWU4Y2VhNDkxODdmMzA5NjE2ZTMwZWNmNTRiZTA3MjI1OWI0Mzc2MGYxZjU1MGE2NDQ5NDVkNTU3MmYyIiwiY2xpZW50X2lkIjpudWxsLCJmaXJzdF9uYW1lIjoiVGVzdEZpcnN0IiwidWRmMSI6bnVsbH0=',
+  loanRequestInfoId: 'LSP31edeb834d1147088ca4ced6b57f0f28',
+  plansFilteringType: 'TENURE_AND_ROI',
+  borrower: {
+    organizationDetails: {},
+    profileDetails: {
+      firstName: 'TestFirst',
+      dateOfBirth: '1990-01-01',
+      pan: 'EHZPA1234F',
+      email: 'test@juspay.in',
+      phone: '9876543210',
+      maritalStatus: 'SINGLE',
+      lastName: 'TestLast',
+      gender: 'FEMALE'
+    },
+    businessDetails: {
+      monthlyIncome: '71000.00',
+      employmentType: 'SALARIED',
+      isIncomeConsentGiven: true
+    },
+    vintageData: { riskDetails: [Object] }
+  },
+  requestId: '897c317e-1a13-4f54-852a-d5712bbd1af9',
+  consent: [],
+  bureauData: {
+    value: '+wig///FP0rLnIl2b2Mu0mx/js6l7qhF7qxjx3AsxWN4k8XWBn/LewPdWAuro/ihgrZbKJqhghgfac66PexHTjShrdY1BKAbWrSSlK4iIQwrHaGazp8a8mz9uV6cKeooXnP6F5M5XTf/04KMEel0NX9ly7H21DrmKHcMUwkQWPUmpc6qfPV8JnvVwrwnYzZ/xSl5BECK2Akn8kNbteljcn65+k7hLiW8Q8+b4TeCRJQyn5acOsk5ctOBoU7BdLck2qTxoPu+FlX3cMW9DvwBy9RWW6XxBaCgPyK+EvNL8bIGKSaxOJTmxb+8O8oScqWs8edJ985OcP9+rd7qeeIfM9YJUMqEsd2Cin0ldWNS8IMO7vHXt7daVJZuXSZ4qdYesvFqEjHVUlLPL/Ap0XpT8ceY3p1/FjnTVX155KnQ+CL0kjhAlJxBdEDRRV97Ua82EwuLJil+gd5QPkMnUIMJQK1W/Tu8DxwJpg6MZFMl8afeHi9aR+IIMfMDm/54UfNrE2LgBYO4NTfw86V/gwwBe61Hl0VwBHLVPsbZbPVQqnOvLnxdjpbXN/VqZxuDpbC+ZQxjBq/9haN3/+CiMwFec4yThJ/ogg0kT6W7zws1PYRe7sAyLT/iX5PGCj6cytNNg4rEPlE/duNZv+PXQOI4jRfM0JSgN2s4dfARf/5AG/B/VtXgiU6t3LNQaCUp4/CCdkC1NoX2fLtqogLuNEYAHPPhgqf9IImzFO/71qo2UDcIxlFG8ueSh70asGgNywvrcErAhXtkcOe4mNCgruA16DvYYxMgjG2M070UU+QXRzMJK/yw6DCqaGFdeiFOw8XTWo9oYMw42go22ifSgbDPoLIxhhY0gund1V48gfTut23BaINbPsciyo7nNdZnZbo8wRBSSZVCCLJEm9oL6sIst6iXsE94HyJXd40gMaKy2HDRbKb1Br66N3rG+BR5K8Cvqge9zm7EEA3Ms1opr98DuizO4qbcGMqgUFSfpBxkUyN021IHoKE6N+M5evwtH04RB9wqVuuD7/b7X0RCknyrMWGFrrd0cM5/ZeSo7Ekc+CVBumTLhgQWFerhxKo+RxnXDbBKqGvOmtGre1BuNsxDxo1oTS2AQfUmAvH8GWfEera5Z3/ibt4q9v7aVcqCngrySne8VkbEUMJVcpTQN3e+xrNcd3JLZi2rVaF7jiendjcxXunJTWbFJnwoe7DwAcrwL2Mb3oVzv553LboM2BcII8CuyKukQTGULx42fqHKpcgtrFH0wIepBXWs5z/NDBPP/pO59DGj5Glzr2QZXrITHMpnzbVkZg9RZ38AVBlDLlXz4t6MbbKkgeLVxVHGrmZ8FS1KSarPl5nRsxvZEBjsuq8Q5VCYen6WLow9nxpVQTRrk30y5F+eH0LJSci4peWdhjiWm7wLe9wL41ad1olNTzwwgr8FhF72ksTQffOqTtzG3FUvFJs/oJ7ND6gJx1xbFuCafAgyhbX/JvrTO7JwGxntkkzuUeUcoExiKkI6Tl1tlJOCmsdwnVIbcpbXjh2LfS/lcJDNmXItJX047YNsVUQdOX7aFfkR7eP9aBCNmqeqoeb2pePmBdnGmiVOManBStTA618ioLcn9pqNUO+EifCUehePAMra6zBxA2QXfsx9cPXF55h+obATkW7AVOhDX/jkUt5vpCL/Y9zwy9Z79bE+I+ByMETdpNGIomZqoQ6IEk3TfxxKfAyPctwaFYfB82xRDv6d5Fp5De2X88kJ91c6Lwm4SRXVPB6e6A7xtGlUl2E3LsLm4RnwYdAT3Z2YOeJhI7NO0Qxwpg1WPlCUXZIkKBlmmL0DuWI0MIuRW0wknUL0VOaFjqEOanYdsIkt1lgvT3PYgUV8GU4fU6YeYfbFtzc1wieLes1utq/0tC3EUjAFoMJB1SRsvqpLCKyn8SLksUR1xoxiTLDku1W7a26ngT+lY2uzC3zbDcq37C',
+    source: 'CIBIL',
+    format: 'JSON',
+    is_encrypted: true
+  },
+  flowSubType: 'CHECKOUT',
+  customerId: '7619ee8cea49187f309616e30ecf54be072259b43760f1f550a644945d5572f2',
+  gatewayRefId: 'default_gateway_ref_id',
+  metadata: {
+    version: '0.1.0',
+    timestamp: '2026-05-06T18:05:37.721984869Z',
+    orgId: 'LSP007',
+    traceId: 'LSP0acf728426f3486a9fde5ea93bc9949a'
+  },
+  applicant: {
+    organizationDetails: {},
+    userData: {
+      firstName: 'TestFirst',
+      dateOfBirth: '1990-01-01',
+      pan: 'EHZPA1234F',
+      email: 'test@juspay.in',
+      phone: '9876543210',
+      maritalStatus: 'SINGLE',
+      lastName: 'TestLast',
+      gender: 'FEMALE'
+    },
+    businessDetails: {
+      monthlyIncome: '71000.00',
+      employmentType: 'SALARIED',
+      isIncomeConsentGiven: true
+    },
+    vintageData: { riskDetails: [Object] }
+  },
+  lenderOrgIds: [
+    'MOCK_HDB',       'CHOLA',
+    'FFPL',           'OLYV',
+    'SMICC',          'DMI',
+    'PAYU',           'HDB',
+    'MOCK_LENDER_NF', 'MOCK_LENDER',
+    'TVS_CREDIT',     'FIBE'
+  ],
+  checkoutData: {
+    productDetails: [ [Object] ],
+    orderDetails: {
+      orderSource: 'LSP',
+      orderId: '202605061115232272',
+      orderExpiry: '2026-05-06T18:15:37.632Z'
+    },
+    metadata: {
+      expectedEMIPlans: [],
+      merchantCustomerId: '7619ee8cea49187f309616e30ecf54be072259b43760f1f550a644945d5572f2',
+      vintageData: [Object],
+      amountBreakup: [Object]
+    },
+    requestAmount: '15012.00',
+    addressDetails: [ [Object] ]
+  },
+  lineDetails: [],
+  requestedAt: '2026-05-06T18:05:37.73667082Z',
+  merchantId: 'flipkart',
+  amount: '15012',
+  flowType: 'NTB',
+  cutOffMicroSeconds: null,
+  themisDetails: [
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: null,
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'MOCK_LENDER_LSP',
+      lenderOrgId: 'MOCK_LENDER'
+    },
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: null,
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'FFPL_LSP',
+      lenderOrgId: 'FFPL'
+    },
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: 'DEFAULT_OFFERS',
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'DMI_LSP',
+      lenderOrgId: 'DMI'
+    },
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: 'DEFAULT_OFFERS',
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'TVS_CREDIT_LSP',
+      lenderOrgId: 'TVS_CREDIT'
+    },
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: null,
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'CHOLA_LSP',
+      lenderOrgId: 'CHOLA'
+    },
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: null,
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'FIBE_LSP',
+      lenderOrgId: 'FIBE'
+    },
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: null,
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'HDB_LSP',
+      lenderOrgId: 'HDB'
+    },
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: null,
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'MOCK_LENDER1_LSP',
+      lenderOrgId: 'MOCK_LENDER_NF'
+    },
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: null,
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'OLYV_LSP',
+      lenderOrgId: 'OLYV'
+    },
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: 'DEFAULT_OFFERS',
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'SMICC_LSP',
+      lenderOrgId: 'SMICC'
+    },
+    {
+      gatewayRefId: 'default_gateway_ref_id',
+      themisCallType: null,
+      productType: 'CONSUMER_CREDIT',
+      versionConfigs: [],
+      merchantId: 'flipkart',
+      paymentMethod: 'PAYU_LSP',
+      lenderOrgId: 'PAYU'
+    }
+  ]
+}
+Handling API: /v1.0/eligibility
+{"timestamp":"2026-05-06T18:05:37.761Z","level":"INFO","message":"=== INCOMING REQUEST FROM LSP ===","path":"/","api":"/v1.0/eligibility","source":"CORE","destination":"GATEWAY","logTag":"LSP-Eligibility_REQUEST","headers":{"x-request-id":"e13eba47-f231-4897-a8e2-cdc136038302","content-type":"application/json;charset=utf-8","x-merchant-id":"flipkart"},"bodyKeys":["lenderMetadata","applicationType","applicants","orderJson","loanRequestInfoId","plansFilteringType","borrower","requestId","consent","bureauData","flowSubType","customerId","gatewayRefId","metadata","applicant","lenderOrgIds","checkoutData","lineDetails","requestedAt","merchantId","amount","flowType","cutOffMicroSeconds","themisDetails"]}
+{"timestamp":"2026-05-06T18:05:37.761Z","level":"INFO","message":"ORCH_RECEIVING","source":"CORE","destination":"GATEWAY","api":"/v1.0/eligibility","requestId":"e13eba47-f231-4897-a8e2-cdc136038302","payload":{"lenderMetadata":null,"applicationType":"CHECKOUT","applicants":[{"organizationDetails":{},"userData":{"firstName":"TestFirst","dateOfBirth":"1990-01-01","pan":"EHZPA1234F","email":"test@juspay.in","phone":"9876543210","maritalStatus":"SINGLE","lastName":"TestLast","gender":"FEMALE"},"businessDetails":{"monthlyIncome":"71000.00","employmentType":"SALARIED","isIncomeConsentGiven":true},"vintageData":{"riskDetails":{"add_type_others":"0","pcd_gmv_value_24m":"55940.0","add_age":"1276","pcd_orders_count_24m":"6","freq_delivered_pincode":"XXX405","account_age":"XX21","add_is_default_shipping_contact_flag":"false","add_long":"83.8099116","device_id":"zcxdvfbcgnvhmbj","add_gmv_value_24m":"42781.0","pcd_uniq_addresses_pincode_cnt_ever":"X","add_month_since_first_delivery_date":"42","pcd_uniq_pincode_address_cnt_24m":"X","add_numericals":"0","score_2_bucket":"1","add_type_work":"0","pcd_gmv_share_24m":"0.3864","add_lat":"26.572351","add_char":"56","affluence_score":"H","recent_pincode":"XXX001","pcd_month_since_last_delivery_date":"3","add_orders_count_24m":"3","add_gmv_share_24m":"0.2955","add_month_since_last_delivery_date":"3","fk_bnpl_emi":null,"add_type_home":"0","score_1_bucket":"1","add_order_share_24m":"0.2143","pcd_order_share_24m":"0.4286","max_cart_value":"42576.0","pcd_month_since_first_delivery_date":"119","add_uniq_addresses_cnt_24m":"X0","pcd_age":"3598"}}}],"orderJson":"eyJ1ZGY0IjpudWxsLCJvcmRlcl9wcmltYXJ5X2lkIjpudWxsLCJsYXN0X25hbWUiOiJUZXN0TGFzdCIsInVkZjgiOm51bGwsIm9yZGVyX3N0YXR1c19tZXRhZGF0YSI6bnVsbCwidWRmMyI6bnVsbCwidWRmNiI6bnVsbCwicmV0dXJuX3VybCI6bnVsbCwiZXhwaXJ5X2F0IjoiMjAyNi0wNS0wNlQxODoxNTozNy42MzJaIiwiZXVsZXJfb3JkZXJfaWQiOm51bGwsInNvdXJjZSI6IkxTUCIsIm1ldGFkYXRhIjp7Im9yZGVyX2Jhc2tldCI6W3sic3ViX2NhdGVnb3J5IjoiQmFieUNhcmUiLCJ1bml0IjoxLCJwcm9kdWN0X3ByaWNlIjo1MDAwMCwiYnJhbmQiOiJFeGFtcGxlIEJyYW5kIiwibm9fY29zdF9kZXRhaWxzIjpudWxsLCJ0b3RhbF9hbW91bnQiOjUwMDAwLCJwcm9kdWN0X25hbWUiOiJYWFhYWFhYWFhYcHRvcCBNb2RlbCIsImNhdGVnb3J5IjoiQkdNIn1dLCJ1c2VyX2RldGFpbHMiOnsibGFzdF9uYW1lIjoiVGVzdExhc3QiLCJtb2JpbGVfbnVtYmVyIjoiOTg3NjU0MzIxMCIsIm1hcml0YWxfc3RhdHVzIjoiU0lOR0xFIiwibW9udGhseV9pbmNvbWUiOjcxMDAwMDAsImRhdGVfb2ZfYmlydGgiOiIwMS0wMS0xOTkwIiwicGFuX251bWJlciI6IkVIWlBBMTIzNEYiLCJlbXBsb3ltZW50X3R5cGUiOiJTQUxBUklFRCIsImdlbmRlciI6IkZFTUFMRSIsImVtYWlsX2lkIjoidGVzdEBqdXNwYXkuaW4iLCJmaXJzdF9uYW1lIjoiVGVzdEZpcnN0In0sImV4cGVjdGVkX2VtaV9wbGFucyI6W10sImRlbGl2ZXJ5X2FkZHJlc3MiOnsicGluY29kZSI6IjU2MDA0OCIsImFkZHJlc3NfbGluZV8yIjoiTmVhciBUZXN0IFBhcmsiLCJhZGRyZXNzX2xpbmVfMSI6IjEyMyBUZXN0IFN0cmVldCIsInN0YXRlIjoiTWFoYXJhc2h0cmEiLCJjaXR5IjoiUHVuZSIsImFkZHJlc3NfdHlwZSI6IlBFUk1BTkVOVCJ9LCJ2aW50YWdlX2RldGFpbHMiOnsiYWRkX3R5cGVfb3RoZXJzIjoiMCIsInBjZF9nbXZfdmFsdWVfMjRtIjoiNTU5NDAuMCIsImFkZF9hZ2UiOiIxMjc2IiwicGNkX29yZGVyc19jb3VudF8yNG0iOiI2IiwiZnJlcV9kZWxpdmVyZWRfcGluY29kZSI6IlhYWDQwNSIsImFjY291bnRfYWdlIjoiWFgyMSIsImFkZF9pc19kZWZhdWx0X3NoaXBwaW5nX2NvbnRhY3RfZmxhZyI6ImZhbHNlIiwiYWRkX2xvbmciOiI4My44MDk5MTE2IiwiZGV2aWNlX2lkIjoiemN4ZHZmYmNnbnZobWJqIiwiYWRkX2dtdl92YWx1ZV8yNG0iOiI0Mjc4MS4wIiwicGNkX3VuaXFfYWRkcmVzc2VzX3BpbmNvZGVfY250X2V2ZXIiOiJYIiwiYWRkX21vbnRoX3NpbmNlX2ZpcnN0X2RlbGl2ZXJ5X2RhdGUiOiI0MiIsInBjZF91bmlxX3BpbmNvZGVfYWRkcmVzc19jbnRfMjRtIjoiWCIsImFkZF9udW1lcmljYWxzIjoiMCIsInNjb3JlXzJfYnVja2V0IjoiMSIsImFkZF90eXBlX3dvcmsiOiIwIiwicGNkX2dtdl9zaGFyZV8yNG0iOiIwLjM4NjQiLCJhZGRfbGF0IjoiMjYuNTcyMzUxIiwiYWRkX2NoYXIiOiI1NiIsImFmZmx1ZW5jZV9zY29yZSI6IkgiLCJyZWNlbnRfcGluY29kZSI6IlhYWDAwMSIsInBjZF9tb250aF9zaW5jZV9sYXN0X2RlbGl2ZXJ5X2RhdGUiOiIzIiwiYWRkX29yZGVyc19jb3VudF8yNG0iOiIzIiwiYWRkX2dtdl9zaGFyZV8yNG0iOiIwLjI5NTUiLCJhZGRfbW9udGhfc2luY2VfbGFzdF9kZWxpdmVyeV9kYXRlIjoiMyIsImZrX2JucGxfZW1pIjpudWxsLCJhZGRfdHlwZV9ob21lIjoiMCIsInNjb3JlXzFfYnVja2V0IjoiMSIsImFkZF9vcmRlcl9zaGFyZV8yNG0iOiIwLjIxNDMiLCJwY2Rfb3JkZXJfc2hhcmVfMjRtIjoiMC40Mjg2IiwibWF4X2NhcnRfdmFsdWUiOiI0MjU3Ni4wIiwicGNkX21vbnRoX3NpbmNlX2ZpcnN0X2RlbGl2ZXJ5X2RhdGUiOiIxMTkiLCJhZGRfdW5pcV9hZGRyZXNzZXNfY250XzI0bSI6IlgwIiwicGNkX2FnZSI6IjM1OTgifSwib3JkZXJfZXhwaXJ5X3RpbWUiOiIyMDI2LTA1LTA2VDE4OjE1OjM3LjYzMloiLCJjb25zZW50cyI6W3siaXBfYWRkcmVzcyI6IlhYWFhYWDguMS4xIiwiY29uc2VudF90eXBlIjoiTUZJIiwidGltZXN0YW1wIjoiMjAyNS0wMi0yMFQxMDowMDowMFoiLCJjb25zZW50X21lc3NhZ2UiOiJ0ZXh0In1dLCJhbW91bnQiOjE1MDEyMDAsIm9yZGVyX2lkIjoiMjAyNjA1MDYxMTE1MjMyMjcyIiwib3JkZXJfYW1vdW50X2JyZWFrdXAiOnsiZGVsaXZlcnlfZmVlIjo0OTAwLCJvdGhlcl9mZWUiOjQ5MDAsInBsYXRmb3JtX2ZlZSI6NDkwMCwidG90YWxfcHJvZHVjdF9hbW91bnQiOjEwMDAwMDAsIm9mZmVyX2hhbmRsaW5nX2ZlZSI6MjAwMDAsInBhY2thZ2luZ19mZWUiOjQ5MDB9fSwiY3VycmVuY3kiOm51bGwsInVkZjIiOm51bGwsImN1c3RvbWVyX2VtYWlsIjoidGVzdEBqdXNwYXkuaW4iLCJjdXN0b21lcl9waG9uZSI6Ijk4NzY1NDMyMTAiLCJ1ZGY1IjpudWxsLCJwcm9kdWN0cyI6bnVsbCwidGltZXN0YW1wIjpudWxsLCJtZXJjaGFudF9pZCI6ImZsaXBrYXJ0IiwiZ2F0ZXdheV9yZWZfaWQiOm51bGwsInVkZjkiOm51bGwsImFtb3VudCI6IjE1MDEyLjAwIiwib3JkZXJfaWQiOiIyMDI2MDUwNjExMTUyMzIyNzIiLCJ1ZGY3IjpudWxsLCJkb3duX3BheW1lbnRfYW1vdW50IjpudWxsLCJ1ZGYxMCI6bnVsbCwiY3VzdG9tZXJfaWQiOiI3NjE5ZWU4Y2VhNDkxODdmMzA5NjE2ZTMwZWNmNTRiZTA3MjI1OWI0Mzc2MGYxZjU1MGE2NDQ5NDVkNTU3MmYyIiwiY2xpZW50X2lkIjpudWxsLCJmaXJzdF9uYW1lIjoiVGVzdEZpcnN0IiwidWRmMSI6bnVsbH0=","loanRequestInfoId":"LSP31edeb834d1147088ca4ced6b57f0f28","plansFilteringType":"TENURE_AND_ROI","borrower":{"organizationDetails":{},"profileDetails":{"firstName":"TestFirst","dateOfBirth":"1990-01-01","pan":"EHZPA1234F","email":"test@juspay.in","phone":"9876543210","maritalStatus":"SINGLE","lastName":"TestLast","gender":"FEMALE"},"businessDetails":{"monthlyIncome":"71000.00","employmentType":"SALARIED","isIncomeConsentGiven":true},"vintageData":{"riskDetails":{"add_type_others":"0","pcd_gmv_value_24m":"55940.0","add_age":"1276","pcd_orders_count_24m":"6","freq_delivered_pincode":"XXX405","account_age":"XX21","add_is_default_shipping_contact_flag":"false","add_long":"83.8099116","device_id":"zcxdvfbcgnvhmbj","add_gmv_value_24m":"42781.0","pcd_uniq_addresses_pincode_cnt_ever":"X","add_month_since_first_delivery_date":"42","pcd_uniq_pincode_address_cnt_24m":"X","add_numericals":"0","score_2_bucket":"1","add_type_work":"0","pcd_gmv_share_24m":"0.3864","add_lat":"26.572351","add_char":"56","affluence_score":"H","recent_pincode":"XXX001","pcd_month_since_last_delivery_date":"3","add_orders_count_24m":"3","add_gmv_share_24m":"0.2955","add_month_since_last_delivery_date":"3","fk_bnpl_emi":null,"add_type_home":"0","score_1_bucket":"1","add_order_share_24m":"0.2143","pcd_order_share_24m":"0.4286","max_cart_value":"42576.0","pcd_month_since_first_delivery_date":"119","add_uniq_addresses_cnt_24m":"X0","pcd_age":"3598"}}},"requestId":"897c317e-1a13-4f54-852a-d5712bbd1af9","consent":[],"bureauData":{"value":"+wig///FP0rLnIl2b2Mu0mx/js6l7qhF7qxjx3AsxWN4k8XWBn/LewPdWAuro/ihgrZbKJqhghgfac66PexHTjShrdY1BKAbWrSSlK4iIQwrHaGazp8a8mz9uV6cKeooXnP6F5M5XTf/04KMEel0NX9ly7H21DrmKHcMUwkQWPUmpc6qfPV8JnvVwrwnYzZ/xSl5BECK2Akn8kNbteljcn65+k7hLiW8Q8+b4TeCRJQyn5acOsk5ctOBoU7BdLck2qTxoPu+FlX3cMW9DvwBy9RWW6XxBaCgPyK+EvNL8bIGKSaxOJTmxb+8O8oScqWs8edJ985OcP9+rd7qeeIfM9YJUMqEsd2Cin0ldWNS8IMO7vHXt7daVJZuXSZ4qdYesvFqEjHVUlLPL/Ap0XpT8ceY3p1/FjnTVX155KnQ+CL0kjhAlJxBdEDRRV97Ua82EwuLJil+gd5QPkMnUIMJQK1W/Tu8DxwJpg6MZFMl8afeHi9aR+IIMfMDm/54UfNrE2LgBYO4NTfw86V/gwwBe61Hl0VwBHLVPsbZbPVQqnOvLnxdjpbXN/VqZxuDpbC+ZQxjBq/9haN3/+CiMwFec4yThJ/ogg0kT6W7zws1PYRe7sAyLT/iX5PGCj6cytNNg4rEPlE/duNZv+PXQOI4jRfM0JSgN2s4dfARf/5AG/B/VtXgiU6t3LNQaCUp4/CCdkC1NoX2fLtqogLuNEYAHPPhgqf9IImzFO/71qo2UDcIxlFG8ueSh70asGgNywvrcErAhXtkcOe4mNCgruA16DvYYxMgjG2M070UU+QXRzMJK/yw6DCqaGFdeiFOw8XTWo9oYMw42go22ifSgbDPoLIxhhY0gund1V48gfTut23BaINbPsciyo7nNdZnZbo8wRBSSZVCCLJEm9oL6sIst6iXsE94HyJXd40gMaKy2HDRbKb1Br66N3rG+BR5K8Cvqge9zm7EEA3Ms1opr98DuizO4qbcGMqgUFSfpBxkUyN021IHoKE6N+M5evwtH04RB9wqVuuD7/b7X0RCknyrMWGFrrd0cM5/ZeSo7Ekc+CVBumTLhgQWFerhxKo+RxnXDbBKqGvOmtGre1BuNsxDxo1oTS2AQfUmAvH8GWfEera5Z3/ibt4q9v7aVcqCngrySne8VkbEUMJVcpTQN3e+xrNcd3JLZi2rVaF7jiendjcxXunJTWbFJnwoe7DwAcrwL2Mb3oVzv553LboM2BcII8CuyKukQTGULx42fqHKpcgtrFH0wIepBXWs5z/NDBPP/pO59DGj5Glzr2QZXrITHMpnzbVkZg9RZ38AVBlDLlXz4t6MbbKkgeLVxVHGrmZ8FS1KSarPl5nRsxvZEBjsuq8Q5VCYen6WLow9nxpVQTRrk30y5F+eH0LJSci4peWdhjiWm7wLe9wL41ad1olNTzwwgr8FhF72ksTQffOqTtzG3FUvFJs/oJ7ND6gJx1xbFuCafAgyhbX/JvrTO7JwGxntkkzuUeUcoExiKkI6Tl1tlJOCmsdwnVIbcpbXjh2LfS/lcJDNmXItJX047YNsVUQdOX7aFfkR7eP9aBCNmqeqoeb2pePmBdnGmiVOManBStTA618ioLcn9pqNUO+EifCUehePAMra6zBxA2QXfsx9cPXF55h+obATkW7AVOhDX/jkUt5vpCL/Y9zwy9Z79bE+I+ByMETdpNGIomZqoQ6IEk3TfxxKfAyPctwaFYfB82xRDv6d5Fp5De2X88kJ91c6Lwm4SRXVPB6e6A7xtGlUl2E3LsLm4RnwYdAT3Z2YOeJhI7NO0Qxwpg1WPlCUXZIkKBlmmL0DuWI0MIuRW0wknUL0VOaFjqEOanYdsIkt1lgvT3PYgUV8GU4fU6YeYfbFtzc1wieLes1utq/0tC3EUjAFoMJB1SRsvqpLCKyn8SLksUR1xoxiTLDku1W7a26ngT+lY2uzC3zbDcq37C","source":"CIBIL","format":"JSON","is_encrypted":true},"flowSubType":"CHECKOUT","customerId":"7619ee8cea49187f309616e30ecf54be072259b43760f1f550a644945d5572f2","gatewayRefId":"default_gateway_ref_id","metadata":{"version":"0.1.0","timestamp":"2026-05-06T18:05:37.721984869Z","orgId":"LSP007","traceId":"LSP0acf728426f3486a9fde5ea93bc9949a"},"applicant":{"organizationDetails":{},"userData":{"firstName":"TestFirst","dateOfBirth":"1990-01-01","pan":"EHZPA1234F","email":"test@juspay.in","phone":"9876543210","maritalStatus":"SINGLE","lastName":"TestLast","gender":"FEMALE"},"businessDetails":{"monthlyIncome":"71000.00","employmentType":"SALARIED","isIncomeConsentGiven":true},"vintageData":{"riskDetails":{"add_type_others":"0","pcd_gmv_value_24m":"55940.0","add_age":"1276","pcd_orders_count_24m":"6","freq_delivered_pincode":"XXX405","account_age":"XX21","add_is_default_shipping_contact_flag":"false","add_long":"83.8099116","device_id":"zcxdvfbcgnvhmbj","add_gmv_value_24m":"42781.0","pcd_uniq_addresses_pincode_cnt_ever":"X","add_month_since_first_delivery_date":"42","pcd_uniq_pincode_address_cnt_24m":"X","add_numericals":"0","score_2_bucket":"1","add_type_work":"0","pcd_gmv_share_24m":"0.3864","add_lat":"26.572351","add_char":"56","affluence_score":"H","recent_pincode":"XXX001","pcd_month_since_last_delivery_date":"3","add_orders_count_24m":"3","add_gmv_share_24m":"0.2955","add_month_since_last_delivery_date":"3","fk_bnpl_emi":null,"add_type_home":"0","score_1_bucket":"1","add_order_share_24m":"0.2143","pcd_order_share_24m":"0.4286","max_cart_value":"42576.0","pcd_month_since_first_delivery_date":"119","add_uniq_addresses_cnt_24m":"X0","pcd_age":"3598"}}},"lenderOrgIds":["MOCK_HDB","CHOLA","FFPL","OLYV","SMICC","DMI","PAYU","HDB","MOCK_LENDER_NF","MOCK_LENDER","TVS_CREDIT","FIBE"],"checkoutData":{"productDetails":[{"brandName":"Example Brand","lenderMetadata":null,"travelEndDate":null,"policyNo":null,"selectedEmiTenure":null,"travelStartDate":null,"unit":"1","agentEmailId":null,"insuredMemberDetails":null,"studentAdmissionType":null,"merchantSource":null,"instituteName":null,"totalAmount":"500.00","coachingExamName":null,"courseYear":null,"agentName":null,"imeiRequired":null,"travelType":null,"policyRenewalYear":null,"noCostDetails":null,"subCategory":"BabyCare","productName":"XXXXXXXXXXptop Model","destination":null,"courseSpecialization":null,"fsn":null,"storeId":null,"tenure":null,"courseSemester":null,"policyStartDate":null,"businessType":null,"origin":null,"courseFeePaymentTenure":null,"courseSubCategory":null,"productPrice":"500.00","customerProductPaymentType":null,"isPrimaryHolder":null,"agentMobile":null,"courseFeeType":null,"policyPurchaseType":null,"isOfferUpdated":null,"dealerDetails":null,"category":"BGM","courseMonth":null,"isUserDetailsUpdated":null,"numberOfTravellers":null,"policyRefNo":null,"flightDetails":null}],"orderDetails":{"orderSource":"LSP","orderId":"202605061115232272","orderExpiry":"2026-05-06T18:15:37.632Z"},"metadata":{"expectedEMIPlans":[],"merchantCustomerId":"7619ee8cea49187f309616e30ecf54be072259b43760f1f550a644945d5572f2","vintageData":{"add_type_others":"0","pcd_gmv_value_24m":"55940.0","add_age":"1276","pcd_orders_count_24m":"6","freq_delivered_pincode":"XXX405","account_age":"XX21","add_is_default_shipping_contact_flag":"false","add_long":"83.8099116","device_id":"zcxdvfbcgnvhmbj","add_gmv_value_24m":"42781.0","pcd_uniq_addresses_pincode_cnt_ever":"X","add_month_since_first_delivery_date":"42","pcd_uniq_pincode_address_cnt_24m":"X","add_numericals":"0","score_2_bucket":"1","add_type_work":"0","pcd_gmv_share_24m":"0.3864","add_lat":"26.572351","add_char":"56","affluence_score":"H","recent_pincode":"XXX001","pcd_month_since_last_delivery_date":"3","add_orders_count_24m":"3","add_gmv_share_24m":"0.2955","add_month_since_last_delivery_date":"3","fk_bnpl_emi":null,"add_type_home":"0","score_1_bucket":"1","add_order_share_24m":"0.2143","pcd_order_share_24m":"0.4286","max_cart_value":"42576.0","pcd_month_since_first_delivery_date":"119","add_uniq_addresses_cnt_24m":"X0","pcd_age":"3598"},"amountBreakup":{"platformFee":"49.00","deliveryFee":"49.00","handlingFee":"200.00","productAmount":"10000.00","packagingFee":"49.00","otherFee":"49.00","rtoFee":null}},"requestAmount":"15012.00","addressDetails":[{"country":null,"addrType":"PERMANENT","pinCode":"560048","longitude":null,"po":null,"url":null,"co":null,"extensibleData":"eyJhZGRyZXNzTGluZTIiOiJOZWFyIFRlc3QgUGFyayIsImlzQWRkcmVzc1NhbWUiOm51bGwsImFkZHJlc3NUeXBlIjpudWxsLCJhZGRyZXNzTGluZTEiOiIxMjMgVGVzdCBTdHJlZXQiLCJhZGRyZXNzU3RhYmlsaXR5U2NvcmUiOm51bGx9","landmark":null,"als":null,"state":"Maharashtra","vtc":null,"district":"Pune","hba":null,"srl":null,"latitude":null}]},"lineDetails":[],"requestedAt":"2026-05-06T18:05:37.73667082Z","merchantId":"flipkart","amount":"15012","flowType":"NTB","cutOffMicroSeconds":null,"themisDetails":[{"gatewayRefId":"default_gateway_ref_id","themisCallType":null,"productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"MOCK_LENDER_LSP","lenderOrgId":"MOCK_LENDER"},{"gatewayRefId":"default_gateway_ref_id","themisCallType":null,"productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"FFPL_LSP","lenderOrgId":"FFPL"},{"gatewayRefId":"default_gateway_ref_id","themisCallType":"DEFAULT_OFFERS","productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"DMI_LSP","lenderOrgId":"DMI"},{"gatewayRefId":"default_gateway_ref_id","themisCallType":"DEFAULT_OFFERS","productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"TVS_CREDIT_LSP","lenderOrgId":"TVS_CREDIT"},{"gatewayRefId":"default_gateway_ref_id","themisCallType":null,"productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"CHOLA_LSP","lenderOrgId":"CHOLA"},{"gatewayRefId":"default_gateway_ref_id","themisCallType":null,"productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"FIBE_LSP","lenderOrgId":"FIBE"},{"gatewayRefId":"default_gateway_ref_id","themisCallType":null,"productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"HDB_LSP","lenderOrgId":"HDB"},{"gatewayRefId":"default_gateway_ref_id","themisCallType":null,"productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"MOCK_LENDER1_LSP","lenderOrgId":"MOCK_LENDER_NF"},{"gatewayRefId":"default_gateway_ref_id","themisCallType":null,"productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"OLYV_LSP","lenderOrgId":"OLYV"},{"gatewayRefId":"default_gateway_ref_id","themisCallType":"DEFAULT_OFFERS","productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"SMICC_LSP","lenderOrgId":"SMICC"},{"gatewayRefId":"default_gateway_ref_id","themisCallType":null,"productType":"CONSUMER_CREDIT","versionConfigs":[],"merchantId":"flipkart","paymentMethod":"PAYU_LSP","lenderOrgId":"PAYU"}]},"headers":{"host":"127.0.0.1:3002","accept-encoding":"gzip","content-length":"15528","accept":"application/json;charset=utf-8,application/json","content-type":"application/json;charset=utf-8","x-merchant-id":"flipkart","x-order-id":"202605061115232272","x-testing-replaysvcurl":"http://127.0.0.1:3002","x-request-id":"e13eba47-f231-4897-a8e2-cdc136038302"}}
+{"timestamp":"2026-05-06T18:05:37.761Z","level":"INFO","message":"Checking duplicate","position":8,"logTag":"LSP-Eligibility_REQUEST","key":"0656e9e8-ba26-4f0b-8163-f2ec440524d8_LSP-Eligibility_REQUEST","isDuplicate":false,"seenCount":1}
+{"timestamp":"2026-05-06T18:05:37.761Z","level":"INFO","message":"Checking duplicate","position":8,"logTag":"LSP-Eligibility_REQUEST","key":"0656e9e8-ba26-4f0b-8163-f2ec440524d8_LSP-Eligibility_REQUEST","isDuplicate":false,"seenCount":1}
+{"timestamp":"2026-05-06T18:05:37.762Z","level":"INFO","message":"Request matches expected log entry","entry":"[8] LSP-Eligibility_REQUEST CORE→GATEWAY","requestId":"e13eba47-f231-4897-a8e2-cdc136038302"}
+{"timestamp":"2026-05-06T18:05:37.762Z","level":"INFO","message":"handleRetryRequest called","incomingSource":"CORE","incomingDest":"GATEWAY","incomingLogTag":"LSP-Eligibility_REQUEST","incomingRequestId":"e13eba47-f231-4897-a8e2-cdc136038302","pendingCount":0}
+{"timestamp":"2026-05-06T18:05:37.762Z","level":"INFO","message":"API LOG :: CORE->GATEWAY /v1.0/eligibility REQUEST 8"}
+{"timestamp":"2026-05-06T18:05:37.762Z","level":"INFO","message":"ORCH_COMPARING_PAYLOADS","logTag":"LSP-Eligibility_REQUEST","sourceDestination":"CORE_GATEWAY","expectedKeys":["lenderMetadata","applicationType","applicants","orderJson","loanRequestInfoId","plansFilteringType","borrower","requestId","consent","bureauData","flowSubType","customerId","gatewayRefId","metadata","applicant","lenderOrgIds","checkoutData","lineDetails","requestedAt","merchantId","amount","flowType","cutOffMicroSeconds","themisDetails"],"actualKeys":["lenderMetadata","applicationType","applicants","orderJson","loanRequestInfoId","plansFilteringType","borrower","requestId","consent","bureauData","flowSubType","customerId","gatewayRefId","metadata","applicant","lenderOrgIds","checkoutData","lineDetails","requestedAt","merchantId","amount","flowType","cutOffMicroSeconds","themisDetails"],"expectedSample":"{\"lenderMetadata\":null,\"applicationType\":\"CHECKOUT\",\"applicants\":[{\"organizationDetails\":{},\"userData\":{\"firstName\":\"XXXXita\",\"dateOfBirth\":\"XXXXX10-16\",\"pan\":\"XXXXX7649F\",\"email\":\"XXXXXXXXXXjuspay.in\",\"phone\":\"XXXXX09360\",\"maritalStatus\":\"SINGLE\",\"lastName\":\"XXXXXanan\",\"gender\":\"FEMALE\"},\"productData\":{},\"businessDetails\":{\"monthlyIncome\":\"71000.00\",\"employmentType\":\"SALARIED\",\"isIncomeConsentGiven\":true},\"vintageData\":{\"riskDetails\":{\"add_type_others\":\"0\",\"pcd_gmv_value_24m\":\"55940.0\",\"add_age","actualSample":"{\"lenderMetadata\":null,\"applicationType\":\"CHECKOUT\",\"applicants\":[{\"organizationDetails\":{},\"userData\":{\"firstName\":\"TestFirst\",\"dateOfBirth\":\"1990-01-01\",\"pan\":\"EHZPA1234F\",\"email\":\"test@juspay.in\",\"phone\":\"9876543210\",\"maritalStatus\":\"SINGLE\",\"lastName\":\"TestLast\",\"gender\":\"FEMALE\"},\"businessDetails\":{\"monthlyIncome\":\"71000.00\",\"employmentType\":\"SALARIED\",\"isIncomeConsentGiven\":true},\"vintageData\":{\"riskDetails\":{\"add_type_others\":\"0\",\"pcd_gmv_value_24m\":\"55940.0\",\"add_age\":\"1276\",\"pcd_orders_"}
+{"timestamp":"2026-05-06T18:05:37.763Z","level":"INFO","message":"Initialized async call tracking","contextKey":"202605061115232272","expectedCount":11,"asyncEntries":[{"index":9,"lenderOrgId":"FFPL","logTag":"Themis-Eligibility_REQUEST"},{"index":10,"lenderOrgId":"OLYV","logTag":"Themis-Eligibility_REQUEST"},{"index":11,"lenderOrgId":"SMICC","logTag":"Themis-Eligibility_REQUEST"},{"index":12,"lenderOrgId":"DMI","logTag":"Themis-Eligibility_REQUEST"},{"index":13,"lenderOrgId":"HDB","logTag":"Themis-Eligibility_REQUEST"},{"index":14,"lenderOrgId":"PAYU","logTag":"Themis-Eligibility_REQUEST"},{"index":15,"lenderOrgId":"CHOLA","logTag":"Themis-Eligibility_REQUEST"},{"index":16,"lenderOrgId":"MOCK_LENDER_NF","logTag":"Themis-Eligibility_REQUEST"},{"index":19,"lenderOrgId":"MOCK_LENDER","logTag":"Themis-Eligibility_REQUEST"},{"index":20,"lenderOrgId":"TVS_CREDIT","logTag":"Themis-Eligibility_REQUEST"},{"index":22,"lenderOrgId":"FIBE","logTag":"Themis-Eligibility_REQUEST"}]}
+{"timestamp":"2026-05-06T18:05:37.763Z","level":"INFO","message":"Request validation passed","entry":"[8] LSP-Eligibility_REQUEST CORE→GATEWAY","comparisonMatch":true}
+{"timestamp":"2026-05-06T18:05:37.763Z","level":"INFO","message":"Forwarding to destination","destination":"GATEWAY","api":"/v1.0/eligibility","requestId":"e13eba47-f231-4897-a8e2-cdc136038302"}
+{"timestamp":"2026-05-06T18:05:37.763Z","level":"INFO","message":"=== INCOMING REQ HEADERS (from LSP) ===","source":"CORE","destination":"GATEWAY","api":"/v1.0/eligibility","incomingHeaders":{"host":"127.0.0.1:3002","accept-encoding":"gzip","content-length":"15528","accept":"application/json;charset=utf-8,application/json","content-type":"application/json;charset=utf-8","x-merchant-id":"flipkart","x-order-id":"202605061115232272","x-testing-replaysvcurl":"http://127.0.0.1:3002","x-request-id":"e13eba47-f231-4897-a8e2-cdc136038302"}}
+{"timestamp":"2026-05-06T18:05:37.763Z","level":"INFO","message":"Found expected response for request","request":"[8] LSP-Eligibility_REQUEST CORE→GATEWAY","expectedResponse":"[31] LSP-Eligibility_RESPONSE GATEWAY→CORE"}
+{"timestamp":"2026-05-06T18:05:37.763Z","level":"INFO","message":"API LOG :: CORE->GATEWAY /v1.0/eligibility REQUEST 8"}
+{"timestamp":"2026-05-06T18:05:37.763Z","level":"INFO","message":"Making HTTP request","baseUrl":"http://localhost:8012","endpoint":"/v1.0/eligibility","method":"POST","requestId":"e13eba47-f231-4897-a8e2-cdc136038302","sourceDestination":"CORE_GATEWAY","dest":"GATEWAY","logTag":"LSP-Eligibility_REQUEST","merchantId":null,"customHeaders":{"host":"127.0.0.1:3002","accept-encoding":"gzip","content-length":"15528","accept":"application/json;charset=utf-8,application/json","content-type":"application/json;charset=utf-8","x-merchant-id":"flipkart","x-order-id":"202605061115232272","x-testing-replaysvcurl":"http://127.0.0.1:3002","x-request-id":"e13eba47-f231-4897-a8e2-cdc136038302"}}
+{"timestamp":"2026-05-06T18:05:37.763Z","level":"INFO","message":"Request body prepared","bodyPreview":"{\"lenderMetadata\":null,\"applicationType\":\"CHECKOUT\",\"applicants\":[{\"organizationDetails\":{},\"userData\":{\"firstName\":\"TestFirst\",\"dateOfBirth\":\"1990-01-01\",\"pan\":\"EHZPA1234F\",\"email\":\"test@juspay.in\",\"...","contentType":"application/json"}
+{"timestamp":"2026-05-06T18:05:37.765Z","level":"ERROR","message":"=== LSP CALL FAILED - STOPPING ===","url":"http://localhost:8012/v1.0/eligibility","status":404,"statusText":"Not Found","responseData":null,"requestId":"e13eba47-f231-4897-a8e2-cdc136038302","logTag":"LSP-Eligibility_REQUEST","destination":"GATEWAY"}
+{"timestamp":"2026-05-06T18:05:37.765Z","level":"ERROR","message":"Could not read euler-lsp logs","error":"require is not defined"}
+{"timestamp":"2026-05-06T18:05:37.765Z","level":"ERROR","message":"Failed to forward request","destination":"GATEWAY","api":"/v1.0/eligibility","error":"LSP call failed with status 404: Not Found"}
+{"timestamp":"2026-05-06T18:05:37.765Z","level":"ERROR","message":"Route error","error":"LSP call failed with status 404: Not Found","stack":"Error: LSP call failed with status 404: Not Found\n    at ReplayOrchestrator.forwardToDestination (file:///home/kumar-aman/Desktop/repos/art-orchestrator/src/orchestrator.js:1008:15)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async ReplayOrchestrator.handleIncomingRequest (file:///home/kumar-aman/Desktop/repos/art-orchestrator/src/orchestrator.js:674:22)\n    at async file:///home/kumar-aman/Desktop/repos/art-orchestrator/src/server.js:105:22"}
+file:///home/kumar-aman/Desktop/repos/art-orchestrator/src/services/state-manager.js:25
+      this.reject(new Error(
+                  ^
+
+Error: Request e13eba47-f231-4897-a8e2-cdc136038302 timed out after 10000ms. Expected response for: LSP-Eligibility_RESPONSE
+    at Timeout._onTimeout (file:///home/kumar-aman/Desktop/repos/art-orchestrator/src/services/state-manager.js:25:19)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+
+Node.js v24.14.1

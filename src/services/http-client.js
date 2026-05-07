@@ -29,6 +29,20 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     customHeaders
   });
 
+  // Detailed logging for LSP calls (port 8070)
+  if (baseUrl.includes('8070')) {
+    logger.info('=== LSP CALL INITIATED ===', {
+      baseUrl,
+      endpoint,
+      url: `${baseUrl}${endpoint}`,
+      method,
+      requestId,
+      logTag,
+      headers: customHeaders,
+      timestamp: new Date().toISOString()
+    });
+  }
+
   // When mocking is enabled, we use the mock server ports
   // The baseUrl already points to mock ports via config
   const url = `${baseUrl}${endpoint}`;
@@ -52,7 +66,6 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
   try {
     let body = method !== 'GET' ? JSON.stringify(payload ?? {}) : undefined;
 
-    // Double-stringify if destination is WRAPPER
     if (dest === 'WRAPPER' && body) {
       body = JSON.stringify(body);
       headers['disable_encryption'] = customHeaders['disable_encryption'] || 'TRUE';
@@ -65,6 +78,18 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       contentType: headers['Content-Type']
     });
 
+    if (baseUrl.includes('8070')) {
+      logger.info('=== LSP REQUEST DETAILS ===', {
+        url,
+        method,
+        headers: { ...headers },
+        body: body,
+        requestId,
+        logTag,
+        timestamp: new Date().toISOString()
+      });
+    }
+
     const response = await fetch(url, {
       method,
       headers,
@@ -72,6 +97,21 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     });
 
     const data = await response.json().catch(() => null);
+
+    // Detailed logging for LSP calls (port 8070)
+    if (baseUrl.includes('8070')) {
+      logger.info('=== LSP CALL RESPONSE ===', {
+        url,
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
+        hasData: !!data,
+        dataKeys: data ? Object.keys(data) : [],
+        error: !response.ok ? (data?.error || 'HTTP error') : null,
+        requestId,
+        timestamp: new Date().toISOString()
+      });
+    }
 
     logger.debug('HTTP response received', {
       status: response.status,

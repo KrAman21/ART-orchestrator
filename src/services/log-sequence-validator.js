@@ -84,14 +84,21 @@ class LogEntry {
 
   /**
    * Check if this log entry should be skipped
-   * Skip entries with WRAPPER in trace_route or missing log_tag (not actual service calls)
+   * Skip internal WRAPPER routing entries but allow APP_WRAPPER (APP calling LSP)
    */
   shouldSkip() {
     const traceRoute = this.message.trace_route || '';
     const logTag = this.message.log_tag || '';
     
-    // Skip WRAPPER entries - they're not actual service-to-service calls
-    if (traceRoute.includes('WRAPPER')) {
+    // Skip internal WRAPPER routing entries (WRAPPER_CORE, WRAPPER_APP, CORE_WRAPPER, etc.)
+    // These are internal LSP routing calls, not actual service-to-service calls
+    // BUT: Allow APP_WRAPPER - this is APP calling LSP via wrapper layer (legitimate external call)
+    if (traceRoute.startsWith('WRAPPER_') || traceRoute.endsWith('_WRAPPER')) {
+      // APP_WRAPPER is the exception - APP is external source calling LSP
+      if (traceRoute === 'APP_WRAPPER') {
+        return false; // Don't skip - this is APP calling LSP
+      }
+      // CORE_WRAPPER, WRAPPER_CORE, WRAPPER_APP, etc. are internal routing
       return true;
     }
     

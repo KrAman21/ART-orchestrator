@@ -232,8 +232,7 @@ export class BaseMockService {
         logTag: call.logTag
       });
 
-      // Determine orchestrator endpoint based on who is calling (this mock)
-      const orchestratorPath = this.name === 'LSP' ? '/lsp' : '/gw';
+      const orchestratorPath = call.destination === 'LENDER' ? '/lsp' : '/gw';
       const api = this.getApiForLogTag(call.logTag);
 
       try {

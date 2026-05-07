@@ -50,12 +50,13 @@ export function createServer(orchestrator) {
    * @returns {Function} Express handler
    */
   const unifiedHandler = () => async (req, res) => {
-    // console.log(`Received request on ${req.path} with body:`, req.body);
+    console.log(`Received request on ${req.path} with body:`, req.body);
     try {
       const api = '/' + req.params.api;
       console.log(`Handling API: ${api}`);
       const payload = req.body;
       const requestId = req.headers['x-request-id'] || req.body.request_id;
+      
 
       // Determine source/destination and logTag from API endpoint mapping
       const mapping = getApiMapping(api);
@@ -72,6 +73,25 @@ export function createServer(orchestrator) {
       const logTag = mapping.logTag;
 
       // console.log('Request headers: ', req.headers);
+      
+      // Log incoming request details
+      logger.info('=== INCOMING REQUEST FROM LSP ===', {
+        path: req.path,
+        api: api,
+        source: source,
+        destination: destination,
+        logTag: logTag,
+        headers: {
+          'x-request-id': req.headers['x-request-id'],
+          'x-art-callback-url': req.headers['x-art-callback-url'],
+          'x-art-enabled': req.headers['x-art-enabled'],
+          'content-type': req.headers['content-type'],
+          'x-loan-application-id': req.headers['x-loan-application-id'],
+          'x-merchant-id': req.headers['x-merchant-id']
+        },
+        bodyKeys: Object.keys(payload || {}),
+        timestamp: new Date().toISOString()
+      });
 
       // Extract correlation fields from payload for matching
       const loanApplicationId = payload?.loan_application_id;

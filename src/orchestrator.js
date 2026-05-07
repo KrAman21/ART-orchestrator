@@ -4,6 +4,7 @@ import { makeRequest, triggerWebhook } from './services/http-client.js';
 import { compareLog } from './services/comparator.js';
 import { logger } from './utils/logger.js';
 import { extractPayload, getApiForLogTag as getApiFromConfig, getEndpointConfig, SERVICE_MAP, SKIP_DESTINATIONS, isAsyncParallelApi, LENDER_ORG_ID_TO_ID_MAP } from './config.js';
+import { transformRequest } from './services/request-transformer.js';
 
 /**
  * ReplayOrchestrator - Event-driven orchestrator for replaying production logs
@@ -236,30 +237,31 @@ export class ReplayOrchestrator {
       return;
     }
 
-    // Handle CORE->GATEWAY calls (LSP calling Gateway) - trigger them
-    const isLspToGatewayCall = entry.source === 'CORE' && entry.destination === 'GATEWAY';
+    // Sources that orchestrator initiates: APP, LENDER, EULER, THEMIS
+    const orchestratorInitiatedSources = ['APP', 'LENDER', 'EULER', 'THEMIS'];
+    const shouldOrchestratorInitiate = orchestratorInitiatedSources.includes(entry.source);
     
-    if (isLspToGatewayCall && entry.isRequest) {
-      logger.info('CORE to GATEWAY call - triggering from orchestrator', {
-        entry: entry.toString()
-      });
-      await this.triggerExternalRequest(entry);
-      return;
-    }
-
-    // If source is external (APP, LENDER), orchestrator needs to trigger the request
-    if (entry.isExternalSource() && entry.isRequest) {
+    // If source is APP/LENDER/EULER/THEMIS, orchestrator triggers the request
+    if (shouldOrchestratorInitiate && entry.isRequest) {
       logger.info('External source request - triggering from orchestrator', {
-        entry: entry.toString()
+        entry: entry.toString(),
+        source: entry.source
       });
-
       await this.triggerExternalRequest(entry);
+    } else if (entry.isRequest) {
+      // For CORE, GATEWAY, LSP, WRAPPER sources - wait for incoming request
+      logger.info('Waiting for incoming request from service', {
+        entry: entry.toString(),
+        source: entry.source,
+        destination: entry.destination
+      });
+      // The actual processing will happen when handleIncomingRequest is called
+      // No action needed here - orchestrator waits for HTTP call from the service
     } else {
-      logger.debug('Not an external/internal request, waiting for incoming', {
+      logger.debug('Not a request entry, skipping trigger', {
         entry: entry.toString()
       });
     }
-    // Otherwise, wait for incoming request (normal flow)
   }
 
   /**
@@ -267,10 +269,8 @@ export class ReplayOrchestrator {
    */
   async triggerExternalRequest(entry) {
     try {
-      const service = entry.destination;
       let api;
 
-      // For LENDER->GW webhooks, use the endpoint from API_TO_ENDPOINT_MAP
       if (entry.isLenderToGwWebhook && entry.isLenderToGwWebhook()) {
         const webhookConfig = getEndpointConfig('LENDER_GW', 'WEBHOOK Request');
         api = webhookConfig?.endpoint || '/gateway/webhook';
@@ -281,49 +281,55 @@ export class ReplayOrchestrator {
         api = this.getApiForLogTag(entry.logTag);
       }
 
-      // Get expected response(s) for comparison later
-      // Match by source/destination direction and correlation fields if present
-      // Find ALL matching responses to handle duplicates
+      const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
+      const customHeaders = endpointConfig?.headers || {};
+      const service = endpointConfig?.service || entry.destination;
+
       const expectedResponses = this.validator.peekNext(100).filter(e => {
-        // Basic direction match
         if (!(e.source === entry.destination &&
           e.destination === entry.source &&
           e.isResponse)) {
           return false;
         }
-
-        // If request has loan_application_id, response must match
         if (entry.loanApplicationId &&
           e.loanApplicationId !== entry.loanApplicationId) {
           return false;
         }
-
-        // If request has lender_org_id, response must match
         if (entry.lenderOrgId && e.lenderOrgId !== entry.lenderOrgId) {
           return false;
         }
-
         return true;
       });
-      
-      const expectedResponse = expectedResponses[0]; // Primary response for comparison
+      const expectedResponse = expectedResponses[0];
 
-      // Get endpoint config for custom headers
-      const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
-      const customHeaders = endpointConfig?.headers || {};
-
-      // Use original source_destination for makeRequest to detect WRAPPER correctly
       const sourceDestinationForRequest = entry.originalSourceDestination || entry.sourceDestination;
+
+      // Transform masked values in payload before sending
+      const transformedPayload = transformRequest(entry.payload, entry.logTag);
 
       // Log API call before making request
       logger.logApiCall(entry.source, entry.destination, api, 'REQUEST', entry.index);
+
+      // Log what orchestrator is sending to destination
+      logger.info('ORCH_SENDING', {
+        destination: service,
+        baseUrl: this.getServiceBaseUrl(service),
+        api: api,
+        source: entry.source,
+        dest: entry.destination,
+        logTag: entry.logTag,
+        requestId: entry.requestId,
+        headers: customHeaders,
+        payload: transformedPayload,
+        timestamp: new Date().toISOString()
+      });
 
       // Make request to destination service (LSP or GW)
       const response = await makeRequest(
         this.getServiceBaseUrl(service),
         api,
         'POST',
-        entry.payload,
+        transformedPayload,
         entry.requestId,
         sourceDestinationForRequest,
         entry.logTag,
@@ -331,6 +337,21 @@ export class ReplayOrchestrator {
         customHeaders,
         entry.index
       );
+
+      // Log detailed response
+      logger.info('=== RESPONSE RECEIVED FROM DESTINATION ===', {
+        service: service,
+        baseUrl: this.getServiceBaseUrl(service),
+        api: api,
+        status: response?.status,
+        statusText: response?.statusText,
+        hasData: !!response?.data,
+        dataKeys: response?.data ? Object.keys(response.data) : [],
+        hasError: !!response?.error,
+        errorMessage: response?.error ? response.message : null,
+        requestId: entry.requestId,
+        timestamp: new Date().toISOString()
+      });
 
       // Log API response
       if (expectedResponse) {
@@ -452,11 +473,14 @@ export class ReplayOrchestrator {
       throw new Error('Orchestrator not running');
     }
 
-    logger.info('Received incoming request', {
+    logger.info('ORCH_RECEIVING', {
       source: incoming.source,
       destination: incoming.destination,
       api: incoming.api,
-      requestId: incoming.requestId
+      requestId: incoming.requestId,
+      payload: incoming.payload,
+      headers: incoming.headers,
+      timestamp: new Date().toISOString()
     });
 
     // Get current expected entry
@@ -602,9 +626,26 @@ export class ReplayOrchestrator {
 
     // Compare payloads
     const expectedPayload = expectedEntry.payload;
+
+    // Debug logging for payload comparison
+    logger.info('ORCH_COMPARING_PAYLOADS', {
+      logTag: incoming.logTag,
+      sourceDestination: expectedEntry.sourceDestination,
+      expectedKeys: Object.keys(expectedPayload || {}),
+      actualKeys: Object.keys(incoming.payload || {}),
+      expectedSample: JSON.stringify(expectedPayload)?.substring(0, 500),
+      actualSample: JSON.stringify(incoming.payload)?.substring(0, 500)
+    });
+
     const comparison = this.comparePayloads(expectedPayload, incoming.payload, incoming.logTag);
 
     if (!comparison.match) {
+      logger.error('ORCH_PAYLOAD_MISMATCH', {
+        logTag: incoming.logTag,
+        differences: comparison.differences,
+        expectedFull: expectedPayload,
+        actualFull: incoming.payload
+      });
       return await this.fail('Payload comparison failed', comparison.differences);
     }
 
@@ -888,10 +929,30 @@ export class ReplayOrchestrator {
     const endpointConfig = getEndpointConfig(expectedEntry.sourceDestination, expectedEntry.logTag);
     const customHeaders = { ...incoming.headers, ...endpointConfig?.headers };
 
+    // Log incoming request headers from LSP
+    logger.info('=== INCOMING REQ HEADERS (from LSP) ===', {
+      source: incoming.source,
+      destination: incoming.destination,
+      api: incoming.api,
+      incomingHeaders: incoming.headers,
+      timestamp: new Date().toISOString()
+    });
+
     try {
+      // Get endpoint from config - use mapped endpoint instead of incoming api
+      const endpointConfig = getEndpointConfig(expectedEntry.sourceDestination, expectedEntry.logTag);
+      const endpoint = endpointConfig?.endpoint || api;
+      
+      logger.info('Resolved endpoint for forwarding', {
+        incomingApi: api,
+        mappedEndpoint: endpoint,
+        sourceDestination: expectedEntry.sourceDestination,
+        logTag: expectedEntry.logTag
+      });
+
       // Generate correlation key for tracking
       const correlationKey = StateManager.generateCorrelationKey(
-        api,
+        endpoint,
         expectedEntry.sourceDestination,
         incoming.requestId
       );
@@ -912,20 +973,51 @@ export class ReplayOrchestrator {
       // Use original source_destination for makeRequest to detect WRAPPER correctly
       const sourceDestinationForRequest = expectedEntry.originalSourceDestination || expectedEntry.sourceDestination;
 
+      // Transform masked values in payload before forwarding
+      const transformedPayload = transformRequest(incoming.payload, expectedEntry.logTag);
+
       // Make actual HTTP request to destination
-      // This would use the http-client with actual endpoint mapping
       const serviceResponse = await makeRequest(
         this.getServiceBaseUrl(destination),
-        api,
-        'POST', // Method should come from config
-        incoming.payload,
+        endpoint,
+        'POST',
+        transformedPayload,
         incoming.requestId,
         sourceDestinationForRequest,
         expectedEntry.logTag,
-        null, // merchantId
+        null,
         customHeaders,
         expectedEntry.index
       );
+
+      if (serviceResponse && serviceResponse.status !== 200) {
+        const errorMsg = `LSP call failed with status ${serviceResponse.status}: ${serviceResponse.statusText}`;
+        logger.error('=== LSP CALL FAILED - STOPPING ===', {
+          url: `${this.getServiceBaseUrl(destination)}${api}`,
+          status: serviceResponse.status,
+          statusText: serviceResponse.statusText,
+          responseData: serviceResponse.data,
+          requestId: incoming.requestId,
+          logTag: expectedEntry.logTag,
+          destination
+        });
+
+        try {
+          const { execSync } = require('child_process');
+          const eulerLspLog = execSync(
+            'tail -50 /home/kumar-aman/Desktop/repos/euler-lsp/logs/euler-lsp.log 2>/dev/null || echo "Could not read euler-lsp logs"',
+            { encoding: 'utf-8', timeout: 5000 }
+          );
+          logger.error('=== EULER-LSP LOGS (last 50 lines) ===', {
+            logs: eulerLspLog.split('\n').slice(-20)
+          });
+        } catch (e) {
+          logger.error('Could not read euler-lsp logs', { error: e.message });
+        }
+
+        this.isRunning = false;
+        throw new Error(errorMsg);
+      }
 
       // If response came synchronously, handle it
       if (serviceResponse && !serviceResponse.error) {
@@ -2034,13 +2126,17 @@ export class ReplayOrchestrator {
    * Get service base URL from config
    */
   getServiceBaseUrl(serviceName) {
+    // Normalize service name aliases (GATEWAY -> GW, CORE -> LSP)
+    const normalizedName = serviceName === 'GATEWAY' ? 'GW' : 
+                           serviceName === 'CORE' ? 'LSP' : serviceName;
+    
     const urls = {
       'LSP': process.env.LSP_URL || 'http://localhost:4232',
       'GW': process.env.GW_URL || 'http://localhost:2344'
     };
-    const url = urls[serviceName];
+    const url = urls[normalizedName];
     if (!url) {
-      logger.warn('Unknown service, no base URL configured', { serviceName });
+      logger.warn('Unknown service, no base URL configured', { serviceName, normalizedName });
     }
     return url;
   }

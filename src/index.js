@@ -1,6 +1,6 @@
 import 'dotenv/config';
 
-import { fetchLogsFromJSONFile } from './services/log-fetcher.js';
+import { fetchLogsFromJSONFile, filterAndSortLogs } from './services/log-fetcher.js';
 import { ReplayOrchestrator } from './orchestrator.js';
 import { createServer } from './server.js';
 import { logger } from './utils/logger.js';
@@ -35,6 +35,16 @@ async function main() {
 
     console.log(`Loaded ${logs.length} logs`);
 
+    console.log('Filtering and sorting logs...');
+    const filteredLogs = await filterAndSortLogs(logs, 'data/filtered-logs.json');
+    
+    if (filteredLogs.length === 0) {
+      console.log('No logs remaining after filtering');
+      process.exit(1);
+    }
+
+    console.log(`Ready to replay ${filteredLogs.length} unique logs`);
+
     // Start mock services if enabled
     if (MOCK_CONFIG.enabled) {
       console.log('\n🔧 Mock mode enabled - starting mock services...');
@@ -61,7 +71,7 @@ async function main() {
     }
 
     // Create orchestrator
-    orchestrator = new ReplayOrchestrator(logs, {
+    orchestrator = new ReplayOrchestrator(filteredLogs, {
       timeoutMs: CONFIG.TIMEOUT_MS
     });
 
