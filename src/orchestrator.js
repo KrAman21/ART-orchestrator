@@ -127,18 +127,46 @@ export class ReplayOrchestrator {
   }
 
   /**
+   * Extract lineDetails from LSP-Eligibility_REQUEST logs
+   */
+  static extractLineDetails(logs) {
+    for (const log of logs) {
+      // Check both root level and message level for log_tag
+      const logTag = log?.message?.log_tag || log?.log_tag;
+      if (logTag === 'LSP-Eligibility_REQUEST') {
+        // Check both root level and message level for trace_request
+        const traceRequest = log?.message?.trace_request || log?.trace_request;
+        const lineDetails = traceRequest?.lineDetails || traceRequest?.line_details;
+        if (Array.isArray(lineDetails) && lineDetails.length > 0) {
+          logger.info('Extracted lineDetails from LSP-Eligibility_REQUEST logs', { 
+            count: lineDetails.length 
+          });
+          return lineDetails;
+        }
+      }
+    }
+    logger.warn('No lineDetails found in LSP-Eligibility_REQUEST logs');
+    return [];
+  }
+
+  /**
    * Onboard seed data to LSP
    * Called before replay starts
    */
-  async onboardSeedData(merchantId, lenderOrgIdToIdMap) {
-    logger.info('Onboarding seed data to LSP: ', { baseUrl: SERVICE_MAP.LSP.baseUrl + '/art/configs/set', merchantId, lenderCount: Object.keys(lenderOrgIdToIdMap).length });
+  async onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails) {
+    logger.info('Onboarding seed data to LSP: ', { 
+      baseUrl: SERVICE_MAP.LSP.baseUrl + '/art/configs/set', 
+      merchantId, 
+      lenderCount: Object.keys(lenderOrgIdToIdMap).length,
+      lineDetailsCount: lineDetails?.length || 0
+    });
 
     try {
       const response = await makeRequest(
         SERVICE_MAP.LSP.baseUrl,
         '/art/configs/set',
         'POST',
-        { merchantId, lenderOrgIdToIdMap },
+        { merchantId, lenderOrgIdToIdMap, lineDetails },
         null,  // requestId
         null,  // sourceDestination
         null,  // logTag
@@ -156,6 +184,7 @@ export class ReplayOrchestrator {
       logger.info('Seed data onboarding successful', {
         merchantId,
         lenderMapSize: Object.keys(lenderOrgIdToIdMap).length,
+        lineDetailsCount: lineDetails?.length || 0,
         status: response.status
       });
 
@@ -174,11 +203,12 @@ export class ReplayOrchestrator {
     // Extract merchantId and onboard seed data
     const { merchantId, orderId} = ReplayOrchestrator.extractMerchantId(this.logs);
     const lenderOrgIdToIdMap = ReplayOrchestrator.extractLenderOrgIds(this.logs);
+    const lineDetails = ReplayOrchestrator.extractLineDetails(this.logs);
 
     // Clear LSP data when journey completes successfully
     await this.clearLspData(merchantId, orderId);
     // Set Onboarding data for the merchant to ensure LSP is ready for the replay session
-    await this.onboardSeedData(merchantId, lenderOrgIdToIdMap);
+    await this.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails);
 
     logger.info('Replay orchestrator started', {
       totalLogs: this.logs.length,
