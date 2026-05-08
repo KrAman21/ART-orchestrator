@@ -3,3 +3,4 @@ node_modules/
 art-orchestrator.log
 repo_wiki
 todo
+orchestrator-output.log

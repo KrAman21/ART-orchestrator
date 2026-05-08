@@ -20,18 +20,15 @@ const LOG_TO_FILE = process.env.LOG_TO_FILE !== 'false'; // Default to true
 // Resolve log file path relative to cwd
 const LOG_FILE_PATH = resolve(process.cwd(), LOG_FILE);
 
-const GLOBAL_KEY = '__art_logger_initialized__';
-if (LOG_TO_FILE && !global[GLOBAL_KEY]) {
+// Ensure log directory exists and clear previous log
+if (LOG_TO_FILE) {
   try {
     mkdirSync(dirname(LOG_FILE_PATH), { recursive: true });
+    // Clear previous log file on startup
     writeFileSync(LOG_FILE_PATH, '', { encoding: 'utf-8' });
-    global[GLOBAL_KEY] = true;
-    console.log(`[LOGGER_INIT] Initialized log file: ${LOG_FILE_PATH}`);
   } catch (error) {
-    console.error(`[LOGGER_INIT] Failed: ${error.message}`);
+    // Directory might already exist or other error - continue
   }
-} else if (LOG_TO_FILE) {
-  console.log(`[LOGGER_INIT] Already initialized, skipping file clear`);
 }
 
 function formatTimestamp() {

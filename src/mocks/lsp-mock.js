@@ -54,8 +54,8 @@ export class LSPMockService extends BaseMockService {
 
       // Seed data onboarding endpoint
       this.app.post('/art/configs/set', (req, res) => {
-        const { merchantId } = req.body;
-        logger.info('LSP mock: Seed data onboarding', { merchantId });
+        const { merchantId, lenderOrgIdToIdMap } = req.body;
+        logger.info('LSP mock: Seed data onboarding', { merchantId, lenderCount: lenderOrgIdToIdMap ? Object.keys(lenderOrgIdToIdMap).length : 0 });
         res.json({
           success: true,
           message: 'Seed data onboarded successfully',
