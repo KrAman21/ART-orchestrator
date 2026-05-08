@@ -70,6 +70,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       body = JSON.stringify(body);
       headers['disable_encryption'] = customHeaders['disable_encryption'] || 'TRUE';
       headers['authorization'] = customHeaders['authorization'] || 'Basic flipkart';
+      logger.info('Double-stringified body for WRAPPER destination');
     }
 
     logger.info('Request body prepared', {
