@@ -1,8 +1,8 @@
 {
-  "executionId": "art-1778577413322",
-  "executionStartTime": "2026-05-12T09:16:19.128Z",
-  "executionEndTime": "2026-05-12T09:16:53.322Z",
-  "totalDuration": 34194,
+  "executionId": "art-1778579709218",
+  "executionStartTime": "2026-05-12T09:54:32.812Z",
+  "executionEndTime": "2026-05-12T09:55:09.217Z",
+  "totalDuration": 36405,
   "overallStatus": "PARTIAL_FAILURE",
   "summary": {
     "totalOrders": 3,
@@ -20,7 +20,7 @@
         "count": 1,
         "failures": [
           {
-            "timestamp": "2026-05-12T09:16:25.008Z",
+            "timestamp": "2026-05-12T09:54:38.493Z",
             "requestId": "bab2849e-bcfb-48f4-89b6-6f70d16bb29e",
             "logTag": "FlipKart-Eligibility_REQUEST",
             "sourceDestination": "APP_WRAPPER",
@@ -75,7 +75,7 @@
                 "pcd_month_since_first_delivery_date": "34"
               },
               "lender_metadata": null,
-              "order_expiry_time": "2026-05-12T09:26:24.997Z",
+              "order_expiry_time": "2026-05-12T10:04:38.483Z",
               "consents": [
                 {
                   "ip_address": "XXXXXXX59.184",
@@ -119,7 +119,7 @@
     "allFailures": [
       {
         "orderId": "1778478373",
-        "timestamp": "2026-05-12T09:16:25.008Z",
+        "timestamp": "2026-05-12T09:54:38.493Z",
         "requestId": "bab2849e-bcfb-48f4-89b6-6f70d16bb29e",
         "logTag": "FlipKart-Eligibility_REQUEST",
         "sourceDestination": "APP_WRAPPER",
@@ -174,7 +174,7 @@
             "pcd_month_since_first_delivery_date": "34"
           },
           "lender_metadata": null,
-          "order_expiry_time": "2026-05-12T09:26:24.997Z",
+          "order_expiry_time": "2026-05-12T10:04:38.483Z",
           "consents": [
             {
               "ip_address": "XXXXXXX59.184",
@@ -221,16 +221,16 @@
       "orderIndex": 1,
       "totalOrders": 3,
       "status": "TIMEOUT",
-      "startTime": "2026-05-12T09:16:19.129Z",
-      "endTime": "2026-05-12T09:16:35.004Z",
-      "duration": 15875,
+      "startTime": "2026-05-12T09:54:32.812Z",
+      "endTime": "2026-05-12T09:54:48.489Z",
+      "duration": 15677,
       "logsProcessed": 0,
       "logsTotal": 40,
       "currentLogTag": null,
       "currentLogIndex": 0,
       "errors": [],
       "stuckAt": {
-        "timestamp": "2026-05-12T09:16:35.002Z",
+        "timestamp": "2026-05-12T09:54:48.488Z",
         "logTag": "FlipKart-Eligibility_RESPONSE",
         "logIndex": 1,
         "reason": "Timeout after 0 minutes"
@@ -244,7 +244,7 @@
       "timeline": [],
       "bufferFailures": [
         {
-          "timestamp": "2026-05-12T09:16:25.008Z",
+          "timestamp": "2026-05-12T09:54:38.493Z",
           "requestId": "bab2849e-bcfb-48f4-89b6-6f70d16bb29e",
           "logTag": "FlipKart-Eligibility_REQUEST",
           "sourceDestination": "APP_WRAPPER",
@@ -299,7 +299,7 @@
               "pcd_month_since_first_delivery_date": "34"
             },
             "lender_metadata": null,
-            "order_expiry_time": "2026-05-12T09:26:24.997Z",
+            "order_expiry_time": "2026-05-12T10:04:38.483Z",
             "consents": [
               {
                 "ip_address": "XXXXXXX59.184",
@@ -345,9 +345,9 @@
       "orderIndex": 2,
       "totalOrders": 3,
       "status": "COMPLETED",
-      "startTime": "2026-05-12T09:16:38.006Z",
-      "endTime": "2026-05-12T09:16:44.047Z",
-      "duration": 6041,
+      "startTime": "2026-05-12T09:54:51.491Z",
+      "endTime": "2026-05-12T09:54:58.898Z",
+      "duration": 7407,
       "logsProcessed": 25,
       "logsTotal": 26,
       "currentLogTag": null,
@@ -369,9 +369,9 @@
       "orderIndex": 3,
       "totalOrders": 3,
       "status": "COMPLETED",
-      "startTime": "2026-05-12T09:16:47.068Z",
-      "endTime": "2026-05-12T09:16:53.312Z",
-      "duration": 6244,
+      "startTime": "2026-05-12T09:55:01.920Z",
+      "endTime": "2026-05-12T09:55:09.207Z",
+      "duration": 7287,
       "logsProcessed": 25,
       "logsTotal": 26,
       "currentLogTag": null,

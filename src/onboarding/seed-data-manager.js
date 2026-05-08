@@ -60,11 +60,33 @@ export class SeedDataManager {
     });
     return lenderMap;
   }
-
+  /**
+   * Extract lineDetails from LSP-Eligibility_REQUEST logs
+   */
+  static extractLineDetails(logs) {
+    for (const log of logs) {
+      // Check both root level and message level for log_tag
+      const logTag = log?.message?.log_tag || log?.log_tag;
+      if (logTag === 'LSP-Eligibility_REQUEST') {
+        // Check both root level and message level for trace_request
+        const traceRequest = log?.message?.trace_request || log?.trace_request;
+        const lineDetails = traceRequest?.lineDetails || traceRequest?.line_details;
+        if (Array.isArray(lineDetails) && lineDetails.length > 0) {
+          logger.info('Extracted lineDetails from LSP-Eligibility_REQUEST logs', { 
+            count: lineDetails.length 
+          });
+          return lineDetails;
+        }
+      }
+    }
+    logger.warn('No lineDetails found in LSP-Eligibility_REQUEST logs');
+    return [];
+  }
+  
   /**
    * Onboard seed data to LSP
    */
-  async onboardSeedData(merchantId, lenderOrgIdToIdMap) {
+  async onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails) {
     logger.info('Onboarding seed data to LSP: ', { 
       baseUrl: SERVICE_MAP.LSP.baseUrl + '/art/configs/set', 
       merchantId, 
@@ -76,7 +98,7 @@ export class SeedDataManager {
         SERVICE_MAP.LSP.baseUrl,
         '/art/configs/set',
         'POST',
-        { merchantId, lender_org_id_to_id_map: lenderOrgIdToIdMap },
+        { merchantId, lender_org_id_to_id_map: lenderOrgIdToIdMap, lineDetails },
         null,
         null,
         null,
@@ -94,6 +116,7 @@ export class SeedDataManager {
       logger.info('Seed data onboarding successful', {
         merchantId,
         lenderMapSize: Object.keys(lenderOrgIdToIdMap).length,
+        lineDetailsCount: lineDetails?.length || 0,
         status: response.status
       });
 

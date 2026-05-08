@@ -131,7 +131,12 @@ export class ReplayOrchestrator {
    * Called before replay starts
    */
   async onboardSeedData(merchantId, lenderOrgIdToIdMap) {
-    logger.info('Onboarding seed data to LSP: ', { baseUrl: SERVICE_MAP.LSP.baseUrl + '/art/configs/set', merchantId, lenderCount: Object.keys(lenderOrgIdToIdMap).length });
+    logger.info('Onboarding seed data to LSP: ', { 
+      baseUrl: SERVICE_MAP.LSP.baseUrl + '/art/configs/set', 
+      merchantId, 
+      lenderCount: Object.keys(lenderOrgIdToIdMap).length,
+      lineDetailsCount: lineDetails?.length || 0
+    });
 
     try {
       const response = await makeRequest(
