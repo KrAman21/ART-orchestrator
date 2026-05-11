@@ -350,7 +350,7 @@ export class RequestForwarder {
       if (serviceResponse && serviceResponse.status !== 200) {
         const errorMsg = `LSP call failed with status ${serviceResponse.status}: ${serviceResponse.statusText}`;
         this.logger.error('=== LSP CALL FAILED - STOPPING ===', {
-          url: `${this.callbacks.getServiceBaseUrl(destination)}${api}`,
+          url: `${this.callbacks.getServiceBaseUrl(destination)}${endpoint}`,
           status: serviceResponse.status,
           statusText: serviceResponse.statusText,
           responseData: serviceResponse.data,

@@ -1,6 +1,64 @@
 import { readFile, writeFile } from 'fs/promises';
 import { resolve } from 'path';
 
+function shouldSkipLog(log) {
+  const msg = log?.message || {};
+  const traceRoute = msg.trace_route || '';
+  const logTag = (msg.log_tag || '').trim();
+  
+  if (traceRoute.startsWith('WRAPPER_') || traceRoute.endsWith('_WRAPPER')) {
+    if (traceRoute === 'APP_WRAPPER') {
+      return false;
+    }
+    return true;
+  }
+  
+  if (!logTag || logTag === '') {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Perform second-level filtering to remove entries that orchestrator would skip
+ * This ensures final-filtered logs only contain actionable entries
+ * @param {Array} logs - Logs after first-level filtering
+ * @param {string} outputPath - Optional path to save final filtered logs (e.g., 'data/final-filtered-logs.json')
+ * @returns {Array} - Logs with orchestrator-skip entries removed
+ */
+export async function filterOrchestratorSkippableLogs(logs, outputPath = null) {
+  if (!Array.isArray(logs) || logs.length === 0) {
+    return [];
+  }
+
+  const filtered = logs.filter((log, index) => {
+    const shouldSkip = shouldSkipLog(log);
+    
+    if (shouldSkip) {
+      const msg = log?.message || {};
+      console.log(`Second-level filter: skipping index ${index}, trace_route: ${msg.trace_route}, log_tag: ${msg.log_tag}`);
+    }
+    
+    return !shouldSkip;
+  });
+
+  console.log(`Second-level filtering: ${logs.length} -> ${filtered.length} (removed ${logs.length - filtered.length} orchestrator-skipped entries)`);
+  
+  // Save final filtered logs to file if outputPath provided
+  if (outputPath) {
+    try {
+      const absolutePath = resolve(process.cwd(), outputPath);
+      await writeFile(absolutePath, JSON.stringify(filtered, null, 2), 'utf-8');
+      console.log(`Saved final filtered logs to: ${outputPath}`);
+    } catch (error) {
+      console.error(`Failed to save final filtered logs: ${error.message}`);
+    }
+  }
+  
+  return filtered;
+}
+
 /**
  * Fetch logs from the JSON API endpoint
  * The JSON file is populated with data from ClickHouse/S3
@@ -131,6 +189,10 @@ export async function filterAndSortLogs(logs, outputPath = null) {
 
     if (seen.has(key)) {
       duplicates.push({ index, key: key.substring(0, 60), logTag });
+      return false;
+    }
+
+    if (logTag.startsWith('CHECKOUT.')) {
       return false;
     }
 

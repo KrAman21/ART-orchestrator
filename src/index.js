@@ -1,7 +1,8 @@
 import 'dotenv/config';
 
-import { fetchLogsFromJSONFile, filterAndSortLogs } from './services/log-fetcher.js';
+import { fetchLogsFromJSONFile, filterAndSortLogs, filterOrchestratorSkippableLogs } from './services/log-fetcher.js';
 import { ReplayOrchestrator } from './orchestrator.js';
+import { AsyncReplayOrchestrator } from './async-buffer/async-orchestrator.js';
 import { createServer } from './server.js';
 import { logger } from './utils/logger.js';
 import { createMockController } from './mocks/index.js';
@@ -12,7 +13,8 @@ const CONFIG = {
   PORT: process.env.PORT || 3001,
   LOGS_FILE_PATH: process.env.LOGS_FILE_PATH || 'data/logs.json',
   TIMEOUT_MS: parseInt(process.env.TIMEOUT_MS, 10) || 10000,
-  AUTO_START: process.env.AUTO_START !== 'false'
+  AUTO_START: process.env.AUTO_START !== 'false',
+  USE_ASYNC_ORCHESTRATOR: process.env.USE_ASYNC_ORCHESTRATOR === 'true'
 };
 
 /**
@@ -43,7 +45,15 @@ async function main() {
       process.exit(1);
     }
 
-    console.log(`Ready to replay ${filteredLogs.length} unique logs`);
+    console.log('Applying second-level filtering (removing orchestrator-skipped entries)...');
+    const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, 'data/final-filtered-logs.json');
+    
+    if (finalFilteredLogs.length === 0) {
+      console.log('No logs remaining after second-level filtering');
+      process.exit(1);
+    }
+
+    console.log(`Ready to replay ${finalFilteredLogs.length} unique logs`);
 
     // Start mock services if enabled
     if (MOCK_CONFIG.enabled) {
@@ -71,9 +81,14 @@ async function main() {
     }
 
     // Create orchestrator
-    orchestrator = new ReplayOrchestrator(filteredLogs, {
+    const OrchestratorClass = CONFIG.USE_ASYNC_ORCHESTRATOR ? AsyncReplayOrchestrator : ReplayOrchestrator;
+    orchestrator = new OrchestratorClass(finalFilteredLogs, {
       timeoutMs: CONFIG.TIMEOUT_MS
     });
+
+    if (CONFIG.USE_ASYNC_ORCHESTRATOR) {
+      console.log('\n⚡ Using ASYNC orchestrator with buffer system');
+    }
 
     // Create and start HTTP server
     const app = createServer(orchestrator);
@@ -87,6 +102,9 @@ async function main() {
       console.log(`  - Control: http://localhost:${CONFIG.PORT}/control/{start|stop}`);
       if (MOCK_CONFIG.enabled) {
         console.log(`\n📡 Mock mode active`);
+      }
+      if (CONFIG.USE_ASYNC_ORCHESTRATOR) {
+        console.log(`\n⚡ Async orchestrator mode active`);
       }
       console.log(`\nReplay ready. Call /control/start to begin.\n`);
     });

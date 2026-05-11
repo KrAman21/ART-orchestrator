@@ -183,19 +183,98 @@ export class LogProcessor {
         timestamp: new Date().toISOString()
       });
 
-      // Make request to destination service (LSP or GW)
-      const response = await makeRequest(
-        this.callbacks.getServiceBaseUrl(service),
-        api,
-        'POST',
-        transformedPayload,
-        entry.requestId,
-        sourceDestinationForRequest,
-        entry.logTag,
-        null,
-        customHeaders,
-        entry.index
-      );
+      let response;
+      const maxRetries = 10;
+      const retryIntervalMs = 5000;
+
+      if (entry.logTag === 'FlipKart-EligibilityStatus_REQUEST') {
+        this.logger.info('POLLING_START: Starting polling for FlipKart-EligibilityStatus_REQUEST', {
+          logTag: entry.logTag,
+          maxRetries,
+          retryIntervalMs
+        });
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          this.logger.info(`POLLING_ATTEMPT: Attempt ${attempt}/${maxRetries} for FlipKart-EligibilityStatus_REQUEST`, {
+            attempt,
+            maxRetries,
+            logTag: entry.logTag
+          });
+
+          response = await makeRequest(
+            this.callbacks.getServiceBaseUrl(service),
+            api,
+            'POST',
+            transformedPayload,
+            entry.requestId,
+            sourceDestinationForRequest,
+            entry.logTag,
+            null,
+            customHeaders,
+            entry.index
+          );
+
+          let responseData = response?.data;
+          if (typeof responseData === 'string') {
+            try {
+              responseData = JSON.parse(responseData);
+            } catch (e) {
+              this.logger.warn('Failed to parse response data as JSON', { error: e.message });
+            }
+          }
+
+          const hasSuccess = responseData?.status === 'SUCCESS';
+          const hasLenderEligibilities = responseData?.lender_eligibilities && 
+                                         Array.isArray(responseData.lender_eligibilities) && 
+                                         responseData.lender_eligibilities.length > 0;
+
+          this.logger.info(`POLLING_CHECK: Attempt ${attempt} response check`, {
+            attempt,
+            hasSuccess,
+            hasLenderEligibilities,
+            statusValue: responseData?.status,
+            lenderEligibilitiesCount: responseData?.lender_eligibilities?.length || 0,
+            dataType: typeof response?.data
+          });
+
+          if (hasSuccess && hasLenderEligibilities) {
+            this.logger.info('POLLING_SUCCESS: Received success and lender_eligibilities', {
+              attempt,
+              lenderEligibilitiesCount: responseData.lender_eligibilities.length
+            });
+            response.data = responseData;
+            break;
+          }
+
+          if (attempt < maxRetries) {
+            this.logger.info(`POLLING_RETRY: Waiting ${retryIntervalMs}ms before retry`, {
+              attempt,
+              nextAttempt: attempt + 1,
+              waitMs: retryIntervalMs
+            });
+            await new Promise(resolve => setTimeout(resolve, retryIntervalMs));
+          } else {
+            this.logger.error('POLLING_FAILED: Max retries reached without success and lender_eligibilities', {
+              attempts: maxRetries,
+              lastResponse: response?.data
+            });
+            throw new Error(`Did not get response with success and lender_eligibilities from FlipKart-EligibilityStatus_REQUEST after ${maxRetries} attempts`);
+          }
+        }
+      } else {
+        response = await makeRequest(
+          this.callbacks.getServiceBaseUrl(service),
+          api,
+          'POST',
+          transformedPayload,
+          entry.requestId,
+          sourceDestinationForRequest,
+          entry.logTag,
+          null,
+          customHeaders,
+          entry.index
+        );
+      }
 
       // Log detailed response
       this.logger.info('=== RESPONSE RECEIVED FROM DESTINATION ===', {

@@ -15,7 +15,6 @@ import { WebhookManager } from './webhook/webhook-manager.js';
 
 export class ReplayOrchestrator {
   constructor(logs, config = {}) {
-    this.logs = logs;
     this.config = {
       timeoutMs: 10000,
       ...config
@@ -24,8 +23,6 @@ export class ReplayOrchestrator {
     this.stateManager = new StateManager({
       defaultTimeoutMs: this.config.timeoutMs
     });
-    this.validator = new LogSequenceValidator(logs);
-    this.seedDataManager = new SeedDataManager(logs);
 
     this.results = {
       passed: 0,
@@ -40,6 +37,33 @@ export class ReplayOrchestrator {
     this.triggeredWebhooks = new Set();
     this.asyncCallTracker = new Map();
     this.pendingPostResponseWebhooks = new Map();
+
+    this.isRunning = false;
+
+    this.loadLogs(logs);
+  }
+
+  loadLogs(logs) {
+    this.logs = logs;
+    this.validator = new LogSequenceValidator(logs);
+    this.seedDataManager = new SeedDataManager(logs);
+    this.resetState();
+  }
+
+  resetState() {
+    this.results = {
+      passed: 0,
+      failed: 0,
+      errors: [],
+      processedLogs: []
+    };
+
+    this.pendingExternalRequests.clear();
+    this.earlyExternalResponses.clear();
+    this.requestToExternalCalls.clear();
+    this.triggeredWebhooks.clear();
+    this.asyncCallTracker.clear();
+    this.pendingPostResponseWebhooks.clear();
 
     this.isRunning = false;
 

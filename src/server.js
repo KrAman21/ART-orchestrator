@@ -1,6 +1,9 @@
 import express from 'express';
 import { logger } from './utils/logger.js';
-import { getApiMapping } from './config.js';
+import { getApiMapping, QAPI_CONFIG } from './config.js';
+import { fetchS3TraceLogs, fetchOrderIdsFromQAPI } from './services/http-client.js';
+import { writeFile } from 'fs/promises';
+import { resolve } from 'path';
 
 /**
  * Create Express server with routes for LSP and GW
@@ -177,6 +180,245 @@ export function createServer(orchestrator) {
         success: false,
         error: error.message
       });
+    }
+  });
+
+  app.post('/api/fetch-logs', async (req, res) => {
+    try {
+      const { merchantId, orderId } = req.body;
+
+      if (!merchantId || !orderId) {
+        return res.status(400).json({
+          success: false,
+          error: 'Both merchantId and orderId are required'
+        });
+      }
+
+      logger.info('Fetching logs from external API', { merchantId, orderId });
+
+      const result = await fetchS3TraceLogs(merchantId, orderId);
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          error: result.error,
+          message: result.message
+        });
+      }
+
+      const logsFilePath = resolve(process.cwd(), 'data', 'logs.json');
+      await writeFile(logsFilePath, JSON.stringify(result.logs, null, 2), 'utf-8');
+
+      logger.info('Successfully fetched and saved logs', {
+        merchantId,
+        orderId,
+        logCount: result.count,
+        filePath: logsFilePath
+      });
+
+      res.json({
+        success: true,
+        message: 'Logs fetched and saved successfully',
+        merchantId,
+        orderId,
+        logCount: result.count,
+        filePath: 'data/logs.json'
+      });
+
+    } catch (error) {
+      logger.error('Failed to fetch logs', { error: error.message, stack: error.stack });
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  });
+
+  app.post('/api/fetch-order-ids', async (req, res) => {
+    try {
+      const { startDate, endDate } = req.body;
+
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          success: false,
+          error: 'Both startDate and endDate are required (ISO 8601 format)'
+        });
+      }
+
+      logger.info('Fetching order IDs from QAPI', { startDate, endDate });
+
+      const result = await fetchOrderIdsFromQAPI(startDate, endDate);
+
+      if (!result.success) {
+        return res.status(500).json({
+          success: false,
+          error: result.error,
+          message: result.message
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'Order IDs fetched successfully',
+        orderCount: result.count,
+        orderIds: result.orderIds,
+        merchantId: QAPI_CONFIG.merchantId
+      });
+
+    } catch (error) {
+      logger.error('Failed to fetch order IDs', { error: error.message, stack: error.stack });
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  });
+
+  app.post('/api/run-art-for-orders', async (req, res) => {
+    const results = {
+      success: true,
+      totalOrders: 0,
+      processedOrders: 0,
+      failedOrders: 0,
+      errors: [],
+      orderResults: []
+    };
+
+    try {
+      const { startDate, endDate, maxOrders } = req.body;
+
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          success: false,
+          error: 'Both startDate and endDate are required (ISO 8601 format)'
+        });
+      }
+
+      logger.info('Starting ART run for orders', { startDate, endDate, maxOrders });
+
+      const orderResult = await fetchOrderIdsFromQAPI(startDate, endDate);
+
+      if (!orderResult.success) {
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to fetch order IDs',
+          message: orderResult.error
+        });
+      }
+
+      let orderIds = orderResult.orderIds;
+      results.totalOrders = orderIds.length;
+
+      if (maxOrders && maxOrders > 0) {
+        orderIds = orderIds.slice(0, maxOrders);
+        logger.info(`Limiting to ${maxOrders} orders out of ${results.totalOrders}`);
+      }
+
+      logger.info(`Processing ${orderIds.length} orders`);
+
+      for (let i = 0; i < orderIds.length; i++) {
+        const orderId = orderIds[i];
+        const orderResultItem = {
+          orderId,
+          status: 'pending',
+          logsFetched: false,
+          artStarted: false,
+          error: null
+        };
+
+        try {
+          logger.info(`[${i + 1}/${orderIds.length}] Processing order: ${orderId}`);
+
+          const logsResult = await fetchS3TraceLogs(QAPI_CONFIG.merchantId, orderId);
+
+          if (!logsResult.success) {
+            orderResultItem.status = 'failed';
+            orderResultItem.error = `Failed to fetch logs: ${logsResult.error}`;
+            results.failedOrders++;
+            results.errors.push({
+              orderId,
+              stage: 'fetch_logs',
+              error: logsResult.error
+            });
+            results.orderResults.push(orderResultItem);
+            continue;
+          }
+
+          orderResultItem.logsFetched = true;
+          orderResultItem.logCount = logsResult.count;
+
+          const logsFilePath = resolve(process.cwd(), 'data', 'logs.json');
+          await writeFile(logsFilePath, JSON.stringify(logsResult.logs, null, 2), 'utf-8');
+
+          logger.info(`[${i + 1}/${orderIds.length}] Logs saved for order: ${orderId}, count: ${logsResult.count}`);
+
+          try {
+            if (orchestrator.isRunning) {
+              logger.info(`[${i + 1}/${orderIds.length}] Stopping orchestrator for previous order`);
+              await orchestrator.stop();
+            }
+
+            const { fetchLogsFromJSONFile, filterAndSortLogs, filterOrchestratorSkippableLogs } = await import('./services/log-fetcher.js');
+            const logs = await fetchLogsFromJSONFile('data/logs.json');
+            const filteredLogs = await filterAndSortLogs(logs);
+            const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs);
+
+            orchestrator.loadLogs(finalFilteredLogs);
+            await orchestrator.start();
+
+            orderResultItem.artStarted = true;
+            results.processedOrders++;
+            orderResultItem.status = 'success';
+            logger.info(`[${i + 1}/${orderIds.length}] ART started for order: ${orderId}`);
+          } catch (artError) {
+            orderResultItem.status = 'failed';
+            orderResultItem.error = `ART execution failed: ${artError.message}`;
+            results.failedOrders++;
+            results.errors.push({
+              orderId,
+              stage: 'art_execution',
+              error: artError.message
+            });
+            logger.error(`[${i + 1}/${orderIds.length}] ART failed for order: ${orderId}`, {
+              error: artError.message
+            });
+          }
+
+        } catch (orderError) {
+          orderResultItem.status = 'failed';
+          orderResultItem.error = orderError.message;
+          results.failedOrders++;
+          results.errors.push({
+            orderId,
+            stage: 'processing',
+            error: orderError.message
+          });
+          logger.error(`[${i + 1}/${orderIds.length}] Failed to process order: ${orderId}`, {
+            error: orderError.message
+          });
+        }
+
+        results.orderResults.push(orderResultItem);
+      }
+
+      results.success = results.failedOrders === 0;
+
+      logger.info('ART run completed', {
+        totalOrders: results.totalOrders,
+        processed: results.processedOrders,
+        failed: results.failedOrders
+      });
+
+      res.json(results);
+
+    } catch (error) {
+      logger.error('Failed to run ART for orders', { error: error.message, stack: error.stack });
+      results.success = false;
+      results.errors.push({
+        stage: 'overall',
+        error: error.message
+      });
+      res.status(500).json(results);
     }
   });
 

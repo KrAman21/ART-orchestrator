@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger.js';
-import { MOCK_CONFIG } from '../config.js';
+import { MOCK_CONFIG, LSP_API_CONFIG, QAPI_CONFIG } from '../config.js';
 
 /**
  * Simple HTTP client for service calls
@@ -212,4 +212,185 @@ export async function checkHealth(serviceConfig) {
     logger.logHealthCheck(serviceConfig.name, false);
     return false;
   }
+}
+
+export async function fetchS3TraceLogs(merchantId, orderId) {
+  logger.info('Fetching S3 Trace Logs (API call disabled - using dummy data)', {
+    merchantId,
+    orderId
+  });
+
+  /* API CALL DISABLED FOR TESTING
+  const id = `${merchantId}/${orderId}`;
+  const endpoint = `/credit/api/v3.3/dashboard/getS3TraceLogs?lookup_on=SECONDARY&id=${encodeURIComponent(id)}&id_type=merchant_id/order_id`;
+  const url = `${LSP_API_CONFIG.baseUrl}${endpoint}`;
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'session-token': LSP_API_CONFIG.sessionToken
+      }
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error('Failed to fetch S3 Trace Logs', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText
+      });
+      return {
+        success: false,
+        error: `HTTP error! status: ${response.status}`,
+        message: errorText
+      };
+    }
+
+    const data = await response.json();
+
+    logger.info('Successfully fetched S3 Trace Logs', {
+      merchantId,
+      orderId,
+      logCount: Array.isArray(data) ? data.length : 'unknown'
+    });
+
+    return {
+      success: true,
+      logs: data,
+      count: Array.isArray(data) ? data.length : 0
+    };
+
+  } catch (error) {
+    logger.error('Exception while fetching S3 Trace Logs', {
+      merchantId,
+      orderId,
+      error: error.message,
+      stack: error.stack
+    });
+
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+  */
+
+  // Return dummy success response for testing
+  return {
+    success: true,
+    logs: [],
+    count: 0,
+    message: 'API call disabled - using dummy data'
+  };
+}
+
+export async function fetchOrderIdsFromQAPI(startDate, endDate) {
+  logger.info('Fetching order IDs from QAPI (API call disabled - using dummy data)', {
+    startDate,
+    endDate,
+    merchantId: QAPI_CONFIG.merchantId
+  });
+
+  /* API CALL DISABLED FOR TESTING
+  const endpoint = '/credit/q/query';
+  const url = `${QAPI_CONFIG.baseUrl}${endpoint}`;
+
+  const payload = {
+    metric: [
+      "number_of_unique_leads",
+      "soft_offer_qualified_leads",
+      "hard_offer_requested_leads",
+      "hard_offers_approved_leads",
+      "number_of_active_lines",
+      "avg_credit_line_amount"
+    ],
+    dimensions: ["order_id"],
+    domain: "loanAnalytics",
+    interval: {
+      start: startDate,
+      end: endDate
+    },
+    filters: {
+      merchant_id: [QAPI_CONFIG.merchantId]
+    }
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'X-Web-LoginToken': QAPI_CONFIG.token,
+        'Consumer-Credit-Dashboard': 'Consumer-Credit-Dashboard'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error('Failed to fetch order IDs from QAPI', {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText
+      });
+      return {
+        success: false,
+        error: `HTTP error! status: ${response.status}`,
+        message: errorText
+      };
+    }
+
+    const data = await response.json();
+
+    if (!data || !data.result || !Array.isArray(data.result)) {
+      logger.warn('QAPI returned unexpected format', { data });
+      return {
+        success: true,
+        orderIds: [],
+        count: 0,
+        message: 'No order IDs found or unexpected response format'
+      };
+    }
+
+    const orderIds = data.result
+      .map(row => row.order_id)
+      .filter(id => id && id.trim() !== '');
+
+    logger.info('Successfully fetched order IDs from QAPI', {
+      orderCount: orderIds.length,
+      sampleOrders: orderIds.slice(0, 5)
+    });
+
+    return {
+      success: true,
+      orderIds,
+      count: orderIds.length,
+      rawData: data
+    };
+
+  } catch (error) {
+    logger.error('Exception while fetching order IDs from QAPI', {
+      startDate,
+      endDate,
+      error: error.message,
+      stack: error.stack
+    });
+
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+  */
+
+  return {
+    success: true,
+    orderIds: [],
+    count: 0,
+    message: 'API call disabled - using dummy data'
+  };
 }

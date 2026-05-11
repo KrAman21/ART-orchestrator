@@ -1,7 +1,7 @@
 import { logger } from '../utils/logger.js';
 
 const FIELD_TRANSFORMS = {
-  'address_type': { value: 'PERMANENT', check: (v) => typeof v === 'string' && v.startsWith('XX') },
+  'address_type': { value: 'DELIVERY', check: (v) => typeof v === 'string' && v.startsWith('XX') },  // TODO: address type should be dynamic
   'mobile_number': { value: '9876543210', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'phone': { value: '9876543210', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'date_of_birth': { value: '01-01-1990', check: (v) => typeof v === 'string' && v.startsWith('XX') },

@@ -23,6 +23,17 @@ export const SERVICE_MAP = {
   GATEWAY: { baseUrl: process.env.GW_URL || 'http://localhost:2344', name: 'Gateway' }
 };
 
+export const LSP_API_CONFIG = {
+  baseUrl: process.env.LSP_API_BASE_URL || 'https://integ-expresscheckout-api.juspay.in',
+  sessionToken: process.env.SESSION_TOKEN || ''
+};
+
+export const QAPI_CONFIG = {
+  baseUrl: process.env.QAPI_BASE_URL || 'https://integ-expresscheckout-api.juspay.in',
+  token: process.env.QAPI_TOKEN || '',
+  merchantId: process.env.QAPI_MERCHANT_ID || 'test_merchant_1'
+};
+
 // API endpoint mapping based on (sourceDestination, logTag) combination
 // Key format: "sourceDestination|logTag" where sourceDestination is "SOURCE_DEST"
 // Optional headers field for custom headers per endpoint
@@ -30,13 +41,13 @@ export const API_TO_ENDPOINT_MAP = {
   // ==================== APP_WRAPPER (Wrapper Endpoints - Incoming from APP) ====================
   // FlipKart APIs
   'APP_WRAPPER|FlipKart-Eligibility_INCOMING': { endpoint: '/flipkart/eligibility', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
-  'APP_WRAPPER|FlipKart-EligibilityStatus_INCOMING': { endpoint: '/flipkart/eligibility/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
-  'APP_WRAPPER|FlipKart-HardEligibility_INCOMING': { endpoint: '/flipkart/eligibility/lender', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
-  'APP_WRAPPER|FlipKart-HardEligibilityStatus_INCOMING': { endpoint: '/flipkart/eligibility/lender/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
-  'APP_WRAPPER|FlipKart-GetKFS_INCOMING': { endpoint: '/flipkart/getKFS', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
-  'APP_WRAPPER|FlipKart-GetRedirectionURL_INCOMING': { endpoint: '/flipkart/getRedirectionUrl', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
-  'APP_WRAPPER|FlipKart-InitaiteTxn_INCOMING': { endpoint: '/flipkart/txns', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
-  'APP_WRAPPER|FlipKart-OrderStatus_INCOMING': { endpoint: '/flipkart/order/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
+  'APP_WRAPPER|FlipKart-EligibilityStatus_REQUEST': { endpoint: '/flipkart/eligibility/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
+  'APP_WRAPPER|FlipKart-HardEligibility_REQUEST': { endpoint: '/flipkart/eligibility/lender', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
+  'APP_WRAPPER|FlipKart-HardEligibilityStatus_REQUEST': { endpoint: '/flipkart/eligibility/lender/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
+  'APP_WRAPPER|FlipKart-GetKFS_REQUEST': { endpoint: '/flipkart/getKFS', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
+  'APP_WRAPPER|FlipKart-GetRedirectionURL_REQUEST': { endpoint: '/flipkart/getRedirectionUrl', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
+  'APP_WRAPPER|FlipKart-InitaiteTxn_REQUEST': { endpoint: '/flipkart/txns', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
+  'APP_WRAPPER|FlipKart-OrderStatus_REQUEST': { endpoint: '/flipkart/order/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
   'APP_WRAPPER|FlipKart-Refund_INCOMING': { endpoint: '/flipkart/refund', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
   'APP_WRAPPER|FlipKart-FetchStatus_INCOMING': { endpoint: '/flipkart/fetch/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
   'APP_WRAPPER|FlipKart-CreateLoan_INCOMING': { endpoint: '/flipkart/createLoan', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
@@ -148,6 +159,7 @@ export const API_TO_ENDPOINT_MAP = {
   
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing/REQUEST) ====================
   // REQUEST variants (used by logs.json)
+  'CORE_GATEWAY|FetchOfferRequest_REQUEST': { endpoint: '/gateway/v1.0/fetchOffer', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-Eligibility_REQUEST': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-SelectOffer_REQUEST': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-CreatePayment_REQUEST': { endpoint: '/gateway/v1.0/createPayment', method: 'POST', service: 'GW', headers: {} },
@@ -156,7 +168,7 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_GATEWAY|LSP-RefundStatusV2_REQUEST': { endpoint: '/gateway/v1.0/refundStatus', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-GrantLoanRequest_REQUEST': { endpoint: '/gateway/v1.0/grantLoan', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-TriggerDisbursementAuth_REQUEST': { endpoint: '/gateway/v1.0/disbursement/trigger', method: 'POST', service: 'GW', headers: {} },
-  'CORE_GATEWAY|LSP-FetchOfferRequest_REQUEST': { endpoint: '/gateway/v1.0/fetchOffer', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|LSP-FetchOfferRequest_REQUEST': { endpoint: '/gateway/v1.0/fetchOfferRequest', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-FetchOfferStatus_REQUEST': { endpoint: '/gateway/v1.0/fetchOfferStatus', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-TxnIntent_REQUEST': { endpoint: '/gateway/v1.0/txnIntent', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-TxnIntentStatus_REQUEST': { endpoint: '/gateway/v1.0/txnIntentStatus', method: 'POST', service: 'GW', headers: {} },
@@ -177,7 +189,6 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_GATEWAY|LSP-CreateUpdateApplicant_REQUEST': { endpoint: '/gateway/v1.0/applicant', method: 'POST', service: 'GW', headers: {} },
 
   // Original OUTGOING mappings (kept for compatibility)
-  'CORE_GATEWAY|LSP-Eligibility_OUTGOING': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-SelectOffer_OUTGOING': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-CreatePayment_OUTGOING': { endpoint: '/gateway/v1.0/createPayment', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-CreateOrder_OUTGOING': { endpoint: '/gateway/v1.0/order', method: 'POST', service: 'GW', headers: {} },
@@ -263,8 +274,603 @@ export const API_TO_ENDPOINT_MAP = {
   
   // ==================== GATEWAY_LENDER/GATEWAY_LSP (Gateway to Lender/LSP - Lender Side) ====================
   // Support both formats: "Themis-Eligibility Request" (incoming) and "Themis-Eligibility_REQUEST" (logs)
+  // ============================================================================
+  // THEMIS LENDER APIs
+  // ============================================================================
+  
+  // Themis Eligibility APIs
+  'GATEWAY_LENDER|HDB_TOKEN_API_REQUEST': { endpoint: '/api/v1/authenticate-token', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|Themis-Eligibility Request': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_LENDER|Themis-Eligibility_REQUEST': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-Eligibility Response': { type: 'EligibilityResponse', headers: {} },
+  'GATEWAY_LENDER|Themis-Eligibility_RESPONSE': { type: 'EligibilityResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Themis-HardEligibility Request': { endpoint: '/lsp/eligibility/offers', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-HardEligibility_REQUEST': { endpoint: '/lsp/eligibility/offers', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-HardEligibility Response': { type: 'EligibilityResponse', headers: {} },
+  'GATEWAY_LENDER|Themis-HardEligibility_RESPONSE': { type: 'EligibilityResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Themis-HardEligibilityEncrypt Request': { endpoint: '/lsp/eligibility/offers', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-HardEligibilityEncrypt_REQUEST': { endpoint: '/lsp/eligibility/offers', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-HardEligibilityEncrypt Response': { type: 'EligibilityResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|Themis-HardEligibilityEncrypt_RESPONSE': { type: 'EligibilityResponse', headers: {}, encrypted: true },
+  
+  // Themis KFS APIs
+  'GATEWAY_LENDER|Themis-PLKFS Request': { endpoint: '/lsp/generateKFS', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-PLKFS_REQUEST': { endpoint: '/lsp/generateKFS', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-PLKFS Response': { type: 'ThemisPLKfsResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|Themis-PLKFS_RESPONSE': { type: 'ThemisPLKfsResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|Themis-KFS Request': { endpoint: '/lsp/generateKFS', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-KFS_REQUEST': { endpoint: '/lsp/generateKFS', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LENDER|Themis-KFS Response': { type: 'ThemisKfsResponse', headers: {} },
+  'GATEWAY_LENDER|Themis-KFS_RESPONSE': { type: 'ThemisKfsResponse', headers: {} },
+  
+  // Themis Generate Offers APIs
+  'GATEWAY_LENDER|Themis-GenerateOffers Request': { endpoint: '/offer/themisGenerateOffersRequest', method: 'POST', service: 'OFFER', headers: {} },
+  'GATEWAY_LENDER|Themis-GenerateOffers_REQUEST': { endpoint: '/offer/themisGenerateOffersRequest', method: 'POST', service: 'OFFER', headers: {} },
+  'GATEWAY_LENDER|Themis-GenerateOffers Response': { type: 'ThemisGenerateOffersResponse', headers: {} },
+  'GATEWAY_LENDER|Themis-GenerateOffers_RESPONSE': { type: 'ThemisGenerateOffersResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Themis-GenerateOffersEncrypt Request': { endpoint: '/offer/themisGenerateOffersRequest', method: 'POST', service: 'OFFER', headers: {} },
+  'GATEWAY_LENDER|Themis-GenerateOffersEncrypt_REQUEST': { endpoint: '/offer/themisGenerateOffersRequest', method: 'POST', service: 'OFFER', headers: {} },
+  'GATEWAY_LENDER|Themis-GenerateOffersEncrypt Response': { type: 'ThemisGenerateOffersResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|Themis-GenerateOffersEncrypt_RESPONSE': { type: 'ThemisGenerateOffersResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|Themis-ETBGenerateOffers Request': { endpoint: '/offer/themisGenerateOffersRequest', method: 'POST', service: 'OFFER', headers: {} },
+  'GATEWAY_LENDER|Themis-ETBGenerateOffers_REQUEST': { endpoint: '/offer/themisGenerateOffersRequest', method: 'POST', service: 'OFFER', headers: {} },
+  'GATEWAY_LENDER|Themis-ETBGenerateOffers Response': { type: 'ThemisGenerateOffersResponse', headers: {} },
+  'GATEWAY_LENDER|Themis-ETBGenerateOffers_RESPONSE': { type: 'ThemisGenerateOffersResponse', headers: {} },
+  
+  // Themis EMI Plans APIs
+  'GATEWAY_LENDER|Themis-EMIPlans Request': { endpoint: '/etb/v1/emiplans', method: 'POST', service: 'ETB', headers: {} },
+  'GATEWAY_LENDER|Themis-EMIPlans_REQUEST': { endpoint: '/etb/v1/emiplans', method: 'POST', service: 'ETB', headers: {} },
+  'GATEWAY_LENDER|Themis-EMIPlans Response': { type: 'ThemisEMIPlansResponse', headers: {} },
+  'GATEWAY_LENDER|Themis-EMIPlans_RESPONSE': { type: 'ThemisEMIPlansResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Themis-EMIPlansEncrypt Request': { endpoint: '/etb/v1/emiplans', method: 'POST', service: 'ETB', headers: {} },
+  'GATEWAY_LENDER|Themis-EMIPlansEncrypt_REQUEST': { endpoint: '/etb/v1/emiplans', method: 'POST', service: 'ETB', headers: {} },
+  'GATEWAY_LENDER|Themis-EMIPlansEncrypt Response': { type: 'ThemisEMIPlansResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|Themis-EMIPlansEncrypt_RESPONSE': { type: 'ThemisEMIPlansResponse', headers: {}, encrypted: true },
+
+  // ============================================================================
+  // LIQUILOANS LENDER APIs
+  // ============================================================================
+  'GATEWAY_LENDER|HDB_TOKEN_API_REQUEST': { endpoint: '/api/hdb/token', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetSchemeList Request': { endpoint: '/api/dealer/schemes', method: 'GET', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetSchemeList_REQUEST': { endpoint: '/api/dealer/schemes', method: 'GET', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetSchemeList Response': { type: 'GetSchemeListResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetSchemeList_RESPONSE': { type: 'GetSchemeListResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-LeadSeamless Request': { endpoint: '/api/apiintegration/v2/CreateLead', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-LeadSeamless_REQUEST': { endpoint: '/api/apiintegration/v2/CreateLead', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-LeadSeamless Response': { type: 'LeadSeamlessResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-LeadSeamless_RESPONSE': { type: 'LeadSeamlessResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-CheckLoanStatus Request': { endpoint: '/api/apiintegration/v2/CheckStatus', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-CheckLoanStatus_REQUEST': { endpoint: '/api/apiintegration/v2/CheckStatus', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-CheckLoanStatus Response': { type: 'CheckLoanStatusResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-CheckLoanStatus_RESPONSE': { type: 'CheckLoanStatusResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-GetCalculatedEmi Request': { endpoint: '/api/apiintegration/los/dealer/get-emi-calculated', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetCalculatedEmi_REQUEST': { endpoint: '/api/apiintegration/los/dealer/get-emi-calculated', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetCalculatedEmi Response': { type: 'GetCalculatedEmiResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetCalculatedEmi_RESPONSE': { type: 'GetCalculatedEmiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-MandateProcess Request': { endpoint: '/api/apiintegration/v2/getMandateLink', method: 'GET', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-MandateProcess_REQUEST': { endpoint: '/api/apiintegration/v2/getMandateLink', method: 'GET', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-MandateProcess Response': { type: 'MandateProcessAPIResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-MandateProcess_RESPONSE': { type: 'MandateProcessAPIResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-MandateStatus Request': { endpoint: '/api/credit-line/v1/mandate-log-status', method: 'GET', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-MandateStatus_REQUEST': { endpoint: '/api/credit-line/v1/mandate-log-status', method: 'GET', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-MandateStatus Response': { type: 'CheckMandateStatusResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-MandateStatus_RESPONSE': { type: 'CheckMandateStatusResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-AddBankingDetails Request': { endpoint: '/api/apiintegration/v2/Add/BankingDetails', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-AddBankingDetails_REQUEST': { endpoint: '/api/apiintegration/v2/Add/BankingDetails', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-AddBankingDetails Response': { type: 'AddBankingDetailsResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-AddBankingDetails_RESPONSE': { type: 'AddBankingDetailsResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-GetAgreementPdf Request': { endpoint: '/api/apiintegration/v2/Generic/NonCaptive/getAgreementPdf', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetAgreementPdf_REQUEST': { endpoint: '/api/apiintegration/v2/Generic/NonCaptive/getAgreementPdf', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetAgreementPdf Response': { type: 'GetAgreementPDFResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetAgreementPdf_RESPONSE': { type: 'GetAgreementPDFResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-SendAgreementOTP Request': { endpoint: '/api/apiintegration/v2/Generic/NonCaptive/sendAgreementOTP', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-SendAgreementOTP_REQUEST': { endpoint: '/api/apiintegration/v2/Generic/NonCaptive/sendAgreementOTP', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-SendAgreementOTP Response': { type: 'SendAgreementOTPResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-SendAgreementOTP_RESPONSE': { type: 'SendAgreementOTPResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-VerifyAgreementOTP Request': { endpoint: '/api/apiintegration/v2/Generic/NonCaptive/verifyAgreementOTP', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-VerifyAgreementOTP_REQUEST': { endpoint: '/api/apiintegration/v2/Generic/NonCaptive/verifyAgreementOTP', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-VerifyAgreementOTP Response': { type: 'VerifyAgreementOTPResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-VerifyAgreementOTP_RESPONSE': { type: 'VerifyAgreementOTPResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-GetAgreementStatus Request': { endpoint: '/api/apiintegration/v2/Generic/NonCaptive/getAgreementStatus', method: 'GET', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetAgreementStatus_REQUEST': { endpoint: '/api/apiintegration/v2/Generic/NonCaptive/getAgreementStatus', method: 'GET', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetAgreementStatus Response': { type: 'GetAgreementStatusResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-GetAgreementStatus_RESPONSE': { type: 'GetAgreementStatusResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-AdvancedEmi Request': { endpoint: '/api/apiintegration/get-dp-link', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-AdvancedEmi_REQUEST': { endpoint: '/api/apiintegration/get-dp-link', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-AdvancedEmi Response': { type: 'AdvancedEmiAPIResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-AdvancedEmi_RESPONSE': { type: 'AdvancedEmiAPIResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-AdvancedEmiStatus Request': { endpoint: '/api/apiintegration/get-dp-status', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-AdvancedEmiStatus_REQUEST': { endpoint: '/api/apiintegration/get-dp-status', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-AdvancedEmiStatus Response': { type: 'AdvancedEmiStatusAPIResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-AdvancedEmiStatus_RESPONSE': { type: 'AdvancedEmiStatusAPIResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-VerifyAndDownloadCkyc Request': { endpoint: '/api/apiintegration/v3/Dealer/VerifyAndDownloadCkycV3', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-VerifyAndDownloadCkyc_REQUEST': { endpoint: '/api/apiintegration/v3/Dealer/VerifyAndDownloadCkycV3', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-VerifyAndDownloadCkyc Response': { type: 'VerifyAndDownloadCkycResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-VerifyAndDownloadCkyc_RESPONSE': { type: 'VerifyAndDownloadCkycResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-UpdateAddress Request': { endpoint: '/api/apiintegration/v2/updateAddress', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-UpdateAddress_REQUEST': { endpoint: '/api/apiintegration/v2/updateAddress', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-UpdateAddress Response': { type: 'UpdateAddressAPIResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-UpdateAddress_RESPONSE': { type: 'UpdateAddressAPIResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-UpdateAadhaarOKycDetails Request': { endpoint: '/api/apiintegration/v2/Borrower/UpdateAadhaarOKycDetails', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-UpdateAadhaarOKycDetails_REQUEST': { endpoint: '/api/apiintegration/v2/Borrower/UpdateAadhaarOKycDetails', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-UpdateAadhaarOKycDetails Response': { type: 'UpdateAadhaarOKycDetailsResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-UpdateAadhaarOKycDetails_RESPONSE': { type: 'UpdateAadhaarOKycDetailsResponse', headers: {} },
+  
+  'GATEWAY_LENDER|LiquiLoans-UploadDocument Request': { endpoint: '/api/apiintegration/v2/UploadDocument', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-UploadDocument_REQUEST': { endpoint: '/api/apiintegration/v2/UploadDocument', method: 'POST', service: 'LIQUILOANS', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-UploadDocument Response': { type: 'UploadDocumentResponse', headers: {} },
+  'GATEWAY_LENDER|LiquiLoans-UploadDocument_RESPONSE': { type: 'UploadDocumentResponse', headers: {} },
+
+  // ============================================================================
+  // EARLYSALARY LENDER APIs
+  // ============================================================================
+  
+  'GATEWAY_LENDER|EarlySalary-ProfileIngestion Request': { endpoint: '/prof-decision', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-ProfileIngestion_REQUEST': { endpoint: '/prof-decision', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-ProfileIngestion Response': { type: 'ProfileIngestionResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-ProfileIngestion_RESPONSE': { type: 'ProfileIngestionResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-ProfileIngestionEncrypt Request': { endpoint: '/prof-decision', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-ProfileIngestionEncrypt_REQUEST': { endpoint: '/prof-decision', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-ProfileIngestionEncrypt Response': { type: 'ProfileIngestionResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|EarlySalary-ProfileIngestionEncrypt_RESPONSE': { type: 'ProfileIngestionResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|EarlySalary-GetToken Request': { endpoint: '/generateToken', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetToken_REQUEST': { endpoint: '/generateToken', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetToken Response': { type: 'GenerateTokenResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetToken_RESPONSE': { type: 'GenerateTokenResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-GetStatus Request': { endpoint: '/get-status', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetStatus_REQUEST': { endpoint: '/get-status', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetStatus Response': { type: 'GetStatusResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetStatus_RESPONSE': { type: 'GetStatusResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-GetStatusEncrypt Request': { endpoint: '/get-status', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetStatusEncrypt_REQUEST': { endpoint: '/get-status', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetStatusEncrypt Response': { type: 'GetStatusResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|EarlySalary-GetStatusEncrypt_RESPONSE': { type: 'GetStatusResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|EarlySalary-CalculateEmi Request': { endpoint: '/calculate-emi', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-CalculateEmi_REQUEST': { endpoint: '/calculate-emi', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-CalculateEmi Response': { type: 'CalculateEmiResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-CalculateEmi_RESPONSE': { type: 'CalculateEmiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-CalculateEmiEncrypt Request': { endpoint: '/calculate-emi', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-CalculateEmiEncrypt_REQUEST': { endpoint: '/calculate-emi', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-CalculateEmiEncrypt Response': { type: 'CalculateEmiResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|EarlySalary-CalculateEmiEncrypt_RESPONSE': { type: 'CalculateEmiResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|EarlySalary-LoanDisbursalConfirmation Request': { endpoint: '/fetch-loan-conf', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-LoanDisbursalConfirmation_REQUEST': { endpoint: '/fetch-loan-conf', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-LoanDisbursalConfirmation Response': { type: 'LoanDisbursalConfirmationResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-LoanDisbursalConfirmation_RESPONSE': { type: 'LoanDisbursalConfirmationResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-LoanDisbursalConfirmationEncrypt Request': { endpoint: '/fetch-loan-conf', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-LoanDisbursalConfirmationEncrypt_REQUEST': { endpoint: '/fetch-loan-conf', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-LoanDisbursalConfirmationEncrypt Response': { type: 'LoanDisbursalConfirmationResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|EarlySalary-LoanDisbursalConfirmationEncrypt_RESPONSE': { type: 'LoanDisbursalConfirmationResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|EarlySalary-GetSettlement Request': { endpoint: '/getSettlement', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetSettlement_REQUEST': { endpoint: '/getSettlement', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetSettlement Response': { type: 'GetSettlementResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetSettlement_RESPONSE': { type: 'GetSettlementResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-GetSettlementEncrypt Request': { endpoint: '/getSettlement', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetSettlementEncrypt_REQUEST': { endpoint: '/getSettlement', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-GetSettlementEncrypt Response': { type: 'GetSettlementResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|EarlySalary-GetSettlementEncrypt_RESPONSE': { type: 'GetSettlementResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|EarlySalary-InitiateRefund Request': { endpoint: '/externalRefund', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-InitiateRefund_REQUEST': { endpoint: '/externalRefund', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-InitiateRefund Response': { type: 'InitiateRefundResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-InitiateRefund_RESPONSE': { type: 'InitiateRefundResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-LockTenure Request': { endpoint: '/lockTenure', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-LockTenure_REQUEST': { endpoint: '/lockTenure', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-LockTenure Response': { type: 'LockTenureAPIResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-LockTenure_RESPONSE': { type: 'LockTenureAPIResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-LockTenureEncrypt Request': { endpoint: '/lockTenure', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-LockTenureEncrypt_REQUEST': { endpoint: '/lockTenure', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-LockTenureEncrypt Response': { type: 'LockTenureAPIResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|EarlySalary-LockTenureEncrypt_RESPONSE': { type: 'LockTenureAPIResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|EarlySalary-UpdateOrderStatus Request': { endpoint: '/updateOrder', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-UpdateOrderStatus_REQUEST': { endpoint: '/updateOrder', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-UpdateOrderStatus Response': { type: 'UpdateOrderStatusAPIResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-UpdateOrderStatus_RESPONSE': { type: 'UpdateOrderStatusAPIResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-UpdateOrderStatusEncrypt Request': { endpoint: '/updateOrder', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-UpdateOrderStatusEncrypt_REQUEST': { endpoint: '/updateOrder', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-UpdateOrderStatusEncrypt Response': { type: 'UpdateOrderStatusAPIResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|EarlySalary-UpdateOrderStatusEncrypt_RESPONSE': { type: 'UpdateOrderStatusAPIResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|EarlySalary-BillUpload Request': { endpoint: '/billUpload', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-BillUpload_REQUEST': { endpoint: '/billUpload', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-BillUpload Response': { type: 'BillUploadApiResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-BillUpload_RESPONSE': { type: 'BillUploadApiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-BillUploadEncrypt Request': { endpoint: '/billUpload', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-BillUploadEncrypt_REQUEST': { endpoint: '/billUpload', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-BillUploadEncrypt Response': { type: 'BillUploadApiResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|EarlySalary-BillUploadEncrypt_RESPONSE': { type: 'BillUploadApiResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|EarlySalary-DeactivateOrder Request': { endpoint: '/deactivate-order', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-DeactivateOrder_REQUEST': { endpoint: '/deactivate-order', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-DeactivateOrder Response': { type: 'DeactivateOrderResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-DeactivateOrder_RESPONSE': { type: 'DeactivateOrderResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUW Request': { endpoint: '/uw-decision', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUW_REQUEST': { endpoint: '/uw-decision', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUW Response': { type: 'MerchantConfirmationOnUWResponse', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUW_RESPONSE': { type: 'MerchantConfirmationOnUWResponse', headers: {} },
+  
+  'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUWEncrypt Request': { endpoint: '/uw-decision', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUWEncrypt_REQUEST': { endpoint: '/uw-decision', method: 'POST', service: 'EARLYSALARY', headers: {} },
+  'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUWEncrypt Response': { type: 'MerchantConfirmationOnUWResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUWEncrypt_RESPONSE': { type: 'MerchantConfirmationOnUWResponse', headers: {}, encrypted: true },
+
+  // ============================================================================
+  // BIMAPAY LENDER APIs
+  // ============================================================================
+  
+  'GATEWAY_LENDER|BimaPay-Login Request': { endpoint: '/v1/partner/insurance/{urlSlug}/users/login', method: 'POST', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-Login_REQUEST': { endpoint: '/v1/partner/insurance/{urlSlug}/users/login', method: 'POST', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-Login Response': { type: 'LoginResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|BimaPay-Login_RESPONSE': { type: 'LoginResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|BimaPay-RegisterLoanApplication Request': { endpoint: '/v1/partner/insurance/{urlSlug}/users/register-loan-application', method: 'POST', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-RegisterLoanApplication_REQUEST': { endpoint: '/v1/partner/insurance/{urlSlug}/users/register-loan-application', method: 'POST', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-RegisterLoanApplication Response': { type: 'RegisterLoanApplicationResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|BimaPay-RegisterLoanApplication_RESPONSE': { type: 'RegisterLoanApplicationResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|BimaPay-LoanStatus Request': { endpoint: '/v1/partner/insurance/{urlSlug}/loans/getLoanStatus/{loanId}', method: 'GET', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-LoanStatus_REQUEST': { endpoint: '/v1/partner/insurance/{urlSlug}/loans/getLoanStatus/{loanId}', method: 'GET', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-LoanStatus Response': { type: 'LoanStatusResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|BimaPay-LoanStatus_RESPONSE': { type: 'LoanStatusResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|BimaPay-LoanDetail Request': { endpoint: '/loans/loan-data/{loanId}', method: 'GET', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-LoanDetail_REQUEST': { endpoint: '/loans/loan-data/{loanId}', method: 'GET', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-LoanDetail Response': { type: 'LoanDetailResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|BimaPay-LoanDetail_RESPONSE': { type: 'LoanDetailResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|BimaPay-LoanCancellation Request': { endpoint: '/loans/loan-cancellation', method: 'POST', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-LoanCancellation_REQUEST': { endpoint: '/loans/loan-cancellation', method: 'POST', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-LoanCancellation Response': { type: 'LoanCancellationResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|BimaPay-LoanCancellation_RESPONSE': { type: 'LoanCancellationResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|BimaPay-GetLoanCancellationDetail Request': { endpoint: '/loans/loan-cancellation/details', method: 'GET', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-GetLoanCancellationDetail_REQUEST': { endpoint: '/loans/loan-cancellation/details', method: 'GET', service: 'BIMAPAY', headers: {} },
+  'GATEWAY_LENDER|BimaPay-GetLoanCancellationDetail Response': { type: 'GetLoanCancellationDetailsResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|BimaPay-GetLoanCancellationDetail_RESPONSE': { type: 'GetLoanCancellationDetailsResponse', headers: {}, encrypted: true },
+
+  // ============================================================================
+  // CIBIL BUREAU APIs
+  // ============================================================================
+  
+  'GATEWAY_LENDER|Cibil-FulfillOffer Request': { endpoint: '/GCCS-ws/GlobalCreditPlatformWebServicev2', method: 'POST', service: 'CIBIL', headers: {} },
+  'GATEWAY_LENDER|Cibil-FulfillOffer_REQUEST': { endpoint: '/GCCS-ws/GlobalCreditPlatformWebServicev2', method: 'POST', service: 'CIBIL', headers: {} },
+  'GATEWAY_LENDER|Cibil-FulfillOffer Response': { type: 'HTTPResponse', headers: {}, xml: true },
+  'GATEWAY_LENDER|Cibil-FulfillOffer_RESPONSE': { type: 'HTTPResponse', headers: {}, xml: true },
+  
+  'GATEWAY_LENDER|Cibil-GetAuthenticationQuestions Request': { endpoint: '/GCCS-ws/GlobalCreditPlatformWebServicev2', method: 'POST', service: 'CIBIL', headers: {} },
+  'GATEWAY_LENDER|Cibil-GetAuthenticationQuestions_REQUEST': { endpoint: '/GCCS-ws/GlobalCreditPlatformWebServicev2', method: 'POST', service: 'CIBIL', headers: {} },
+  'GATEWAY_LENDER|Cibil-GetAuthenticationQuestions Response': { type: 'HTTPResponse', headers: {}, xml: true },
+  'GATEWAY_LENDER|Cibil-GetAuthenticationQuestions_RESPONSE': { type: 'HTTPResponse', headers: {}, xml: true },
+  
+  'GATEWAY_LENDER|Cibil-VerifyAuthenticationQuestions Request': { endpoint: '/GCCS-ws/GlobalCreditPlatformWebServicev2', method: 'POST', service: 'CIBIL', headers: {} },
+  'GATEWAY_LENDER|Cibil-VerifyAuthenticationQuestions_REQUEST': { endpoint: '/GCCS-ws/GlobalCreditPlatformWebServicev2', method: 'POST', service: 'CIBIL', headers: {} },
+  'GATEWAY_LENDER|Cibil-VerifyAuthenticationQuestions Response': { type: 'HTTPResponse', headers: {}, xml: true },
+  'GATEWAY_LENDER|Cibil-VerifyAuthenticationQuestions_RESPONSE': { type: 'HTTPResponse', headers: {}, xml: true },
+  
+  'GATEWAY_LENDER|Cibil-GetCustomerAssets Request': { endpoint: '/GCCS-ws/GlobalCreditPlatformWebServicev2', method: 'POST', service: 'CIBIL', headers: {} },
+  'GATEWAY_LENDER|Cibil-GetCustomerAssets_REQUEST': { endpoint: '/GCCS-ws/GlobalCreditPlatformWebServicev2', method: 'POST', service: 'CIBIL', headers: {} },
+  'GATEWAY_LENDER|Cibil-GetCustomerAssets Response': { type: 'HTTPResponse', headers: {}, xml: true },
+  'GATEWAY_LENDER|Cibil-GetCustomerAssets_RESPONSE': { type: 'HTTPResponse', headers: {}, xml: true },
+
+  // ============================================================================
+  // EXPERIAN BUREAU APIs
+  // ============================================================================
+  
+  'GATEWAY_LENDER|Experian-AccessToken Request': { endpoint: '/token', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-AccessToken_REQUEST': { endpoint: '/token', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-AccessToken Response': { type: 'AccessTokenResponse', headers: {} },
+  'GATEWAY_LENDER|Experian-AccessToken_RESPONSE': { type: 'AccessTokenResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Experian-ResendOtpRegistration Request': { endpoint: '/generateMobileOTP.action', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-ResendOtpRegistration_REQUEST': { endpoint: '/generateMobileOTP.action', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-ResendOtpRegistration Response': { type: 'ResendOtpRegistrationResponse', headers: {} },
+  'GATEWAY_LENDER|Experian-ResendOtpRegistration_RESPONSE': { type: 'ResendOtpRegistrationResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Experian-OtpRegistration Request': { endpoint: '/registerSingleActionMobileOTP.action', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-OtpRegistration_REQUEST': { endpoint: '/registerSingleActionMobileOTP.action', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-OtpRegistration Response': { type: 'OtpRegistrationResponse', headers: {} },
+  'GATEWAY_LENDER|Experian-OtpRegistration_RESPONSE': { type: 'OtpRegistrationResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Experian-OtpValidation Request': { endpoint: '/validateMobileOTP.action', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-OtpValidation_REQUEST': { endpoint: '/validateMobileOTP.action', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-OtpValidation Response': { type: 'OtpValidationResponse', headers: {} },
+  'GATEWAY_LENDER|Experian-OtpValidation_RESPONSE': { type: 'OtpValidationResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Experian-OnDemandService Request': { endpoint: '/onDemandRefresh.action', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-OnDemandService_REQUEST': { endpoint: '/onDemandRefresh.action', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-OnDemandService Response': { type: 'OnDemandServiceResponse', headers: {} },
+  'GATEWAY_LENDER|Experian-OnDemandService_RESPONSE': { type: 'OnDemandServiceResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Experian-SingleAction Request': { endpoint: '/single-action', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-SingleAction_REQUEST': { endpoint: '/single-action', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-SingleAction Response': { type: 'SingleActionResponse', headers: {} },
+  'GATEWAY_LENDER|Experian-SingleAction_RESPONSE': { type: 'SingleActionResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Experian-EnhancedMatch Request': { endpoint: '/enhanced-match', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-EnhancedMatch_REQUEST': { endpoint: '/enhanced-match', method: 'POST', service: 'EXPERIAN', headers: {} },
+  'GATEWAY_LENDER|Experian-EnhancedMatch Response': { type: 'SingleActionResponse', headers: {} },
+  'GATEWAY_LENDER|Experian-EnhancedMatch_RESPONSE': { type: 'SingleActionResponse', headers: {} },
+
+  // ============================================================================
+  // MONEYVIEW LENDER APIs
+  // ============================================================================
+  
+  'GATEWAY_LENDER|MoneyView-GetToken Request': { endpoint: '/token', method: 'POST', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-GetToken_REQUEST': { endpoint: '/token', method: 'POST', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-GetToken Response': { type: 'TokenCreationResponse', headers: {} },
+  'GATEWAY_LENDER|MoneyView-GetToken_RESPONSE': { type: 'TokenCreationResponse', headers: {} },
+  
+  'GATEWAY_LENDER|MoneyView-CheckLead Request': { endpoint: '/cl/check-lead', method: 'GET', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-CheckLead_REQUEST': { endpoint: '/cl/check-lead', method: 'GET', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-CheckLead Response': { type: 'CheckLeadResponse', headers: {} },
+  'GATEWAY_LENDER|MoneyView-CheckLead_RESPONSE': { type: 'CheckLeadResponse', headers: {} },
+  
+  'GATEWAY_LENDER|MoneyView-CreateLead Request': { endpoint: '/lead/on-board', method: 'POST', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-CreateLead_REQUEST': { endpoint: '/lead/on-board', method: 'POST', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-CreateLead Response': { type: 'CreateLeadResponse', headers: {} },
+  'GATEWAY_LENDER|MoneyView-CreateLead_RESPONSE': { type: 'CreateLeadResponse', headers: {} },
+  
+  'GATEWAY_LENDER|MoneyView-GetDrawDownOffers Request': { endpoint: '/cl/offers', method: 'GET', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-GetDrawDownOffers_REQUEST': { endpoint: '/cl/offers', method: 'GET', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-GetDrawDownOffers Response': { type: 'GetDrawDownOffersResponse', headers: {} },
+  'GATEWAY_LENDER|MoneyView-GetDrawDownOffers_RESPONSE': { type: 'GetDrawDownOffersResponse', headers: {} },
+  
+  'GATEWAY_LENDER|MoneyView-LeadStatus Request': { endpoint: '/lead/status/{leadId}', method: 'GET', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-LeadStatus_REQUEST': { endpoint: '/lead/status/{leadId}', method: 'GET', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-LeadStatus Response': { type: 'LeadStatusResponse', headers: {} },
+  'GATEWAY_LENDER|MoneyView-LeadStatus_RESPONSE': { type: 'LeadStatusResponse', headers: {} },
+  
+  'GATEWAY_LENDER|MoneyView-GetJourneyUrl Request': { endpoint: '/journey-url/{leadId}', method: 'GET', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-GetJourneyUrl_REQUEST': { endpoint: '/journey-url/{leadId}', method: 'GET', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-GetJourneyUrl Response': { type: 'GetJourneyUrlResponse', headers: {} },
+  'GATEWAY_LENDER|MoneyView-GetJourneyUrl_RESPONSE': { type: 'GetJourneyUrlResponse', headers: {} },
+  
+  'GATEWAY_LENDER|MoneyView-DrawDownStatus Request': { endpoint: '/cl/check-status', method: 'POST', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-DrawDownStatus_REQUEST': { endpoint: '/cl/check-status', method: 'POST', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-DrawDownStatus Response': { type: 'DrawDownStatusResponse', headers: {} },
+  'GATEWAY_LENDER|MoneyView-DrawDownStatus_RESPONSE': { type: 'DrawDownStatusResponse', headers: {} },
+  
+  'GATEWAY_LENDER|MoneyView-ActivityStatus Request': { endpoint: '/lead/activity/status', method: 'POST', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-ActivityStatus_REQUEST': { endpoint: '/lead/activity/status', method: 'POST', service: 'MONEYVIEW', headers: {} },
+  'GATEWAY_LENDER|MoneyView-ActivityStatus Response': { type: 'ActivityStatusResponse', headers: {} },
+  'GATEWAY_LENDER|MoneyView-ActivityStatus_RESPONSE': { type: 'ActivityStatusResponse', headers: {} },
+
+  // ============================================================================
+  // IDFC LENDER APIs
+  // ============================================================================
+  
+  'GATEWAY_LENDER|IDFC-Token Request': { endpoint: '/authorization/oauth2/token', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-Token_REQUEST': { endpoint: '/authorization/oauth2/token', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-Token Response': { type: 'TokenAPIResponse', headers: {} },
+  'GATEWAY_LENDER|IDFC-Token_RESPONSE': { type: 'TokenAPIResponse', headers: {} },
+  
+  'GATEWAY_LENDER|IDFC-Eligibility Request': { endpoint: '/eligibility-check', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-Eligibility_REQUEST': { endpoint: '/eligibility-check', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-Eligibility Response': { type: 'EligibilityResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-Eligibility_RESPONSE': { type: 'EligibilityResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|IDFC-Mandate Request': { endpoint: '/mandate-search', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-Mandate_REQUEST': { endpoint: '/mandate-search', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-Mandate Response': { type: 'MandateSearchResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-Mandate_RESPONSE': { type: 'MandateSearchResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|IDFC-GetIFSC Request': { endpoint: '/getIFSCDetails', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-GetIFSC_REQUEST': { endpoint: '/getIFSCDetails', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-GetIFSC Response': { type: 'GetIFSCResponse[]', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-GetIFSC_RESPONSE': { type: 'GetIFSCResponse[]', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|IDFC-Verification Request': { endpoint: '/verification', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-Verification_REQUEST': { endpoint: '/verification', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-Verification Response': { type: 'VerificationResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-Verification_RESPONSE': { type: 'VerificationResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|IDFC-SendOTP Request': { endpoint: '/generate-otp', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-SendOTP_REQUEST': { endpoint: '/generate-otp', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-SendOTP Response': { type: 'SendOTPResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-SendOTP_RESPONSE': { type: 'SendOTPResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|IDFC-VerifyOTP Request': { endpoint: '/verify-otp', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-VerifyOTP_REQUEST': { endpoint: '/verify-otp', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-VerifyOTP Response': { type: 'VerifyOTPResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-VerifyOTP_RESPONSE': { type: 'VerifyOTPResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|IDFC-LoanCreation Request': { endpoint: '/createloan', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-LoanCreation_REQUEST': { endpoint: '/createloan', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-LoanCreation Response': { type: 'LoanCreationResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-LoanCreation_RESPONSE': { type: 'LoanCreationResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|IDFC-AutoDisbursal Request': { endpoint: '/autodisbursal', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-AutoDisbursal_REQUEST': { endpoint: '/autodisbursal', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-AutoDisbursal Response': { type: 'AutoDisbursalResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-AutoDisbursal_RESPONSE': { type: 'AutoDisbursalResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|IDFC-PostDisbursal Request': { endpoint: '/post-disbursal', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-PostDisbursal_REQUEST': { endpoint: '/post-disbursal', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-PostDisbursal Response': { type: 'EligibilityResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-PostDisbursal_RESPONSE': { type: 'EligibilityResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|IDFC-MandateStatus Request': { endpoint: '/emandate/verification', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-MandateStatus_REQUEST': { endpoint: '/emandate/verification', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-MandateStatus Response': { type: 'EmandateVerificationResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-MandateStatus_RESPONSE': { type: 'EmandateVerificationResponse', headers: {}, encrypted: true },
+  
+  'GATEWAY_LENDER|IDFC-FullCancellation Request': { endpoint: '/fullCancellation', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-FullCancellation_REQUEST': { endpoint: '/fullCancellation', method: 'POST', service: 'IDFC', headers: {} },
+  'GATEWAY_LENDER|IDFC-FullCancellation Response': { type: 'FullCancellationResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|IDFC-FullCancellation_RESPONSE': { type: 'FullCancellationResponse', headers: {}, encrypted: true },
+
+  // ============================================================================
+  // ZYPE LENDER APIs
+  // ============================================================================
+  
+  'GATEWAY_LENDER|Zype-Dedupe Request': { endpoint: '/underwriting/bnpl/customerEligibility', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-Dedupe_REQUEST': { endpoint: '/underwriting/bnpl/customerEligibility', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-Dedupe Response': { type: 'DedupeApiResponse', headers: {} },
+  'GATEWAY_LENDER|Zype-Dedupe_RESPONSE': { type: 'DedupeApiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Zype-PreApproval Request': { endpoint: '/underwriting/bnpl/preApprovalOffer', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-PreApproval_REQUEST': { endpoint: '/underwriting/bnpl/preApprovalOffer', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-PreApproval Response': { type: 'PreApprovalApiResponse', headers: {} },
+  'GATEWAY_LENDER|Zype-PreApproval_RESPONSE': { type: 'PreApprovalApiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Zype-LeadCreation Request': { endpoint: '/bnpl/lead/create', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-LeadCreation_REQUEST': { endpoint: '/bnpl/lead/create', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-LeadCreation Response': { type: 'LeadCreationApiResponse', headers: {} },
+  'GATEWAY_LENDER|Zype-LeadCreation_RESPONSE': { type: 'LeadCreationApiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Zype-FetchCustomerCurrentStatus Request': { endpoint: '/fetchCustomerCurrentStatus', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-FetchCustomerCurrentStatus_REQUEST': { endpoint: '/fetchCustomerCurrentStatus', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-FetchCustomerCurrentStatus Response': { type: 'FetchCustomerCurrentStatusApiResponse', headers: {} },
+  'GATEWAY_LENDER|Zype-FetchCustomerCurrentStatus_RESPONSE': { type: 'FetchCustomerCurrentStatusApiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Zype-Offers Request': { endpoint: '/bnpl/partner/offers', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-Offers_REQUEST': { endpoint: '/bnpl/partner/offers', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-Offers Response': { type: 'OffersApiResponse', headers: {} },
+  'GATEWAY_LENDER|Zype-Offers_RESPONSE': { type: 'OffersApiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Zype-Refund Request': { endpoint: '/bnpl/product/return', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-Refund_REQUEST': { endpoint: '/bnpl/product/return', method: 'POST', service: 'ZYPE', headers: {} },
+  'GATEWAY_LENDER|Zype-Refund Response': { type: 'RefundApiResponse', headers: {} },
+  'GATEWAY_LENDER|Zype-Refund_RESPONSE': { type: 'RefundApiResponse', headers: {} },
+
+  // ============================================================================
+  // RAZORPAY APIs
+  // ============================================================================
+  
+  'GATEWAY_LENDER|Razorpay-CreateCustomer Request': { endpoint: '/customers', method: 'POST', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-CreateCustomer_REQUEST': { endpoint: '/customers', method: 'POST', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-CreateCustomer Response': { type: 'CreateCustomerResponse', headers: {} },
+  'GATEWAY_LENDER|Razorpay-CreateCustomer_RESPONSE': { type: 'CreateCustomerResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Razorpay-CreateOrder Request': { endpoint: '/orders', method: 'POST', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-CreateOrder_REQUEST': { endpoint: '/orders', method: 'POST', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-CreateOrder Response': { type: 'CreateOrderResponse', headers: {} },
+  'GATEWAY_LENDER|Razorpay-CreateOrder_RESPONSE': { type: 'CreateOrderResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Razorpay-CollectAuthorizationTransaction Request': { endpoint: '/payments/create/json', method: 'POST', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-CollectAuthorizationTransaction_REQUEST': { endpoint: '/payments/create/json', method: 'POST', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-CollectAuthorizationTransaction Response': { type: 'CollectAuthorizationResponse', headers: {} },
+  'GATEWAY_LENDER|Razorpay-CollectAuthorizationTransaction_RESPONSE': { type: 'CollectAuthorizationResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaPaymentId Request': { endpoint: '/payments/{paymentId}', method: 'GET', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaPaymentId_REQUEST': { endpoint: '/payments/{paymentId}', method: 'GET', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaPaymentId Response': { type: 'FetchTokenViaPaymentIdResponse', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaPaymentId_RESPONSE': { type: 'FetchTokenViaPaymentIdResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Razorpay-PaymentLink Request': { endpoint: '/payment_links', method: 'POST', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-PaymentLink_REQUEST': { endpoint: '/payment_links', method: 'POST', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-PaymentLink Response': { type: 'PaymentLinkResponse', headers: {} },
+  'GATEWAY_LENDER|Razorpay-PaymentLink_RESPONSE': { type: 'PaymentLinkResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Razorpay-FetchPayment Request': { endpoint: '/payment_links/{id}', method: 'GET', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchPayment_REQUEST': { endpoint: '/payment_links/{id}', method: 'GET', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchPayment Response': { type: 'FetchPaymentAPIStatusResponse', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchPayment_RESPONSE': { type: 'FetchPaymentAPIStatusResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaCustomerId Request': { endpoint: '/customers/{customerId}/tokens', method: 'GET', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaCustomerId_REQUEST': { endpoint: '/customers/{customerId}/tokens', method: 'GET', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaCustomerId Response': { type: 'FetchTokenViaCustomerIdResponse', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaCustomerId_RESPONSE': { type: 'FetchTokenViaCustomerIdResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Razorpay-Subscription Request': { endpoint: '/subscription_registration/auth_links', method: 'POST', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-Subscription_REQUEST': { endpoint: '/subscription_registration/auth_links', method: 'POST', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-Subscription Response': { type: 'SubscriptionAPIResponse', headers: {} },
+  'GATEWAY_LENDER|Razorpay-Subscription_RESPONSE': { type: 'SubscriptionAPIResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaOrderId Request': { endpoint: '/orders/{orderId}/payments', method: 'GET', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaOrderId_REQUEST': { endpoint: '/orders/{orderId}/payments', method: 'GET', service: 'RAZORPAY', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaOrderId Response': { type: 'FetchTokenViaOrderIdResponse', headers: {} },
+  'GATEWAY_LENDER|Razorpay-FetchTokenViaOrderId_RESPONSE': { type: 'FetchTokenViaOrderIdResponse', headers: {} },
+
+  // ============================================================================
+  // PROPELLD LENDER APIs
+  // ============================================================================
+  
+  'GATEWAY_LENDER|Propelld-CreateQuote Request': { endpoint: '/apply/generic', method: 'POST', service: 'PROPELLD', headers: {} },
+  'GATEWAY_LENDER|Propelld-CreateQuote_REQUEST': { endpoint: '/apply/generic', method: 'POST', service: 'PROPELLD', headers: {} },
+  'GATEWAY_LENDER|Propelld-CreateQuote Response': { type: 'CreateQuoteApiResponse', headers: {} },
+  'GATEWAY_LENDER|Propelld-CreateQuote_RESPONSE': { type: 'CreateQuoteApiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Propelld-EmiTable Request': { endpoint: '/emi/table', method: 'POST', service: 'PROPELLD', headers: {} },
+  'GATEWAY_LENDER|Propelld-EmiTable_REQUEST': { endpoint: '/emi/table', method: 'POST', service: 'PROPELLD', headers: {} },
+  'GATEWAY_LENDER|Propelld-EmiTable Response': { type: 'EmiTableApiResponse', headers: {} },
+  'GATEWAY_LENDER|Propelld-EmiTable_RESPONSE': { type: 'EmiTableApiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Propelld-QuoteApproval Request': { endpoint: '/quote/approve', method: 'POST', service: 'PROPELLD', headers: {} },
+  'GATEWAY_LENDER|Propelld-QuoteApproval_REQUEST': { endpoint: '/quote/approve', method: 'POST', service: 'PROPELLD', headers: {} },
+  'GATEWAY_LENDER|Propelld-QuoteApproval Response': { type: 'QuoteApproveApiResponse', headers: {} },
+  'GATEWAY_LENDER|Propelld-QuoteApproval_RESPONSE': { type: 'QuoteApproveApiResponse', headers: {} },
+  
+  'GATEWAY_LENDER|Propelld-QuoteStatus Request': { endpoint: '/quote/status', method: 'POST', service: 'PROPELLD', headers: {} },
+  'GATEWAY_LENDER|Propelld-QuoteStatus_REQUEST': { endpoint: '/quote/status', method: 'POST', service: 'PROPELLD', headers: {} },
+  'GATEWAY_LENDER|Propelld-QuoteStatus Response': { type: 'QuoteStatusApiResponse', headers: {} },
+  'GATEWAY_LENDER|Propelld-QuoteStatus_RESPONSE': { type: 'QuoteStatusApiResponse', headers: {} },
+
+  // ============================================================================
+  // SHOPSE LENDER APIs
+  // ============================================================================
+  
+  'GATEWAY_LENDER|ShopSe-CheckNTBEligibility Request': { endpoint: '/v1/checkNtbEligibility', method: 'POST', service: 'SHOPSE', headers: {} },
+  'GATEWAY_LENDER|ShopSe-CheckNTBEligibility_REQUEST': { endpoint: '/v1/checkNtbEligibility', method: 'POST', service: 'SHOPSE', headers: {} },
+  'GATEWAY_LENDER|ShopSe-CheckNTBEligibility Response': { type: 'CheckNTBEligibilityResponse', headers: {} },
+  'GATEWAY_LENDER|ShopSe-CheckNTBEligibility_RESPONSE': { type: 'CheckNTBEligibilityResponse', headers: {} },
+  
+  'GATEWAY_LENDER|ShopSe-EligibilityPolling Request': { endpoint: '/v1/ntbEligibilityPolling', method: 'GET', service: 'SHOPSE', headers: {} },
+  'GATEWAY_LENDER|ShopSe-EligibilityPolling_REQUEST': { endpoint: '/v1/ntbEligibilityPolling', method: 'GET', service: 'SHOPSE', headers: {} },
+  'GATEWAY_LENDER|ShopSe-EligibilityPolling Response': { type: 'EligibilityPollingResponse', headers: {} },
+  'GATEWAY_LENDER|ShopSe-EligibilityPolling_RESPONSE': { type: 'EligibilityPollingResponse', headers: {} },
+  
+  'GATEWAY_LENDER|ShopSe-NTBEnquiry Request': { endpoint: '/v2/enquiry/{transactionId}', method: 'GET', service: 'SHOPSE', headers: {} },
+  'GATEWAY_LENDER|ShopSe-NTBEnquiry_REQUEST': { endpoint: '/v2/enquiry/{transactionId}', method: 'GET', service: 'SHOPSE', headers: {} },
+  'GATEWAY_LENDER|ShopSe-NTBEnquiry Response': { type: 'NTBEnquiryResponse', headers: {} },
+  'GATEWAY_LENDER|ShopSe-NTBEnquiry_RESPONSE': { type: 'NTBEnquiryResponse', headers: {} },
+  
+  'GATEWAY_LENDER|ShopSe-Refund Request': { endpoint: '/v2/transactions/{transactionId}/refunds', method: 'POST', service: 'SHOPSE', headers: {} },
+  'GATEWAY_LENDER|ShopSe-Refund_REQUEST': { endpoint: '/v2/transactions/{transactionId}/refunds', method: 'POST', service: 'SHOPSE', headers: {} },
+  'GATEWAY_LENDER|ShopSe-Refund Response': { type: 'NTBRefundResponse', headers: {} },
+  'GATEWAY_LENDER|ShopSe-Refund_RESPONSE': { type: 'NTBRefundResponse', headers: {} },
+  
+  'GATEWAY_LENDER|ShopSe-Constants Request': { endpoint: '/v1/profile/constants', method: 'GET', service: 'SHOPSE', headers: {} },
+  'GATEWAY_LENDER|ShopSe-Constants_REQUEST': { endpoint: '/v1/profile/constants', method: 'GET', service: 'SHOPSE', headers: {} },
+  'GATEWAY_LENDER|ShopSe-Constants Response': { type: 'ConstantsResponse', headers: {} },
+  'GATEWAY_LENDER|ShopSe-Constants_RESPONSE': { type: 'ConstantsResponse', headers: {} },
   'GATEWAY_LENDER|Themis-HardEligibility Request': { endpoint: '/lsp/hardEligibility', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_LENDER|Themis-HardEligibility_REQUEST': { endpoint: '/lsp/hardEligibility', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_LENDER|Themis-GrantLoan Request': { endpoint: '/lsp/grantLoan', method: 'POST', service: 'LSP', headers: {} },
@@ -303,12 +909,14 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LSP|Themis-FetchOffer_RESPONSE': { endpoint: '/v1/themis/fetchOffer/callback', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_LSP|Themis-SelectOffer_REQUEST': { endpoint: '/v1/themis/selectOffer', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_LSP|Themis-SelectOffer_RESPONSE': { endpoint: '/v1/themis/selectOffer/callback', method: 'POST', service: 'LSP', headers: {} },
+  'GATEWAY_LSP|FETCH_OFFER_ASYNC_RESPONSE_REQUEST': { endpoint: "/v1.0/fetchOfferResponse", method: 'POST', service: 'LSP', headers: {}},
+  'GATEWAY_LSP|FETCH_OFFER_ASYNC_RESPONSE_RESPONSE': { endpoint: "/v1.0/fetchOfferResponse", method: 'POST', service: 'LSP', headers: {}},
   
   // ==================== GATEWAY_THEMIS (Gateway to Themis - Forwarding) ====================
-  'GATEWAY_THEMIS|Themis-Eligibility_REQUEST': { endpoint: '/themis/v5/sortLenders', method: 'POST', service: 'THEMIS', headers: {} },
+  'GATEWAY_THEMIS|Themis-Eligibility_REQUEST': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'THEMIS', headers: {} },
   'GATEWAY_THEMIS|Themis-Eligibility_RESPONSE': { endpoint: '/v1/themis/eligibility/forward', method: 'POST', service: 'GW', headers: {} },
   'GATEWAY_THEMIS|Themis-PriorityLogic_REQUEST': { endpoint: '/themis/v5/priorityLogic', method: 'POST', service: 'THEMIS', headers: {} },
-  'GATEWAY_THEMIS|Themis-PriorityLogic_RESPONSE': { endpoint: '/v1/themis/priorityLogic/forward', method: 'POST', service: 'GW', headers: {} }
+  'GATEWAY_THEMIS|Themis-PriorityLogic_RESPONSE': { endpoint: '/v1/themis/priorityLogic/forward', method: 'POST', service: 'GW', headers: {} },
 };
 
 // API endpoint mapping: endpoint -> { logTag, api, sourceDestination, headers }
@@ -317,26 +925,26 @@ export const API_TO_LOGTAG_MAP = {
   // FlipKart APIs
   '/flipkart/eligibility': { logTag: 'FlipKart-Eligibility_INCOMING', api: '/flipkart/eligibility', sourceDestination: 'APP_WRAPPER', headers: {} },
   '/flipkart/eligibility': { logTag: 'FlipKart-Eligibility_REQUEST', api: '/flipkart/eligibility', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/eligibility/status': { logTag: 'FlipKart-EligibilityStatus_INCOMING', api: '/flipkart/eligibility/status', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/eligibility/lender': { logTag: 'FlipKart-HardEligibility_INCOMING', api: '/flipkart/eligibility/lender', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/eligibility/lender/status': { logTag: 'FlipKart-HardEligibilityStatus_INCOMING', api: '/flipkart/eligibility/lender/status', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/getKFS': { logTag: 'FlipKart-GetKFS_INCOMING', api: '/flipkart/getKFS', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/getRedirectionUrl': { logTag: 'FlipKart-GetRedirectionURL_INCOMING', api: '/flipkart/getRedirectionUrl', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/txns': { logTag: 'FlipKart-InitaiteTxn_INCOMING', api: '/flipkart/txns', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/order/status': { logTag: 'FlipKart-OrderStatus_INCOMING', api: '/flipkart/order/status', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/refund': { logTag: 'FlipKart-Refund_INCOMING', api: '/flipkart/refund', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/fetch/status': { logTag: 'FlipKart-FetchStatus_INCOMING', api: '/flipkart/fetch/status', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/createLoan': { logTag: 'FlipKart-CreateLoan_INCOMING', api: '/flipkart/createLoan', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/eligibility/status': { logTag: 'FlipKart-EligibilityStatus_REQUEST', api: '/flipkart/eligibility/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/eligibility/lender': { logTag: 'FlipKart-HardEligibility_REQUEST', api: '/flipkart/eligibility/lender', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/eligibility/lender/status': { logTag: 'FlipKart-HardEligibilityStatus_REQUEST', api: '/flipkart/eligibility/lender/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/getKFS': { logTag: 'FlipKart-GetKFS_REQUEST', api: '/flipkart/getKFS', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/getRedirectionUrl': { logTag: 'FlipKart-GetRedirectionURL_REQUEST', api: '/flipkart/getRedirectionUrl', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/txns': { logTag: 'FlipKart-InitaiteTxn_REQUEST', api: '/flipkart/txns', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/order/status': { logTag: 'FlipKart-OrderStatus_REQUEST', api: '/flipkart/order/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/refund': { logTag: 'FlipKart-Refund_REQUEST', api: '/flipkart/refund', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/fetch/status': { logTag: 'FlipKart-FetchStatus_REQUEST', api: '/flipkart/fetch/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/createLoan': { logTag: 'FlipKart-CreateLoan_REQUEST', api: '/flipkart/createLoan', sourceDestination: 'APP_WRAPPER', headers: {} },
   
   // FlipKart Line Onboarding APIs
-  '/flipkart/initiate/line/eligibility': { logTag: 'FlipKart-LineOnboarding-Eligibility_INCOMING', api: '/flipkart/initiate/line/eligibility', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/initiate/line/eligibility/status': { logTag: 'FlipKart-LineOnboarding-EligibilityStatus_INCOMING', api: '/flipkart/initiate/line/eligibility/status', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/line/eligibility/lender': { logTag: 'FlipKart-LineOnboarding-HardEligibility_INCOMING', api: '/flipkart/line/eligibility/lender', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/line/eligibility/lender/status': { logTag: 'FlipKart-LineOnboarding-HardEligibilityStatus_INCOMING', api: '/flipkart/line/eligibility/lender/status', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/line/getRedirectionUrl': { logTag: 'FlipKart-LineOnboarding-GetRedirectionURL_INCOMING', api: '/flipkart/line/getRedirectionUrl', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/line/getKFS': { logTag: 'FlipKart-LineOnboarding-GetKFS_INCOMING', api: '/flipkart/line/getKFS', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/customer/line/status': { logTag: 'FlipKart-LineOnboarding-LineStatus_INCOMING', api: '/flipkart/customer/line/status', sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/fetch/line/status': { logTag: 'FlipKart-LineOnboarding-FetchLineStatus_INCOMING', api: '/flipkart/fetch/line/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/initiate/line/eligibility': { logTag: 'FlipKart-LineOnboarding-Eligibility_REQUEST', api: '/flipkart/initiate/line/eligibility', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/initiate/line/eligibility/status': { logTag: 'FlipKart-LineOnboarding-EligibilityStatus_REQUEST', api: '/flipkart/initiate/line/eligibility/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/line/eligibility/lender': { logTag: 'FlipKart-LineOnboarding-HardEligibility_REQUEST', api: '/flipkart/line/eligibility/lender', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/line/eligibility/lender/status': { logTag: 'FlipKart-LineOnboarding-HardEligibilityStatus_REQUEST', api: '/flipkart/line/eligibility/lender/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/line/getRedirectionUrl': { logTag: 'FlipKart-LineOnboarding-GetRedirectionURL_REQUEST', api: '/flipkart/line/getRedirectionUrl', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/line/getKFS': { logTag: 'FlipKart-LineOnboarding-GetKFS_REQUEST', api: '/flipkart/line/getKFS', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/customer/line/status': { logTag: 'FlipKart-LineOnboarding-LineStatus_REQUEST', api: '/flipkart/customer/line/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/fetch/line/status': { logTag: 'FlipKart-LineOnboarding-FetchLineStatus_REQUEST', api: '/flipkart/fetch/line/status', sourceDestination: 'APP_WRAPPER', headers: {} },
   '/flipkart/txn/eligibility/line': { logTag: 'FlipKart-RealTimeEligibility_INCOMING', api: '/flipkart/txn/eligibility/line', sourceDestination: 'APP_WRAPPER', headers: {} },
   
   // FlipKart 2W APIs
@@ -434,7 +1042,10 @@ export const API_TO_LOGTAG_MAP = {
   '/api/v3.3/verifyCustomer': { logTag: 'LSP-VerifyCustomer_INCOMING', api: '/api/v3.3/verifyCustomer', sourceDestination: 'APP_CORE', headers: {} },
   '/api/themis/rules': { logTag: 'LSP-Rules_INCOMING', api: '/api/themis/rules', sourceDestination: 'APP_CORE', headers: {} },
   
+  
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing) ====================
+  "/v1.0/fetchOfferResponse" : {logTag: "FETCH_OFFER_ASYNC_RESPONSE_REQUEST", api: "/v1.0/fetchOfferResponse", sourceDestination: "GATEWAY_LSP", headers: {}},
+  '/v1.0/fetchOfferRequest' : {logTag: 'LSP-FetchOfferRequest_REQUEST', api: '/gateway/v1.0/fetchOfferRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/v1.0/eligibility': { logTag: 'LSP-Eligibility_REQUEST', api: '/gateway/v1.0/eligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/eligibility': { logTag: 'LSP-Eligibility_REQUEST', api: '/gateway/v1.0/eligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/selectOffer': { logTag: 'LSP-SelectOffer_OUTGOING', api: '/gateway/v1.0/selectOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
@@ -467,7 +1078,7 @@ export const API_TO_LOGTAG_MAP = {
   '/gateway/v1.0/refundStatus-request': { logTag: 'LSP-RefundStatusV2_REQUEST', api: '/gateway/v1.0/refundStatus', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/grantLoan-request': { logTag: 'LSP-GrantLoanRequest_REQUEST', api: '/gateway/v1.0/grantLoan', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/disbursement/trigger-request': { logTag: 'LSP-TriggerDisbursementAuth_REQUEST', api: '/gateway/v1.0/disbursement/trigger', sourceDestination: 'CORE_GATEWAY', headers: {} },
-  '/gateway/v1.0/fetchOffer-request': { logTag: 'LSP-FetchOfferRequest_REQUEST', api: '/gateway/v1.0/fetchOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v1.0/fetchOffer': { logTag: 'LSP-FetchOfferRequest_REQUEST', api: '/gateway/v1.0/fetchOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/fetchOfferStatus-request': { logTag: 'LSP-FetchOfferStatus_REQUEST', api: '/gateway/v1.0/fetchOfferStatus', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/txnIntent-request': { logTag: 'LSP-TxnIntent_REQUEST', api: '/gateway/v1.0/txnIntent', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/txnIntentStatus-request': { logTag: 'LSP-TxnIntentStatus_REQUEST', api: '/gateway/v1.0/txnIntentStatus', sourceDestination: 'CORE_GATEWAY', headers: {} },
@@ -501,7 +1112,7 @@ export const API_TO_LOGTAG_MAP = {
   '/v1/lsp/loanStatus/response': { logTag: 'LSP-LoanStatus_OUTGOING', api: '/v1/lsp/loanStatus/response', sourceDestination: 'CORE_APP', headers: {} },
   '/webhook/lsp/callback': { logTag: 'LSP-Callback Response', api: '/webhook/lsp/callback', sourceDestination: 'CORE_APP', headers: {} },
   
-  '/lsp/softEligibility': { logTag: 'Themis-Eligibility_REQUEST', api: '/lsp/softEligibility', sourceDestination: 'GATEWAY_LSP', headers: {} },
+  '/lsp/softEligibility': { logTag: 'Themis-Eligibility_REQUEST', api: '/lsp/softEligibility', sourceDestination: 'GATEWAY_THEMIS', headers: {} },
   '/lsp/hardEligibility': { logTag: 'Themis-HardEligibility_REQUEST', api: '/lsp/hardEligibility', sourceDestination: 'GATEWAY_LSP', headers: {} },
   '/lsp/grantLoan': { logTag: 'Themis-GrantLoan_REQUEST', api: '/lsp/grantLoan', sourceDestination: 'GATEWAY_LSP', headers: {} },
   '/lsp/disbursement': { logTag: 'Themis-Disbursement_REQUEST', api: '/lsp/disbursement', sourceDestination: 'GATEWAY_LSP', headers: {} },
@@ -518,7 +1129,10 @@ export const API_TO_LOGTAG_MAP = {
   '/v1/themis/fetchOffer/response': { logTag: 'Themis-FetchOffer Response', api: '/v1/themis/fetchOffer/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
   '/v1/themis/kyc/response': { logTag: 'Themis-KYC Response', api: '/v1/themis/kyc/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
   '/v1/themis/repayment/response': { logTag: 'Themis-Repayment Response', api: '/v1/themis/repayment/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
-  '/v1/themis/offers/response': { logTag: 'ThemisGenerateOffersResponse Response', api: '/v1/themis/offers/response', sourceDestination: 'LENDER_GATEWAY', headers: {} }
+  '/v1/themis/offers/response': { logTag: 'ThemisGenerateOffersResponse Response', api: '/v1/themis/offers/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
+
+
+  '/api/v1/authenticate-token': {logTag: 'HDB_TOKEN_API_REQUEST', api: '/api/v1/authenticate-token', sourceDestination: 'GATEWAY_LENDER', headers: {} }
 };
 
 // Destinations that should not be called (external services)
