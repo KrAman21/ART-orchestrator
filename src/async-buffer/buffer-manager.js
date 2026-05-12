@@ -73,7 +73,11 @@ export class BufferManager {
     
     this._signalWorkAvailable();
     
-    logger.info('Added response to buffer', { requestId, bufferSize: this.responseBuffer.size });
+    logger.info('Added response to buffer', { 
+      requestId, 
+      bufferSize: this.responseBuffer.size,
+      response: isError ? { error: response.message, status: response.statusCode } : { status: response.status, statusText: response.statusText, data: JSON.stringify(response.data).substring(0, 500) }
+    });
   }
   
   registerPendingPromise(requestId, entry, timeoutMs = null) {

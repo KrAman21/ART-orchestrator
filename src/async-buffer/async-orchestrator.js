@@ -10,14 +10,19 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     super(logs, config);
     
     this.bufferManager = new BufferManager({
-      defaultTimeoutMs: 60000  // Fixed at 60s regardless of config
+      defaultTimeoutMs: 60000
     });
     
-    this.httpClient = new NonBlockingHttpClient(this.bufferManager);
+    this.httpClient = new NonBlockingHttpClient(
+      this.bufferManager,
+      config.reportGenerator,
+      config.orderId
+    );
     
     this.isPolling = false;
     this.pollIntervalMs = config.pollIntervalMs || 800;
     this.shouldStop = false;
+    this.orderId = config.orderId;
   }
   
   async start() {
@@ -567,7 +572,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       ...super.getResults(),
       bufferStats: this.bufferManager.getStats(),
       activeHttpRequests: this.httpClient.getActiveRequestCount(),
-      isPolling: this.isPolling
+      isPolling: this.isPolling,
+      failedBufferRequests: this.httpClient.failedRequests || []
     };
   }
   

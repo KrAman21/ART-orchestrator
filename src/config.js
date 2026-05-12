@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { EnvironmentController } from './services/environment-controller.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,11 +17,12 @@ export function getLenderId(orgId) {
   return LENDER_ORG_ID_TO_ID_MAP[orgId] || null;
 }
 
-// Service configuration mappings
+export const envController = new EnvironmentController(process.env.NODE_ENV);
+const currentEnv = envController.getConfig();
 export const SERVICE_MAP = {
-  LSP: { baseUrl: process.env.LSP_URL || 'http://localhost:4232', name: 'LSP' },
-  GW: { baseUrl: process.env.GW_URL || 'http://localhost:2344', name: 'Gateway' },
-  GATEWAY: { baseUrl: process.env.GW_URL || 'http://localhost:2344', name: 'Gateway' }
+  LSP: { baseUrl: currentEnv.LSP.baseUrl, name: currentEnv.LSP.name },
+  GW: { baseUrl: currentEnv.GW.baseUrl, name: currentEnv.GW.name },
+  GATEWAY: { baseUrl: currentEnv.GATEWAY.baseUrl, name: currentEnv.GATEWAY.name }
 };
 
 export const LSP_API_CONFIG = {

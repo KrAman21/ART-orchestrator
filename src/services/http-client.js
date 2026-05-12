@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger.js';
-import { MOCK_CONFIG, LSP_API_CONFIG, QAPI_CONFIG } from '../config.js';
+import { MOCK_CONFIG } from '../config.js';
+import { fetchS3TraceLogs as fetchS3TraceLogsFromClient } from '../log-fetcher/s3-trace-logs-client.js';
 
 /**
  * Simple HTTP client for service calls
@@ -214,78 +215,7 @@ export async function checkHealth(serviceConfig) {
   }
 }
 
-export async function fetchS3TraceLogs(merchantId, orderId) {
-  logger.info('Fetching S3 Trace Logs (API call disabled - using dummy data)', {
-    merchantId,
-    orderId
-  });
-
-  /* API CALL DISABLED FOR TESTING
-  const id = `${merchantId}/${orderId}`;
-  const endpoint = `/credit/api/v3.3/dashboard/getS3TraceLogs?lookup_on=SECONDARY&id=${encodeURIComponent(id)}&id_type=merchant_id/order_id`;
-  const url = `${LSP_API_CONFIG.baseUrl}${endpoint}`;
-
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'session-token': LSP_API_CONFIG.sessionToken
-      }
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error('Failed to fetch S3 Trace Logs', {
-        status: response.status,
-        statusText: response.statusText,
-        error: errorText
-      });
-      return {
-        success: false,
-        error: `HTTP error! status: ${response.status}`,
-        message: errorText
-      };
-    }
-
-    const data = await response.json();
-
-    logger.info('Successfully fetched S3 Trace Logs', {
-      merchantId,
-      orderId,
-      logCount: Array.isArray(data) ? data.length : 'unknown'
-    });
-
-    return {
-      success: true,
-      logs: data,
-      count: Array.isArray(data) ? data.length : 0
-    };
-
-  } catch (error) {
-    logger.error('Exception while fetching S3 Trace Logs', {
-      merchantId,
-      orderId,
-      error: error.message,
-      stack: error.stack
-    });
-
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-  */
-
-  // Return dummy success response for testing
-  return {
-    success: true,
-    logs: [],
-    count: 0,
-    message: 'API call disabled - using dummy data'
-  };
-}
+export { fetchS3TraceLogsFromClient as fetchS3TraceLogs };
 
 export async function fetchOrderIdsFromQAPI(startDate, endDate) {
   logger.info('Fetching order IDs from QAPI (API call disabled - using dummy data)', {

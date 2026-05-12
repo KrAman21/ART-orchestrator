@@ -1,0 +1,391 @@
+{
+  "executionId": "art-1778577413322",
+  "executionStartTime": "2026-05-12T09:16:19.128Z",
+  "executionEndTime": "2026-05-12T09:16:53.322Z",
+  "totalDuration": 34194,
+  "overallStatus": "PARTIAL_FAILURE",
+  "summary": {
+    "totalOrders": 3,
+    "completed": 2,
+    "failed": 0,
+    "stuck": 0,
+    "timeout": 1,
+    "totalBufferFailures": 1,
+    "ordersWithBufferFailures": 1
+  },
+  "bufferFailuresSummary": {
+    "totalFailures": 1,
+    "failuresByOrder": {
+      "1778478373": {
+        "count": 1,
+        "failures": [
+          {
+            "timestamp": "2026-05-12T09:16:25.008Z",
+            "requestId": "bab2849e-bcfb-48f4-89b6-6f70d16bb29e",
+            "logTag": "FlipKart-Eligibility_REQUEST",
+            "sourceDestination": "APP_WRAPPER",
+            "endpoint": "/flipkart/eligibility",
+            "baseUrl": "http://localhost:8020",
+            "requestPayload": {
+              "order_basket": [
+                {
+                  "sub_category": "Mobile",
+                  "unit": 1,
+                  "product_price": 1400000,
+                  "brand": "vivo",
+                  "no_cost_details": null,
+                  "total_amount": 1400000,
+                  "product_name": null,
+                  "category": "Mobile"
+                }
+              ],
+              "skip_line_lender": null,
+              "user_details": {
+                "last_name": "TestLast",
+                "mobile_number": "9876543210",
+                "marital_status": "SINGLE",
+                "monthly_income": 8000000,
+                "date_of_birth": "01-01-1990",
+                "pan_number": "EHZPA1234F",
+                "employment_type": "SALARIED",
+                "bureau": null,
+                "gender": "MALE",
+                "email_id": null,
+                "first_name": "TestFirst"
+              },
+              "expected_emi_plans": [
+                {
+                  "subvention_amount": 100000,
+                  "tenure": 6,
+                  "roi": "22",
+                  "emi_type": "NO_COST"
+                }
+              ],
+              "delivery_address": null,
+              "risk_details": {
+                "pcd_gmv_value_24m": "34",
+                "add_age": "200",
+                "pcd_orders_count_24m": "34",
+                "account_age": "XX0",
+                "score_2_bucket": "2",
+                "affluence_score": "H",
+                "recent_pincode": "400063",
+                "add_month_since_last_delivery_date": "5",
+                "score_1_bucket": "2",
+                "pcd_month_since_first_delivery_date": "34"
+              },
+              "lender_metadata": null,
+              "order_expiry_time": "2026-05-12T09:26:24.997Z",
+              "consents": [
+                {
+                  "ip_address": "XXXXXXX59.184",
+                  "consent_type": "MFI",
+                  "timestamp": "2025-05-26T07:34:19.7Z",
+                  "consent_message": "I agree to the T&Cs of TUCIBIL and hereby provide explicit consent to share my Credit Information with FAPL. I confirm the accuracy of my details, acceptFAPL's Privacy Policy and T&Cs, and confirm my annual household income is over %s 3 Lakhs"
+                }
+              ],
+              "amount": 1400000,
+              "address": [
+                {
+                  "pincode": "560095",
+                  "address_line_2": "Near Test Park",
+                  "address_line_1": "123 Test Street",
+                  "state": "Maharashtra",
+                  "city": "Pune",
+                  "address_type": "DELIVERY"
+                }
+              ],
+              "order_id": "1778478373",
+              "order_amount_breakup": {
+                "delivery_fee": 700,
+                "other_fee": 610,
+                "platform_fee": 500,
+                "total_product_amount": 1400000,
+                "offer_handling_fee": 800,
+                "packaging_fee": 6900
+              },
+              "customer_id": "Prajwal1778478373"
+            },
+            "error": true,
+            "errorMessage": "API FAILURE: Delivery Address Not Found",
+            "errorCode": "INVALID_VALUE",
+            "errorStack": null,
+            "httpStatus": 200,
+            "responseData": "{\"status\":\"FAILURE\",\"error\":{\"error_message\":\"Delivery Address Not Found\",\"error_code\":\"INVALID_VALUE\"}}"
+          }
+        ]
+      }
+    },
+    "allFailures": [
+      {
+        "orderId": "1778478373",
+        "timestamp": "2026-05-12T09:16:25.008Z",
+        "requestId": "bab2849e-bcfb-48f4-89b6-6f70d16bb29e",
+        "logTag": "FlipKart-Eligibility_REQUEST",
+        "sourceDestination": "APP_WRAPPER",
+        "endpoint": "/flipkart/eligibility",
+        "baseUrl": "http://localhost:8020",
+        "requestPayload": {
+          "order_basket": [
+            {
+              "sub_category": "Mobile",
+              "unit": 1,
+              "product_price": 1400000,
+              "brand": "vivo",
+              "no_cost_details": null,
+              "total_amount": 1400000,
+              "product_name": null,
+              "category": "Mobile"
+            }
+          ],
+          "skip_line_lender": null,
+          "user_details": {
+            "last_name": "TestLast",
+            "mobile_number": "9876543210",
+            "marital_status": "SINGLE",
+            "monthly_income": 8000000,
+            "date_of_birth": "01-01-1990",
+            "pan_number": "EHZPA1234F",
+            "employment_type": "SALARIED",
+            "bureau": null,
+            "gender": "MALE",
+            "email_id": null,
+            "first_name": "TestFirst"
+          },
+          "expected_emi_plans": [
+            {
+              "subvention_amount": 100000,
+              "tenure": 6,
+              "roi": "22",
+              "emi_type": "NO_COST"
+            }
+          ],
+          "delivery_address": null,
+          "risk_details": {
+            "pcd_gmv_value_24m": "34",
+            "add_age": "200",
+            "pcd_orders_count_24m": "34",
+            "account_age": "XX0",
+            "score_2_bucket": "2",
+            "affluence_score": "H",
+            "recent_pincode": "400063",
+            "add_month_since_last_delivery_date": "5",
+            "score_1_bucket": "2",
+            "pcd_month_since_first_delivery_date": "34"
+          },
+          "lender_metadata": null,
+          "order_expiry_time": "2026-05-12T09:26:24.997Z",
+          "consents": [
+            {
+              "ip_address": "XXXXXXX59.184",
+              "consent_type": "MFI",
+              "timestamp": "2025-05-26T07:34:19.7Z",
+              "consent_message": "I agree to the T&Cs of TUCIBIL and hereby provide explicit consent to share my Credit Information with FAPL. I confirm the accuracy of my details, acceptFAPL's Privacy Policy and T&Cs, and confirm my annual household income is over %s 3 Lakhs"
+            }
+          ],
+          "amount": 1400000,
+          "address": [
+            {
+              "pincode": "560095",
+              "address_line_2": "Near Test Park",
+              "address_line_1": "123 Test Street",
+              "state": "Maharashtra",
+              "city": "Pune",
+              "address_type": "DELIVERY"
+            }
+          ],
+          "order_id": "1778478373",
+          "order_amount_breakup": {
+            "delivery_fee": 700,
+            "other_fee": 610,
+            "platform_fee": 500,
+            "total_product_amount": 1400000,
+            "offer_handling_fee": 800,
+            "packaging_fee": 6900
+          },
+          "customer_id": "Prajwal1778478373"
+        },
+        "error": true,
+        "errorMessage": "API FAILURE: Delivery Address Not Found",
+        "errorCode": "INVALID_VALUE",
+        "errorStack": null,
+        "httpStatus": 200,
+        "responseData": "{\"status\":\"FAILURE\",\"error\":{\"error_message\":\"Delivery Address Not Found\",\"error_code\":\"INVALID_VALUE\"}}"
+      }
+    ]
+  },
+  "orders": [
+    {
+      "orderId": "1778478373",
+      "merchantId": "flipkart",
+      "orderIndex": 1,
+      "totalOrders": 3,
+      "status": "TIMEOUT",
+      "startTime": "2026-05-12T09:16:19.129Z",
+      "endTime": "2026-05-12T09:16:35.004Z",
+      "duration": 15875,
+      "logsProcessed": 0,
+      "logsTotal": 40,
+      "currentLogTag": null,
+      "currentLogIndex": 0,
+      "errors": [],
+      "stuckAt": {
+        "timestamp": "2026-05-12T09:16:35.002Z",
+        "logTag": "FlipKart-Eligibility_RESPONSE",
+        "logIndex": 1,
+        "reason": "Timeout after 0 minutes"
+      },
+      "stopReason": "Timeout: Max journey time of 0 minutes exceeded",
+      "artResults": {
+        "passed": 0,
+        "failed": 1,
+        "total": 0
+      },
+      "timeline": [],
+      "bufferFailures": [
+        {
+          "timestamp": "2026-05-12T09:16:25.008Z",
+          "requestId": "bab2849e-bcfb-48f4-89b6-6f70d16bb29e",
+          "logTag": "FlipKart-Eligibility_REQUEST",
+          "sourceDestination": "APP_WRAPPER",
+          "endpoint": "/flipkart/eligibility",
+          "baseUrl": "http://localhost:8020",
+          "requestPayload": {
+            "order_basket": [
+              {
+                "sub_category": "Mobile",
+                "unit": 1,
+                "product_price": 1400000,
+                "brand": "vivo",
+                "no_cost_details": null,
+                "total_amount": 1400000,
+                "product_name": null,
+                "category": "Mobile"
+              }
+            ],
+            "skip_line_lender": null,
+            "user_details": {
+              "last_name": "TestLast",
+              "mobile_number": "9876543210",
+              "marital_status": "SINGLE",
+              "monthly_income": 8000000,
+              "date_of_birth": "01-01-1990",
+              "pan_number": "EHZPA1234F",
+              "employment_type": "SALARIED",
+              "bureau": null,
+              "gender": "MALE",
+              "email_id": null,
+              "first_name": "TestFirst"
+            },
+            "expected_emi_plans": [
+              {
+                "subvention_amount": 100000,
+                "tenure": 6,
+                "roi": "22",
+                "emi_type": "NO_COST"
+              }
+            ],
+            "delivery_address": null,
+            "risk_details": {
+              "pcd_gmv_value_24m": "34",
+              "add_age": "200",
+              "pcd_orders_count_24m": "34",
+              "account_age": "XX0",
+              "score_2_bucket": "2",
+              "affluence_score": "H",
+              "recent_pincode": "400063",
+              "add_month_since_last_delivery_date": "5",
+              "score_1_bucket": "2",
+              "pcd_month_since_first_delivery_date": "34"
+            },
+            "lender_metadata": null,
+            "order_expiry_time": "2026-05-12T09:26:24.997Z",
+            "consents": [
+              {
+                "ip_address": "XXXXXXX59.184",
+                "consent_type": "MFI",
+                "timestamp": "2025-05-26T07:34:19.7Z",
+                "consent_message": "I agree to the T&Cs of TUCIBIL and hereby provide explicit consent to share my Credit Information with FAPL. I confirm the accuracy of my details, acceptFAPL's Privacy Policy and T&Cs, and confirm my annual household income is over %s 3 Lakhs"
+              }
+            ],
+            "amount": 1400000,
+            "address": [
+              {
+                "pincode": "560095",
+                "address_line_2": "Near Test Park",
+                "address_line_1": "123 Test Street",
+                "state": "Maharashtra",
+                "city": "Pune",
+                "address_type": "DELIVERY"
+              }
+            ],
+            "order_id": "1778478373",
+            "order_amount_breakup": {
+              "delivery_fee": 700,
+              "other_fee": 610,
+              "platform_fee": 500,
+              "total_product_amount": 1400000,
+              "offer_handling_fee": 800,
+              "packaging_fee": 6900
+            },
+            "customer_id": "Prajwal1778478373"
+          },
+          "error": true,
+          "errorMessage": "API FAILURE: Delivery Address Not Found",
+          "errorCode": "INVALID_VALUE",
+          "errorStack": null,
+          "httpStatus": 200,
+          "responseData": "{\"status\":\"FAILURE\",\"error\":{\"error_message\":\"Delivery Address Not Found\",\"error_code\":\"INVALID_VALUE\"}}"
+        }
+      ]
+    },
+    {
+      "orderId": "1778463440357957",
+      "merchantId": "flipkart",
+      "orderIndex": 2,
+      "totalOrders": 3,
+      "status": "COMPLETED",
+      "startTime": "2026-05-12T09:16:38.006Z",
+      "endTime": "2026-05-12T09:16:44.047Z",
+      "duration": 6041,
+      "logsProcessed": 25,
+      "logsTotal": 26,
+      "currentLogTag": null,
+      "currentLogIndex": 0,
+      "errors": [],
+      "stuckAt": null,
+      "stopReason": "Completed successfully",
+      "artResults": {
+        "passed": 25,
+        "failed": 0,
+        "total": 25
+      },
+      "timeline": [],
+      "bufferFailures": []
+    },
+    {
+      "orderId": "1778430181918224",
+      "merchantId": "flipkart",
+      "orderIndex": 3,
+      "totalOrders": 3,
+      "status": "COMPLETED",
+      "startTime": "2026-05-12T09:16:47.068Z",
+      "endTime": "2026-05-12T09:16:53.312Z",
+      "duration": 6244,
+      "logsProcessed": 25,
+      "logsTotal": 26,
+      "currentLogTag": null,
+      "currentLogIndex": 0,
+      "errors": [],
+      "stuckAt": null,
+      "stopReason": "Completed successfully",
+      "artResults": {
+        "passed": 25,
+        "failed": 0,
+        "total": 25
+      },
+      "timeline": [],
+      "bufferFailures": []
+    }
+  ]
+}

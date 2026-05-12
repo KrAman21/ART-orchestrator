@@ -39,6 +39,9 @@ export class ReplayOrchestrator {
     this.pendingPostResponseWebhooks = new Map();
 
     this.isRunning = false;
+    this.reportGenerator = config.reportGenerator || null;
+    this.orderId = config.orderId || null;
+    this.bufferFailures = [];
 
     this.loadLogs(logs);
   }
@@ -129,7 +132,8 @@ export class ReplayOrchestrator {
         processNextLogEntry: this.processNextLogEntry.bind(this),
         triggerWebhooks: this.webhookManager.triggerWebhooks.bind(this.webhookManager),
         trackAsyncCompletion: this.trackAsyncCompletion.bind(this),
-        fail: this.fail.bind(this)
+        fail: this.fail.bind(this),
+        recordBufferFailure: this.recordBufferFailure.bind(this)
       }
     });
 
@@ -675,6 +679,14 @@ export class ReplayOrchestrator {
     };
   }
 
+  recordBufferFailure(failureInfo) {
+    this.bufferFailures.push(failureInfo);
+    
+    if (this.reportGenerator && this.orderId) {
+      this.reportGenerator.recordBufferFailure(this.orderId, failureInfo);
+    }
+  }
+
   async fail(error, details = null) {
     logger.error('Orchestrator failed', { error, details });
     this.isRunning = false;
@@ -686,7 +698,8 @@ export class ReplayOrchestrator {
     return {
       ...this.results,
       progress: this.validator.getProgress(),
-      state: this.stateManager.getState()
+      state: this.stateManager.getState(),
+      bufferFailures: this.bufferFailures
     };
   }
 

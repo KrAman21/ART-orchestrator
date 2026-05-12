@@ -2,9 +2,12 @@ import { makeRequest as blockingMakeRequest } from '../services/http-client.js';
 import { logger } from '../utils/logger.js';
 
 export class NonBlockingHttpClient {
-  constructor(bufferManager) {
+  constructor(bufferManager, reportGenerator = null, orderId = null) {
     this.bufferManager = bufferManager;
+    this.reportGenerator = reportGenerator;
+    this.orderId = orderId;
     this.activeRequests = new Map();
+    this.failedRequests = [];
   }
   
   async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null) {
@@ -15,7 +18,6 @@ export class NonBlockingHttpClient {
       endpoint
     });
     
-    // Fire the request WITHOUT awaiting - truly non-blocking
     const requestPromise = blockingMakeRequest(
       baseUrl,
       endpoint,
@@ -33,27 +35,56 @@ export class NonBlockingHttpClient {
       promise: requestPromise,
       timestamp: Date.now(),
       logTag,
-      sourceDestination
+      sourceDestination,
+      endpoint,
+      baseUrl,
+      payload
     });
     
-    // Handle completion in background - DON'T await this
     requestPromise.then(response => {
+      const activeReq = this.activeRequests.get(requestId);
       this.activeRequests.delete(requestId);
       
-      if (response.error) {
-        logger.error('Non-blocking request failed', { requestId, error: response.message });
+      const apiFailure = this.checkApiFailure(response);
+      const hasFailure = response.error || apiFailure;
+      
+      logger.info('Non-blocking request result', { 
+        requestId, 
+        status: response.status, 
+        hasError: response.error,
+        apiFailure: !!apiFailure,
+        apiFailureDetails: apiFailure,
+        responseDataType: typeof response.data,
+        willRecordFailure: hasFailure,
+        hasActiveReq: !!activeReq
+      });
+      
+      if (hasFailure) {
+        const errorMsg = apiFailure 
+          ? `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`
+          : response.message;
+        logger.error('Non-blocking request failed - recording', { 
+          requestId, 
+          error: errorMsg, 
+          status: response.status,
+          hasReportGen: !!this.reportGenerator,
+          hasOrderId: !!this.orderId,
+          hasActiveReq: !!activeReq
+        });
+        this.recordFailure(activeReq, requestId, response, null, apiFailure);
         this.bufferManager.addResponse(requestId, response, true);
       } else {
-        logger.info('Non-blocking request completed', { requestId, status: response.status });
+        logger.info('Non-blocking request completed successfully', { requestId, status: response.status });
         this.bufferManager.addResponse(requestId, response, false);
       }
     }).catch(error => {
+      const activeReq = this.activeRequests.get(requestId);
       this.activeRequests.delete(requestId);
-      logger.error('Non-blocking request exception', { requestId, error: error.message });
+      logger.error('Non-blocking request exception', { requestId, error: error.message, hasActiveReq: !!activeReq });
+      this.recordFailure(activeReq, requestId, { error: true, message: error.message }, error);
       this.bufferManager.addResponse(requestId, { error: true, message: error.message }, true);
     });
     
-    // Small delay to let the request actually start before continuing
     await new Promise(resolve => setImmediate(resolve));
     
     return {
@@ -61,6 +92,86 @@ export class NonBlockingHttpClient {
       sent: true,
       timestamp: Date.now()
     };
+  }
+
+  recordFailure(activeReq, requestId, response, exception, apiFailure = null) {
+    if (!activeReq) {
+      logger.error('Cannot record failure - activeReq not provided', { requestId });
+      return;
+    }
+    
+    if (!this.reportGenerator) {
+      logger.error('Cannot record failure - reportGenerator not set', { requestId });
+    }
+    
+    if (!this.orderId) {
+      logger.error('Cannot record failure - orderId not set', { requestId });
+    }
+
+    const failureInfo = {
+      requestId,
+      logTag: activeReq.logTag,
+      sourceDestination: activeReq.sourceDestination,
+      endpoint: activeReq.endpoint,
+      baseUrl: activeReq.baseUrl,
+      requestPayload: activeReq.payload,
+      error: response.error || !!apiFailure || true,
+      errorMessage: apiFailure 
+        ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`
+        : (response.message || (exception && exception.message) || 'Unknown error'),
+      errorCode: apiFailure?.error_code || apiFailure?.code || null,
+      errorStack: exception && exception.stack,
+      httpStatus: response.status,
+      responseData: response.data || response,
+      timestamp: new Date().toISOString()
+    };
+
+    this.failedRequests.push(failureInfo);
+    logger.info('FAILURE_RECORDED', { requestId, orderId: this.orderId, logTag: activeReq.logTag });
+    
+    if (this.reportGenerator && this.orderId) {
+      this.reportGenerator.recordBufferFailure(this.orderId, failureInfo);
+      logger.info('FAILURE_SENT_TO_REPORT_GENERATOR', { requestId, orderId: this.orderId });
+    }
+  }
+  
+  checkApiFailure(response) {
+    if (!response || !response.data) return null;
+    
+    try {
+      let data = response.data;
+      
+      if (typeof data === 'string') {
+        try {
+          data = JSON.parse(data);
+        } catch (e) {
+          logger.debug('First JSON parse failed, trying unescape', { error: e.message });
+        }
+      }
+      
+      if (typeof data === 'string') {
+        try {
+          const unescaped = data.replace(/\\"/g, '"').replace(/^"|"$/g, '');
+          data = JSON.parse(unescaped);
+        } catch (e) {
+          logger.debug('Unescape and parse failed', { error: e.message });
+        }
+      }
+      
+      const status = data.status || data.Status || null;
+      logger.debug('Checking API status', { status, dataType: typeof data, hasStatus: !!status });
+      
+      if (status && (status === 'FAILURE' || status === 'FAILED' || status === 'ERROR')) {
+        const errorInfo = data.error || data.Error || { message: 'API returned failure status', status };
+        logger.info('API failure detected', { status, error: errorInfo });
+        return errorInfo;
+      }
+      
+      return null;
+    } catch (e) {
+      logger.debug('checkApiFailure error', { error: e.message });
+      return null;
+    }
   }
   
   async waitForResponse(requestId, timeoutMs = 30000) {

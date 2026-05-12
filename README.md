@@ -15,15 +15,47 @@ where
 - LENDER->GW Webhook should be triggered from Orchestrator if explicitly Webhook log is present. Any LENDER->GW Webhook can be present at any time or step, Orchestrator should trigger that webhook as per log sequence.
 - LENDER->GW should be responded as API response synchronously
 - APP->LSP API Request should be triggered by Orchestrator
-- Replay Flow
-  - Request
-    - If any request comes from LSP / GW service, then compare it with expected payload by finding log from logs.json matching (apiName, source, destination, loanApplicationId if exists, lenderOrgId if exists)
-    - Stop the replay flow if mismatch happens
-    - Call the Destination Service or Mock response if destination is "LENDER"
-  - Response
-    - First compare it with expected payload by finding log from logs.json matching (apiName, source, destination, loanApplicationId if exists, lenderOrgId if exists)
-    - Respond to source service
-- Defined the flow cases; you can refer following cases
+## ART Flow Overview
+
+ART operates in two modes based on the `USE_ASYNC_ORCHESTRATOR` configuration:
+
+### Async Mode (Default)
+The async orchestrator processes logs using non-blocking HTTP calls with a buffer management system:
+
+1. **Initialization**
+   - Loads logs from S3 Trace Logs API or local file
+   - Clears existing LSP data and onboards seed configurations (merchant ID, lender mappings)
+   - Starts an HTTP server to receive incoming requests from LSP/GW services
+
+2. **Processing Loop**
+   - Processes logs sequentially using `processOneCycle()` in a polling loop
+   - **Outgoing Requests**: For entries initiated by APP/LENDER/EULER/THEMIS, sends async HTTP calls via `NonBlockingHttpClient`
+   - **Incoming Requests**: Receives HTTP calls from LSP/GW services via the server, buffers them for processing
+   - **Response Matching**: Matches incoming requests with buffered responses and validates payloads
+   - **Forwarding**: Forwards validated requests to destination services (GW/LSP) or mocks LENDER responses
+
+3. **Buffer Management**
+   - `BufferManager`: Manages incoming request buffers and response queues
+   - `NonBlockingHttpClient`: Sends HTTP requests asynchronously, buffers responses
+   - Failed requests (HTTP errors OR API-level failures like `"status": "FAILURE"`) are recorded in `bufferFailures` array
+
+4. **Completion**
+   - Generates `report.json` with execution summary, per-order results, and buffer failures
+   - Includes timeout handling (configurable via `MAX_JOURNEY_TIME_MS`)
+
+### Sync Mode (Legacy)
+Uses synchronous HTTP calls with blocking request/response handling.
+
+## Replay Flow
+- Request
+  - If any request comes from LSP / GW service, compare it with expected payload by finding log from logs.json matching (apiName, source, destination, loanApplicationId if exists, lenderOrgId if exists)
+  - Stop the replay flow if mismatch happens
+  - Call the Destination Service or Mock response if destination is "LENDER"
+- Response
+  - First compare it with expected payload by finding log from logs.json matching (apiName, source, destination, loanApplicationId if exists, lenderOrgId if exists)
+  - Respond to source service
+
+## Flow Cases
 
 ## CASE 1 (APP<->LSP<->GW Sync call, Without LENDER Calls):
 APP->LSP: API1 request (Orchestrator should trigger API1 call to LSP)

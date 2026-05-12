@@ -347,17 +347,49 @@ export class RequestForwarder {
         expectedEntry.index
       );
 
-      if (serviceResponse && serviceResponse.status !== 200) {
-        const errorMsg = `LSP call failed with status ${serviceResponse.status}: ${serviceResponse.statusText}`;
+      const apiFailure = this.checkApiFailure(serviceResponse);
+      
+      if (serviceResponse && (serviceResponse.error || serviceResponse.status !== 200 || apiFailure)) {
+        let errorMsg;
+        if (apiFailure) {
+          errorMsg = `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`;
+        } else if (serviceResponse.error) {
+          errorMsg = `HTTP request failed: ${serviceResponse.message}`;
+        } else {
+          errorMsg = `LSP call failed with status ${serviceResponse.status}: ${serviceResponse.statusText}`;
+        }
+        
         this.logger.error('=== LSP CALL FAILED - STOPPING ===', {
           url: `${this.callbacks.getServiceBaseUrl(destination)}${endpoint}`,
           status: serviceResponse.status,
           statusText: serviceResponse.statusText,
+          error: serviceResponse.error,
+          apiFailure: !!apiFailure,
+          message: serviceResponse.message,
           responseData: serviceResponse.data,
           requestId: incoming.requestId,
           logTag: expectedEntry.logTag,
           destination
         });
+
+        if (this.callbacks.recordBufferFailure) {
+          this.callbacks.recordBufferFailure({
+            requestId: incoming.requestId,
+            logTag: expectedEntry.logTag,
+            sourceDestination: expectedEntry.sourceDestination,
+            endpoint: endpoint,
+            baseUrl: this.callbacks.getServiceBaseUrl(destination),
+            requestPayload: transformedPayload,
+            error: serviceResponse.error || !!apiFailure || true,
+            errorMessage: apiFailure 
+              ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`
+              : (serviceResponse.message || errorMsg),
+            errorCode: apiFailure?.error_code || apiFailure?.code || null,
+            errorStack: null,
+            httpStatus: serviceResponse.status,
+            responseData: serviceResponse.data
+          });
+        }
 
         try {
           const { execSync } = require('child_process');
@@ -659,6 +691,26 @@ export class RequestForwarder {
     this.pendingExternalRequests.clear();
     this.earlyExternalResponses.clear();
     this.pendingPostResponseWebhooks.clear();
+  }
+  
+  checkApiFailure(response) {
+    if (!response || !response.data) return null;
+    
+    try {
+      let data = response.data;
+      if (typeof data === 'string') {
+        data = JSON.parse(data);
+      }
+      
+      const status = data.status || data.Status || null;
+      if (status && (status === 'FAILURE' || status === 'FAILED' || status === 'ERROR')) {
+        return data.error || data.Error || { message: 'API returned failure status', status };
+      }
+      
+      return null;
+    } catch (e) {
+      return null;
+    }
   }
 }
 

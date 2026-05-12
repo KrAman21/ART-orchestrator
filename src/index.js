@@ -7,6 +7,7 @@ import { createServer } from './server.js';
 import { logger } from './utils/logger.js';
 import { createMockController } from './mocks/index.js';
 import { MOCK_CONFIG, SERVICE_MAP } from './config.js';
+import { runSequentialArt } from './sequential-runner.js';
 
 // Configuration
 const CONFIG = {
@@ -14,7 +15,15 @@ const CONFIG = {
   LOGS_FILE_PATH: process.env.LOGS_FILE_PATH || 'data/logs.json',
   TIMEOUT_MS: parseInt(process.env.TIMEOUT_MS, 10) || 10000,
   AUTO_START: process.env.AUTO_START !== 'false',
-  USE_ASYNC_ORCHESTRATOR: process.env.USE_ASYNC_ORCHESTRATOR === 'true'
+  USE_ASYNC_ORCHESTRATOR: process.env.USE_ASYNC_ORCHESTRATOR === 'true',
+  AUTO_FETCH_LOGS: process.env.AUTO_FETCH_LOGS === 'true',
+  MERCHANT_ID: process.env.MERCHANT_ID || 'flipkart',
+  ORDER_LIST: process.env.ORDER_LIST 
+    ? process.env.ORDER_LIST.split(',').map(s => s.trim()).filter(Boolean)
+    : [],
+  SESSION_TOKEN: process.env.SESSION_TOKEN || '',
+  MAX_JOURNEY_TIME_MS: parseInt(process.env.MAX_JOURNEY_TIME_MS, 10) || 180000,
+  REPORT_PATH: process.env.REPORT_PATH || 'report.json'
 };
 
 /**
@@ -26,7 +35,26 @@ async function main() {
   let mocks = null;
 
   try {
-    // Load logs
+    if (CONFIG.AUTO_FETCH_LOGS && CONFIG.ORDER_LIST.length > 0) {
+      console.log('\n========================================');
+      console.log('Auto-fetch enabled - Running Sequential ART');
+      console.log('========================================\n');
+      
+      const orderList = CONFIG.ORDER_LIST.map(orderId => ({
+        merchantId: CONFIG.MERCHANT_ID,
+        orderId
+      }));
+
+      const result = await runSequentialArt(orderList, CONFIG);
+      
+      console.log('\n========================================');
+      console.log('Sequential ART Complete');
+      console.log(`Overall Success: ${result.success}`);
+      console.log('========================================\n');
+      
+      process.exit(result.success ? 0 : 1);
+    }
+
     console.log('Loading logs from file...');
     const logs = await fetchLogsFromJSONFile(CONFIG.LOGS_FILE_PATH);
 
