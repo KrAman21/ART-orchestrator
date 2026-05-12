@@ -887,6 +887,45 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LENDER|Themis-KYC_REQUEST': { endpoint: '/lsp/kyc', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_LENDER|Themis-Repayment Request': { endpoint: '/lsp/repayment', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_LENDER|Themis-Repayment_REQUEST': { endpoint: '/lsp/repayment', method: 'POST', service: 'LSP', headers: {} },
+
+  'GATEWAY_LENDER|HDB_TOKEN_API_REQUEST': { endpoint: 'authenticate-token', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|HDB_CREATE_APPLICATION_API_REQUEST': { endpoint: 'leads', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|HDB_APPLICATION_STATUS_API_REQUEST': { endpoint: 'status-check', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|HDB_CHECK_OFFERS_API_REQUEST': { endpoint: 'submit-additional-data', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|HDB_OFFER_SELECTION_API_REQUEST': { endpoint: 'asset-details', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|HDB_INITIATE_JOURNEY_API_REQUEST': { endpoint: 'initiate-journey', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|HDB_LOAN_DISBURSEMENT_API_REQUEST': { endpoint: 'disburse-loan', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|HDB_CANCEL_LOAN_API_REQUEST': { endpoint: 'cancel-loan', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|GRAYQUEST_REDIRECTION_BASE_API_REQUEST': { endpoint: 'dynamic', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|GRAYQUEST_STATUS_CHECK_API_REQUEST': { endpoint: 'applications/check-status', method: 'GET', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|GRAYQUEST_CANCEL_API_REQUEST': { endpoint: 'applications/approval/institute-reject', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|GRAYQUEST_EMI_PLANS_API_REQUEST': { endpoint: 'product/emi-plans', method: 'GET', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|GRAYQUEST_WEBHOOK_FETCH_API_REQUEST': { endpoint: 'misc/status', method: 'GET', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|FIBE_GENERATE_TOKEN_API_REQUEST': { endpoint: 'generateToken', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|FIBE_PROFILE_INGESTION_API_REQUEST': { endpoint: 'profileIngestion', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|FIBE_CALCULATE_EMI_API_REQUEST': { endpoint: 'calculate-emi', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|FIBE_GET_REDIRECTION_URL_API_REQUEST': { endpoint: 'getredirectionurl', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|FIBE_LOCK_TENURE_API_REQUEST': { endpoint: 'lockTenure', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|FIBE_PRE_DISBURSAL_CHECK_API_REQUEST': { endpoint: 'pre-disbursal-check', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|ABFL_CREATE_TOKEN_API_REQUEST': { endpoint: 'createToken', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|ABFL_CRIF_API_REQUEST': { endpoint: 'Inquiry/doGet.service/CIRProServiceSyncXml', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|ABFL_LOAN_CANCELLATION_API_REQUEST': { endpoint: 'm2p/cancellation', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|ABFL_SPEND_AND_CONVERT_API_REQUEST': { endpoint: 'm2p/spendAndConvert', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|ABFL_MASTER_POLLING_API_REQUEST': { endpoint: 'dynamic', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|ABFL_UPSERT_API_REQUEST': { endpoint: 'dynamic', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|TVS_CHECKOUT_GENERATE_TOKEN_API_REQUEST': { endpoint: 'generateToken', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|TVS_CHECKOUT_CHECK_ELIGIBILITY_API_REQUEST': { endpoint: 'checkEligibility', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|TVS_CHECKOUT_CHECK_ELIGIBILITY_STATUS_API_REQUEST': { endpoint: 'checkEligibilityStatus', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|TVS_CHECKOUT_LOAN_STATUS_API_REQUEST': { endpoint: 'loanStatus', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|TVS_CHECKOUT_LOAN_OFFER_API_REQUEST': { endpoint: 'loanOffer', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|TVS_CHECKOUT_ACTIVATE_LOAN_API_REQUEST': { endpoint: 'loanActivation', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|TVS_CHECKOUT_REFUND_API_REQUEST': { endpoint: 'refundCancellation', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|FFPL_CANCELLATION_OAUTH_TOKEN_API_REQUEST': { endpoint: 'api/oauth/token', method: 'POST', service: 'LENDER', headers: {} },
+
+
+
+
+
   
   // ==================== LENDER_GATEWAY (Lender to Gateway - Callbacks/Webhooks) ====================
   'LENDER_GATEWAY|WEBHOOK Request': { endpoint: '/gateway/webhook', method: 'POST', service: 'GATEWAY', headers: {} },
