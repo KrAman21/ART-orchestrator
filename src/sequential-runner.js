@@ -14,6 +14,20 @@ export async function runSequentialArt(orderList, config) {
     reportPath: config.REPORT_PATH || 'report.json'
   });
 
+  let shutdownRequested = false;
+
+  const onShutdown = () => {
+    if (shutdownRequested) return;
+    shutdownRequested = true;
+    console.log('\n\nShutdown requested, generating report...');
+    reportGenerator.completeExecution(false);
+    console.log(`Report saved to: ${config.REPORT_PATH || 'report.json'}`);
+    process.exit(1);
+  };
+
+  process.on('SIGINT', onShutdown);
+  process.on('SIGTERM', onShutdown);
+
   console.log(`\n========================================`);
   console.log(`Sequential ART Runner`);
   console.log(`Total Orders: ${orderList.length}`);
@@ -120,17 +134,40 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       phase: 'FETCH_LOGS'
     });
     
-    const fetcher = new BatchLogFetcher({
-      sessionToken: config.SESSION_TOKEN,
-      outputPath: config.LOGS_FILE_PATH,
-      delayBetweenRequests: 500,
-      maxRetries: 3
-    });
+    let fetchResult = null;
+    const maxFetchAttempts = 5;
+    const fetchRetryIntervalMs = 2000;
+    
+    for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
+      const fetcher = new BatchLogFetcher({
+        sessionToken: config.SESSION_TOKEN,
+        outputPath: config.LOGS_FILE_PATH,
+        delayBetweenRequests: 500,
+        maxRetries: 3
+      });
 
-    const fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+      fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+
+      if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
+        break;
+      }
+
+      logger.warn(`Log fetch attempt ${attempt}/${maxFetchAttempts} failed for order ${orderId}`, {
+        attempt,
+        maxFetchAttempts,
+        totalLogs: fetchResult.stats?.totalLogs || 0,
+        error: fetchResult.error || 'No logs found'
+      });
+
+      if (attempt < maxFetchAttempts) {
+        console.log(`  Log fetch attempt ${attempt}/${maxFetchAttempts} returned 0 logs, retrying in 2s...`);
+        await new Promise(resolve => setTimeout(resolve, fetchRetryIntervalMs));
+      }
+    }
 
     if (!fetchResult.success || fetchResult.stats.totalLogs === 0) {
-      const error = fetchResult.error || 'No logs fetched';
+      const error = `No logs found after ${maxFetchAttempts} attempts`;
+      console.log(`  Failed to fetch logs for order ${orderId} after ${maxFetchAttempts} attempts, skipping.`);
       reportGenerator.finalizeOrder(orderId, {
         success: false,
         stopReason: error,
@@ -143,7 +180,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       };
     }
 
-    console.log(`Fetched ${fetchResult.stats.totalLogs} logs for order ${orderId}`);
+    console.log(`Fetched ${fetchResult.stats.totalLogs} logs for order ${orderId} (attempt ${fetchResult.stats.totalLogs > 0 ? 'succeeded' : 'exhausted'})`);
 
     logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 2: Loading and filtering logs`, {
       orderId,

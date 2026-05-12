@@ -1,5 +1,6 @@
 import 'dotenv/config';
 
+import { createInterface } from 'readline';
 import { fetchLogsFromJSONFile, filterAndSortLogs, filterOrchestratorSkippableLogs } from './services/log-fetcher.js';
 import { ReplayOrchestrator } from './orchestrator.js';
 import { AsyncReplayOrchestrator } from './async-buffer/async-orchestrator.js';
@@ -8,6 +9,7 @@ import { logger } from './utils/logger.js';
 import { createMockController } from './mocks/index.js';
 import { MOCK_CONFIG, SERVICE_MAP } from './config.js';
 import { runSequentialArt } from './sequential-runner.js';
+import { fetchOrderIdsFromQAPI } from './services/http-client.js';
 
 // Configuration
 const CONFIG = {
@@ -17,6 +19,8 @@ const CONFIG = {
   AUTO_START: process.env.AUTO_START !== 'false',
   USE_ASYNC_ORCHESTRATOR: process.env.USE_ASYNC_ORCHESTRATOR === 'true',
   AUTO_FETCH_LOGS: process.env.AUTO_FETCH_LOGS === 'true',
+  AUTO_FETCH_ORDER_IDS: process.env.AUTO_FETCH_ORDER_IDS === 'true',
+  QAPI_ORDER_LIMIT: parseInt(process.env.QAPI_ORDER_LIMIT, 10) || null,
   MERCHANT_ID: process.env.MERCHANT_ID || 'flipkart',
   ORDER_LIST: process.env.ORDER_LIST 
     ? process.env.ORDER_LIST.split(',').map(s => s.trim()).filter(Boolean)
@@ -35,15 +39,76 @@ async function main() {
   let mocks = null;
 
   try {
-    if (CONFIG.AUTO_FETCH_LOGS && CONFIG.ORDER_LIST.length > 0) {
-      console.log('\n========================================');
-      console.log('Auto-fetch enabled - Running Sequential ART');
-      console.log('========================================\n');
+    let orderList = [];
+
+    if (CONFIG.AUTO_FETCH_ORDER_IDS || CONFIG.ORDER_LIST.length === 0) {
+      const answers = await askInteractiveConfig();
       
-      const orderList = CONFIG.ORDER_LIST.map(orderId => ({
+      const minutesBack = answers.minutesBack;
+      const endDate = new Date();
+      const startDate = new Date(endDate.getTime() - minutesBack * 60 * 1000);
+      const startDateStr = startDate.toISOString();
+      const endDateStr = endDate.toISOString();
+
+      console.log('\n========================================');
+      console.log('Fetching Order IDs from QAPI');
+      console.log('========================================');
+      console.log(`Merchant: ${answers.merchantId}`);
+      console.log(`Lookback: ${minutesBack} minutes`);
+      console.log(`Date Range: ${startDateStr} to ${endDateStr}`);
+      if (answers.orderLimit) {
+        console.log(`Limit: ${answers.orderLimit} orders`);
+      }
+      console.log('========================================\n');
+
+      const qapiResult = await fetchOrderIdsFromQAPI(
+        startDateStr,
+        endDateStr,
+        [answers.merchantId]
+      );
+
+      if (!qapiResult.success) {
+        console.error('Failed to fetch order IDs:', qapiResult.error);
+        process.exit(1);
+      }
+
+      if (qapiResult.count === 0) {
+        console.log('No order IDs found from QAPI');
+        process.exit(0);
+      }
+
+      let orders = qapiResult.orders;
+      if (answers.orderLimit && orders.length > answers.orderLimit) {
+        orders = orders.slice(0, answers.orderLimit);
+        console.log(`Limited to first ${answers.orderLimit} orders`);
+      }
+
+      orderList = orders.map(o => ({
+        merchantId: o.merchantId,
+        orderId: o.orderId
+      }));
+
+      console.log(`Fetched ${orderList.length} orders from QAPI`);
+      console.log('\nSample orders:');
+      orderList.slice(0, 5).forEach((o, i) => {
+        console.log(`  ${i + 1}. ${o.orderId} (${o.merchantId})`);
+      });
+      if (orderList.length > 5) {
+        console.log(`  ... and ${orderList.length - 5} more`);
+      }
+      console.log('');
+    } else if (CONFIG.ORDER_LIST.length > 0) {
+      orderList = CONFIG.ORDER_LIST.map(orderId => ({
         merchantId: CONFIG.MERCHANT_ID,
         orderId
       }));
+    }
+
+    if (CONFIG.AUTO_FETCH_LOGS && orderList.length > 0) {
+      console.log('\n========================================');
+      console.log('Auto-fetch enabled - Running Sequential ART');
+      console.log(`Total Orders: ${orderList.length}`);
+      console.log('========================================\n');
 
       const result = await runSequentialArt(orderList, CONFIG);
       
@@ -192,6 +257,46 @@ async function main() {
 
     process.exit(1);
   }
+}
+
+function askQuestion(query, defaultValue = '') {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  return new Promise(resolve => {
+    const prompt = defaultValue ? `${query} [${defaultValue}]: ` : `${query}: `;
+    rl.question(prompt, answer => {
+      rl.close();
+      resolve(answer.trim() || defaultValue);
+    });
+  });
+}
+
+async function askInteractiveConfig() {
+  console.log('\n========================================');
+  console.log('ART - Automated Regression Testing');
+  console.log('========================================\n');
+
+  const defaultMinutes = CONFIG.QAPI_START_DATE ? 10080 : 1440;
+  const minutesBackInput = await askQuestion('How many minutes back should we fetch orders for?', String(defaultMinutes));
+  const minutesBack = parseInt(minutesBackInput, 10);
+  if (isNaN(minutesBack) || minutesBack <= 0) {
+    console.error(`Invalid minutes: "${minutesBackInput}". Must be a positive number.`);
+    process.exit(1);
+  }
+
+  const merchantId = await askQuestion('Merchant ID', CONFIG.MERCHANT_ID || 'flipkart');
+
+  const orderLimitInput = await askQuestion('Max orders to process (empty = no limit)', CONFIG.QAPI_ORDER_LIMIT ? String(CONFIG.QAPI_ORDER_LIMIT) : '');
+  const orderLimit = orderLimitInput ? parseInt(orderLimitInput, 10) : null;
+  if (orderLimitInput && (isNaN(orderLimit) || orderLimit <= 0)) {
+    console.error(`Invalid limit: "${orderLimitInput}". Must be a positive number or empty.`);
+    process.exit(1);
+  }
+
+  return { minutesBack, merchantId, orderLimit };
 }
 
 // Run main

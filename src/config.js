@@ -64,7 +64,7 @@ export const API_TO_ENDPOINT_MAP = {
   'APP_WRAPPER|FlipKart-LineOnboarding-GetKFS_INCOMING': { endpoint: '/flipkart/line/getKFS', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
   'APP_WRAPPER|FlipKart-LineOnboarding-LineStatus_INCOMING': { endpoint: '/flipkart/customer/line/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
   'APP_WRAPPER|FlipKart-LineOnboarding-FetchLineStatus_INCOMING': { endpoint: '/flipkart/fetch/line/status', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
-  'APP_WRAPPER|FlipKart-RealTimeEligibility_INCOMING': { endpoint: '/flipkart/txn/eligibility/line', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
+  'APP_WRAPPER|FlipKart-RealTimeEligibility_REQUEST': { endpoint: '/flipkart/txn/eligibility/line', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
   
   // FlipKart 2W APIs
   'APP_WRAPPER|Flipkart2W-Eligibility_INCOMING': { endpoint: '/flipkart2w/eligibility', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },

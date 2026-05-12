@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger.js';
-import { MOCK_CONFIG } from '../config.js';
+import { MOCK_CONFIG, QAPI_CONFIG } from '../config.js';
 import { fetchS3TraceLogs as fetchS3TraceLogsFromClient } from '../log-fetcher/s3-trace-logs-client.js';
 
 /**
@@ -217,34 +217,29 @@ export async function checkHealth(serviceConfig) {
 
 export { fetchS3TraceLogsFromClient as fetchS3TraceLogs };
 
-export async function fetchOrderIdsFromQAPI(startDate, endDate) {
-  logger.info('Fetching order IDs from QAPI (API call disabled - using dummy data)', {
+export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = null) {
+  logger.info('Fetching order IDs from QAPI', {
     startDate,
     endDate,
-    merchantId: QAPI_CONFIG.merchantId
+    merchantId: QAPI_CONFIG.merchantId,
+    merchantIds: merchantIds || [QAPI_CONFIG.merchantId]
   });
 
-  /* API CALL DISABLED FOR TESTING
   const endpoint = '/credit/q/query';
   const url = `${QAPI_CONFIG.baseUrl}${endpoint}`;
 
   const payload = {
-    metric: [
-      "number_of_unique_leads",
-      "soft_offer_qualified_leads",
-      "hard_offer_requested_leads",
-      "hard_offers_approved_leads",
-      "number_of_active_lines",
-      "avg_credit_line_amount"
-    ],
-    dimensions: ["order_id"],
-    domain: "loanAnalytics",
+    metric: "fetch_order_id",
+    dimensions: [],
+    filters: {
+      field: "merchant_id",
+      condition: "In",
+      val: merchantIds || [QAPI_CONFIG.merchantId]
+    },
+    domain: "orderAnalytics",
     interval: {
       start: startDate,
       end: endDate
-    },
-    filters: {
-      merchant_id: [QAPI_CONFIG.merchantId]
     }
   };
 
@@ -255,7 +250,8 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate) {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'X-Web-LoginToken': QAPI_CONFIG.token,
-        'Consumer-Credit-Dashboard': 'Consumer-Credit-Dashboard'
+        'Consumer-Credit-Dashboard': 'Consumer-Credit-Dashboard',
+        'Referer': 'https://dashboard.credit.juspay.in/'
       },
       body: JSON.stringify(payload)
     });
@@ -274,31 +270,102 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate) {
       };
     }
 
-    const data = await response.json();
+    const responseText = await response.text();
+    let data;
+    
+    try {
+      data = JSON.parse(responseText);
+    } catch (e) {
+      const lines = responseText.split('\n').filter(l => l.trim());
+      try {
+        const parsed = lines.map(line => JSON.parse(line)).filter(Boolean);
+        data = { result: parsed, status: 'SUCCESS' };
+      } catch (e2) {
+        logger.error('Failed to parse QAPI response as both JSON and NDJSON', {
+          error: e2.message,
+          lineCount: lines.length,
+          preview: responseText.substring(0, 200)
+        });
+        return {
+          success: false,
+          error: `Failed to parse QAPI response: ${e.message}`
+        };
+      }
+    }
 
-    if (!data || !data.result || !Array.isArray(data.result)) {
-      logger.warn('QAPI returned unexpected format', { data });
+    logger.info('QAPI raw response preview', { preview: responseText.substring(0, 500) });
+
+    logger.info('QAPI response received', { 
+      status: data.status,
+      hasResult: !!data.result,
+      resultType: typeof data.result,
+      isResultArray: Array.isArray(data.result),
+      resultLength: Array.isArray(data.result) ? data.result.length : 0,
+      keys: Object.keys(data)
+    });
+
+    let resultRows = [];
+    if (data.result && Array.isArray(data.result)) {
+      resultRows = data.result;
+    } else if (data.result && typeof data.result === 'object' && data.result.rows) {
+      resultRows = data.result.rows;
+    } else if (data.data && Array.isArray(data.data)) {
+      resultRows = data.data;
+    } else if (Array.isArray(data)) {
+      resultRows = data;
+    }
+
+    if (resultRows.length === 0) {
+      logger.warn('QAPI returned no order IDs', { responseKeys: Object.keys(data), rawPreview: JSON.stringify(data).substring(0, 500) });
       return {
         success: true,
-        orderIds: [],
+        orders: [],
         count: 0,
         message: 'No order IDs found or unexpected response format'
       };
     }
 
-    const orderIds = data.result
-      .map(row => row.order_id)
-      .filter(id => id && id.trim() !== '');
+    logger.info('QAPI result sample', { firstRow: JSON.stringify(resultRows[0]).substring(0, 300) });
+
+    const normalizedRows = resultRows.map(row => {
+      if (typeof row === 'string') {
+        try {
+          return JSON.parse(row);
+        } catch (e) {
+          return { raw: row };
+        }
+      }
+      return row;
+    });
+
+    const orders = normalizedRows
+      .map(row => ({
+        orderId: row.fetch_order_id || row.order_id || row.orderId || row.ORDER_ID || row.id || null,
+        merchantId: row.merchant_id || row.merchantId || row.MERCHANT_ID || merchantIds[0] || QAPI_CONFIG.merchantId
+      }))
+      .filter(o => o.orderId && String(o.orderId).trim() !== '');
+
+    const uniqueOrders = [];
+    const seen = new Set();
+    for (const o of orders) {
+      if (!seen.has(o.orderId)) {
+        seen.add(o.orderId);
+        uniqueOrders.push(o);
+      }
+    }
 
     logger.info('Successfully fetched order IDs from QAPI', {
-      orderCount: orderIds.length,
-      sampleOrders: orderIds.slice(0, 5)
+      rawCount: orders.length,
+      uniqueCount: uniqueOrders.length,
+      duplicatesRemoved: orders.length - uniqueOrders.length,
+      sampleOrders: uniqueOrders.slice(0, 5)
     });
 
     return {
       success: true,
-      orderIds,
-      count: orderIds.length,
+      orders: uniqueOrders,
+      orderIds: uniqueOrders.map(o => o.orderId),
+      count: uniqueOrders.length,
       rawData: data
     };
 
@@ -315,12 +382,4 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate) {
       error: error.message
     };
   }
-  */
-
-  return {
-    success: true,
-    orderIds: [],
-    count: 0,
-    message: 'API call disabled - using dummy data'
-  };
 }

@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "fetch-logs": "node scripts/fetch-logs.js",
+    "fetch-order-ids": "node scripts/fetch-order-ids.js",
     "test-syntax": "node --check src/utils/s3-trace-logs-fetcher.js && node --check src/services/http-client.js && node --check scripts/fetch-logs.js"
   },
   "dependencies": {
