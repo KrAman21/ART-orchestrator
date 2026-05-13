@@ -3,7 +3,7 @@ import { ReplayOrchestrator } from './orchestrator.js';
 import { AsyncReplayOrchestrator } from './async-buffer/async-orchestrator.js';
 import { createServer } from './server.js';
 import { createMockController } from './mocks/index.js';
-import { MOCK_CONFIG, SERVICE_MAP } from './config.js';
+import { MOCK_CONFIG, SERVICE_MAP, RETRY_CONFIG } from './config.js';
 import { BatchLogFetcher } from './log-fetcher/index.js';
 import { ArtReportGenerator } from './services/art-report-generator.js';
 import { logger } from './utils/logger.js';
@@ -27,6 +27,11 @@ export async function runSequentialArt(orderList, config) {
 
   process.on('SIGINT', onShutdown);
   process.on('SIGTERM', onShutdown);
+  // Clean up handlers when done so they don't accumulate across multiple runs
+  const cleanupHandlers = () => {
+    process.off('SIGINT', onShutdown);
+    process.off('SIGTERM', onShutdown);
+  };
 
   console.log(`\n========================================`);
   console.log(`Sequential ART Runner`);
@@ -38,6 +43,11 @@ export async function runSequentialArt(orderList, config) {
   const results = [];
 
   for (let i = 0; i < orderList.length; i++) {
+    if (config.stopSignal?.requested) {
+      logger.info('Stop requested, aborting remaining orders');
+      break;
+    }
+
     const { merchantId, orderId } = orderList[i];
     
     console.log(`\n========================================`);
@@ -97,6 +107,7 @@ export async function runSequentialArt(orderList, config) {
     }
   }
 
+  cleanupHandlers();
   const overallSuccess = results.every(r => r.success);
   reportGenerator.completeExecution(overallSuccess);
 
@@ -328,12 +339,13 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     });
     
     const completionResult = await waitForCompletionWithTimeout(
-      orchestrator, 
+      orchestrator,
       maxJourneyTimeMs,
       orderId,
       orderIndex,
       totalOrders,
-      reportGenerator
+      reportGenerator,
+      config.stopSignal
     );
 
     if (progressInterval) {
@@ -354,15 +366,30 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         logIndex: currentEntry?.index || 0,
         reason: `Timeout after ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes`
       });
-      
+
       printBufferDebugInfo(orchestrator, orderId);
     }
 
+    // failedBufferRequests comes from httpClient.failedRequests (non-blocking-http.js)
+    // and has the properly formatted errorMessage with the actual API error_message field.
+    // Fall back to the orchestrator's failureReason which is set in fail().
+    const failedBufferRequests = artResults.failedBufferRequests || [];
+    const latestBufferFailure = failedBufferRequests[failedBufferRequests.length - 1];
+    const apiErrorMessage = latestBufferFailure?.errorMessage
+      || (completionResult.failed ? completionResult.error : null);
+
+    const stopReason = completionResult.stopped
+      ? 'Stopped by user'
+      : completionResult.failed
+        ? `API Failure: ${apiErrorMessage || completionResult.error || 'Unknown API error'}`
+        : completionResult.timedOut
+          ? `Timeout: Max journey time of ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes exceeded`
+          : (artResults.failed > 0 ? `${artResults.failed} assertions failed` : 'Completed successfully');
+
     reportGenerator.finalizeOrder(orderId, {
-      success: !completionResult.timedOut && artResults.failed === 0,
-      stopReason: completionResult.timedOut 
-        ? `Timeout: Max journey time of ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes exceeded`
-        : (artResults.failed > 0 ? `${artResults.failed} assertions failed` : 'Completed successfully'),
+      success: !completionResult.timedOut && !completionResult.stopped && !completionResult.failed && artResults.failed === 0,
+      stopReason,
+      errorMessage: completionResult.failed ? apiErrorMessage : null,
       logsProcessed: artResults.processedLogs?.length || 0,
       artResults
     });
@@ -422,23 +449,75 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator) {
+async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal) {
   const startTime = Date.now();
   let lastLoggedMinute = 0;
-  
+  const { retryIntervalMs, maxRetrySeconds } = RETRY_CONFIG;
+  const maxRetryMs = maxRetrySeconds * 1000;
+
+  let stuckEntryIndex = null;
+  let stuckSince = null;
+
   while (Date.now() - startTime < timeoutMs) {
+    if (stopSignal?.requested) {
+      const currentEntry = orchestrator.validator?.getCurrentEntry();
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Stop requested by user - Current: ${currentEntry?.logTag || 'N/A'}`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        currentLogTag: currentEntry?.logTag,
+        currentLogIndex: currentEntry?.index,
+        phase: 'USER_STOP'
+      });
+      return { timedOut: false, stopped: true };
+    }
+
+    if (orchestrator.isFailed?.()) {
+      const reason = orchestrator.failureReason;
+      logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - API failure detected: ${reason}`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        failureReason: reason,
+        phase: 'API_FAILURE'
+      });
+      return { timedOut: false, failed: true, error: reason };
+    }
+
     if (orchestrator.isComplete()) {
       return { timedOut: false };
     }
-    
+
+    const currentEntry = orchestrator.validator?.getCurrentEntry();
+    const currentIndex = currentEntry?.index ?? null;
+
+    // Track how long we've been stuck on the same entry
+    if (currentIndex !== null && currentIndex === stuckEntryIndex) {
+      if (Date.now() - stuckSince >= maxRetryMs) {
+        logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Entry stuck for ${maxRetrySeconds}s, giving up - Stuck at: ${currentEntry?.logTag || 'unknown'}`, {
+          orderId,
+          orderIndex,
+          totalOrders,
+          currentLogTag: currentEntry?.logTag,
+          currentLogIndex: currentIndex,
+          maxRetrySeconds,
+          retryIntervalMs,
+          phase: 'ENTRY_TIMEOUT'
+        });
+        return { timedOut: true, stuckEntry: currentEntry };
+      }
+    } else {
+      stuckEntryIndex = currentIndex;
+      stuckSince = Date.now();
+    }
+
     const elapsedMs = Date.now() - startTime;
     const elapsedMinutes = Math.floor(elapsedMs / 60000);
-    
+
     if (elapsedMinutes > lastLoggedMinute) {
       lastLoggedMinute = elapsedMinutes;
       const remainingMinutes = Math.ceil((timeoutMs - elapsedMs) / 60000);
-      const currentEntry = orchestrator.validator?.getCurrentEntry();
-      
+
       logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Running for ${elapsedMinutes} minute(s), ${remainingMinutes} minute(s) remaining - Current: ${currentEntry?.logTag || 'N/A'}`, {
         orderId,
         orderIndex,
@@ -450,10 +529,10 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
         phase: 'TIME_CHECK'
       });
     }
-    
-    await sleep(1000);
+
+    await sleep(retryIntervalMs);
   }
-  
+
   const currentEntry = orchestrator.validator?.getCurrentEntry();
   logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - TIMEOUT after ${Math.round(timeoutMs / 1000 / 60)} minutes - Stuck at: ${currentEntry?.logTag || 'unknown'}`, {
     orderId,
@@ -463,7 +542,7 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
     currentLogIndex: currentEntry?.index,
     phase: 'TIMEOUT'
   });
-  
+
   return { timedOut: true };
 }
 

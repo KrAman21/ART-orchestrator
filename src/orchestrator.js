@@ -39,6 +39,7 @@ export class ReplayOrchestrator {
     this.pendingPostResponseWebhooks = new Map();
 
     this.isRunning = false;
+    this.failureReason = null;
     this.reportGenerator = config.reportGenerator || null;
     this.orderId = config.orderId || null;
     this.bufferFailures = [];
@@ -692,8 +693,13 @@ export class ReplayOrchestrator {
   async fail(error, details = null) {
     logger.error('Orchestrator failed', { error, details });
     this.isRunning = false;
+    this.failureReason = error;
     this.recordFailure('orchestrator_failure', null, { error, details });
     throw new Error(error);
+  }
+
+  isFailed() {
+    return this.failureReason !== null;
   }
 
   getResults() {
@@ -701,7 +707,8 @@ export class ReplayOrchestrator {
       ...this.results,
       progress: this.validator.getProgress(),
       state: this.stateManager.getState(),
-      bufferFailures: this.bufferFailures
+      bufferFailures: this.bufferFailures,
+      failureReason: this.failureReason
     };
   }
 

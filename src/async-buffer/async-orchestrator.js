@@ -134,7 +134,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     });
     
     if (buffered.isError) {
-      await this.fail(`Buffered response error: ${buffered.response.message}`);
+      const r = buffered.response;
+      // API failure: error is inside response.data.error.error_message
+      const apiErr = r?.data?.error || r?.data?.Error;
+      const errorMsg = apiErr?.error_message
+        || apiErr?.message
+        || r?.data?.error_message
+        || r?.message
+        || 'Unknown error';
+      await this.fail(`API Failure: ${errorMsg}`);
       return true;
     }
     
@@ -567,13 +575,19 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
   
-  getStats() {
+  getResults() {
     return {
       ...super.getResults(),
+      failedBufferRequests: this.httpClient.failedRequests || []
+    };
+  }
+
+  getStats() {
+    return {
+      ...this.getResults(),
       bufferStats: this.bufferManager.getStats(),
       activeHttpRequests: this.httpClient.getActiveRequestCount(),
-      isPolling: this.isPolling,
-      failedBufferRequests: this.httpClient.failedRequests || []
+      isPolling: this.isPolling
     };
   }
   

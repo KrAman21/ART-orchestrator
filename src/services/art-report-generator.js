@@ -135,8 +135,23 @@ export class ArtReportGenerator {
 
     order.endTime = new Date().toISOString();
     order.duration = new Date(order.endTime) - new Date(order.startTime);
-    order.status = result.success ? 'COMPLETED' : (order.status === 'ERROR' ? 'ERROR' : 'TIMEOUT');
+
+    if (result.success) {
+      order.status = 'COMPLETED';
+    } else if (order.status === 'ERROR') {
+      order.status = 'ERROR';
+    } else if (result.stopReason === 'Stopped by user') {
+      order.status = 'STOPPED';
+    } else if (result.stopReason?.startsWith('API Failure:')) {
+      order.status = 'FAILED';
+    } else if (result.stopReason?.startsWith('Timeout:')) {
+      order.status = 'TIMEOUT';
+    } else {
+      order.status = 'FAILED';
+    }
+
     order.stopReason = result.stopReason || (result.success ? 'Completed successfully' : result.error);
+    order.errorMessage = result.errorMessage || null;
     order.logsProcessed = result.logsProcessed || order.logsProcessed;
     order.artResults = {
       passed: result.artResults?.passed || 0,
@@ -151,6 +166,17 @@ export class ArtReportGenerator {
   }
 
   generateReport(overallSuccess) {
+    // Finalize any orders that never completed (process terminated mid-run)
+    const now = new Date().toISOString();
+    for (const order of this.orders) {
+      if (order.status === 'STARTED') {
+        order.status = 'FAILED';
+        order.endTime = now;
+        order.duration = new Date(now) - new Date(order.startTime);
+        order.stopReason = 'Terminated before order completed';
+      }
+    }
+
     const totalBufferFailures = this.globalBufferFailures.length;
     const ordersWithBufferFailures = this.orders.filter(o => o.bufferFailures && o.bufferFailures.length > 0).length;
 
@@ -165,9 +191,10 @@ export class ArtReportGenerator {
       summary: {
         totalOrders: this.orders.length,
         completed: this.orders.filter(o => o.status === 'COMPLETED').length,
-        failed: this.orders.filter(o => o.status === 'ERROR').length,
+        failed: this.orders.filter(o => o.status === 'FAILED' || o.status === 'ERROR').length,
         stuck: this.orders.filter(o => o.status === 'STUCK').length,
         timeout: this.orders.filter(o => o.status === 'TIMEOUT').length,
+        stopped: this.orders.filter(o => o.status === 'STOPPED').length,
         totalBufferFailures,
         ordersWithBufferFailures
       },

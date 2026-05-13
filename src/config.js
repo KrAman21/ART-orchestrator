@@ -40,6 +40,151 @@ export const QAPI_CONFIG = {
 // Key format: "sourceDestination|logTag" where sourceDestination is "SOURCE_DEST"
 // Optional headers field for custom headers per endpoint
 export const API_TO_ENDPOINT_MAP = {
+  
+  // ── FlipKart (merchantId = "flipkart" | "imposter") ──────────────────────────
+  'APP_WRAPPER|FlipKart-RealTimeEligibility_REQUEST':         { endpoint: '/flipkart/txn/eligibility/line',                          method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-HardEligibilityStatus_REQUEST':       { endpoint: '/flipkart/txn/eligibility/line/status',                   method: 'POST', service: 'LSP', headers: {} },
+
+  'APP_WRAPPER|FlipKart-LineOnboarding-Eligibility_REQUEST':       { endpoint: '/flipkart/initiate/line/eligibility',                method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-LineOnboarding-EligibilityStatus_REQUEST': { endpoint: '/flipkart/initiate/line/eligibility/status',         method: 'POST', service: 'LSP', headers: {} },
+
+  'APP_WRAPPER|FlipKart-LineOnboarding-HardEligibility_REQUEST':       { endpoint: '/flipkart/line/eligibility/lender',              method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-LineOnboarding-HardEligibilityStatus_REQUEST': { endpoint: '/flipkart/line/eligibility/lender/status',       method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-LineOnboarding-GetRedirectionURL_REQUEST':     { endpoint: '/flipkart/line/getRedirectionUrl',               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-LineOnboarding-GetKFS_REQUEST':                { endpoint: '/flipkart/line/getKFS',                          method: 'POST', service: 'LSP', headers: {} },
+
+  'APP_WRAPPER|FlipKart-LineOnboarding-LineStatus_REQUEST':     { endpoint: '/flipkart/customer/line/status',                       method: 'POST', service: 'LSP', headers: {} },
+
+  // /lineonboarding/* paths share the same handlers as /initiate/line/* and /line/*
+  'APP_WRAPPER|FlipKart-LineOnboarding-Eligibility_REQUEST':           { endpoint: '/flipkart/lineonboarding/eligibility',           method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-LineOnboarding-EligibilityStatus_REQUEST':     { endpoint: '/flipkart/lineonboarding/eligibility/status',    method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-LineOnboarding-HardEligibility_REQUEST':       { endpoint: '/flipkart/lineonboarding/eligibility/lender',    method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-LineOnboarding-HardEligibilityStatus_REQUEST': { endpoint: '/flipkart/lineonboarding/eligibility/lender/status', method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-LineOnboarding-GetRedirectionURL_REQUEST':     { endpoint: '/flipkart/lineonboarding/getRedirectionUrl',     method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-LineOnboarding-GetKFS_REQUEST':                { endpoint: '/flipkart/lineonboarding/getKFS',                method: 'POST', service: 'LSP', headers: {} },
+
+  'APP_WRAPPER|FlipKart-Eligibility_REQUEST':         { endpoint: '/flipkart/eligibility',                                          method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-EligibilityStatus_REQUEST':   { endpoint: '/flipkart/eligibility/status',                                   method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-HardEligibility_REQUEST':     { endpoint: '/flipkart/eligibility/lender',                                   method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-HardEligibilityStatus_REQUEST': { endpoint: '/flipkart/eligibility/lender/status',                         method: 'POST', service: 'LSP', headers: {} },
+
+  'APP_WRAPPER|FlipKart-GetKFS_REQUEST':              { endpoint: '/flipkart/getKFS',                                               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-GetRedirectionURL_REQUEST':   { endpoint: '/flipkart/getRedirectionUrl',                                    method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-InitaiteTxn_REQUEST':         { endpoint: '/flipkart/txns',                                                 method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-OrderStatus_REQUEST':         { endpoint: '/flipkart/order/status',                                         method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-Refund_REQUEST':              { endpoint: '/flipkart/refund',                                               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-LineOnboarding-FetchLineStatus_REQUEST': { endpoint: '/flipkart/fetch/line/status',                         method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-FetchStatus_REQUEST':         { endpoint: '/flipkart/fetch/status',                                         method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-CreateLoan_REQUEST':          { endpoint: '/flipkart/createLoan',                                           method: 'POST', service: 'LSP', headers: {} },
+
+  // ── FlipKart2W (merchantId = "flipkart2w") ───────────────────────────────────
+  'APP_WRAPPER|Flipkart2W-Eligibility_REQUEST':           { endpoint: '/flipkart2w/eligibility',                                    method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|Flipkart2W-EligibilityStatus_REQUEST':     { endpoint: '/flipkart2w/eligibility/status',                             method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-2W-HardEligibility_REQUEST':      { endpoint: '/flipkart2w/eligibility/lender',                             method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart2W-HardEligibilityStatus_REQUEST': { endpoint: '/flipkart2w/eligibility/lender/status',                      method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-GetKFS_REQUEST':                  { endpoint: '/flipkart2w/getKFS',                                         method: 'POST', service: 'LSP', headers: {} }, // same logTag as FK1
+  'APP_WRAPPER|FlipKart-2W_REQUEST':                      { endpoint: '/flipkart2w/getRedirectionUrl',                              method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart2W-InitaiteTxn_REQUEST':           { endpoint: '/flipkart2w/txns',                                           method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart2W-Refund_REQUEST':                { endpoint: '/flipkart2w/refund',                                         method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart2W-FetchStatus_REQUEST':           { endpoint: '/flipkart2w/fetch/status',                                   method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart2W-CreateLoan_REQUEST':            { endpoint: '/flipkart2w/createLoan',                                     method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart2W-CreatePayment_REQUEST':         { endpoint: '/flipkart2w/dp/create',                                      method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart2W-CustomerStatus_REQUEST':        { endpoint: '/flipkart2w/customer/status',                                method: 'POST', service: 'LSP', headers: {} },
+
+  // ── FlipKartSuperMoney (merchantId = "flipkartSM") ───────────────────────────
+  'APP_WRAPPER|FlipKartSuperMoney-GetRedirectionURL_REQUEST': { endpoint: '/flipkartSM/getRedirectionUrl',                          method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKartSuperMoney-InitiateTxn_REQUEST':       { endpoint: '/flipkartSM/txns',                                       method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|FlipKart-OrderStatus_REQUEST':                 { endpoint: '/flipkartSM/order/status',                               method: 'POST', service: 'LSP', headers: {} }, // same logTag as FK1
+  'APP_WRAPPER|FlipKart-Refund_REQUEST':                      { endpoint: '/flipkartSM/refund',                                     method: 'POST', service: 'LSP', headers: {} }, // same logTag as FK1
+  'APP_WRAPPER|FlipKart-FetchStatus_REQUEST':                 { endpoint: '/flipkartSM/fetch/status',                               method: 'POST', service: 'LSP', headers: {} }, // same logTag as FK1
+
+  // ── JuspaySDK (prefix: /sdk/) ────────────────────────────────────────────────
+  'APP_WRAPPER|JuspaySDK-SoftEligiblity_REQUEST':                   { endpoint: '/sdk/eligibility',               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-VerifyLspOtp_REQUEST':                     { endpoint: '/sdk/verifyLspOtp',              method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-CreateLoanApplication_REQUEST':            { endpoint: '/sdk/createLoanApplication',     method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-FetchOffer-HardEligibility_REQUEST':       { endpoint: '/sdk/fetchOffer',                method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-FetchOfferStatus-HardEligibility-SDK_REQUEST': { endpoint: '/sdk/fetchOfferStatus',      method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-SetOffer_REQUEST':                         { endpoint: '/sdk/offer/set',                 method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-GetJourneyUrl_REQUEST':                    { endpoint: '/sdk/journey/url/get',           method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|GetFlowLink-SDK_REQUEST':                            { endpoint: '/sdk/getFlowLink',               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-ResumeJourney_REQUEST':                    { endpoint: '/sdk/journey/resume',            method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-TriggerOTP_REQUEST':                       { endpoint: '/sdk/otp/trigger',               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-GenerateOffers_REQUEST':                   { endpoint: '/sdk/offers/generate',           method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-GetOffers_REQUEST':                        { endpoint: '/sdk/offers/get',                method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|TriggerActionRequired_REQUEST':                      { endpoint: '/sdk/actionRequired/trigger',    method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|TriggerActionRequired_REQUEST':                      { endpoint: '/sdk/actionRequired/status',     method: 'POST', service: 'LSP', headers: {} }, // same logTag
+
+  // ── BusinessLoan (prefix: /businessloan/) ────────────────────────────────────
+  'APP_WRAPPER|BL-CreateUpdateCustomer_REQUEST':                     { endpoint: '/businessloan/customer',                   method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BL-GetCustomer_REQUEST':                              { endpoint: '/businessloan/customer/get',               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-GetLink_REQUEST':                        { endpoint: '/businessloan/link/get',                   method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BL-VerifyAuth_REQUEST':                               { endpoint: '/businessloan/auth/verify',                method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-SoftEligibility_REQUEST':                { endpoint: '/businessloan/eligibility/soft',           method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-HardEligibility-FetchOfferRequest_REQUEST': { endpoint: '/businessloan/eligibility/hard',        method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-HardEligibility-FetchOfferStatus_REQUEST':  { endpoint: '/businessloan/eligibility/hard/status', method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-LoanIntentStatus_REQUEST':               { endpoint: '/businessloan/loanIntent/status',          method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-LoanApplicationStatus_REQUEST':          { endpoint: '/businessloan/loanApplication/status',     method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-GetKFS_REQUEST':                         { endpoint: '/businessloan/getKFS',                     method: 'POST', service: 'LSP', headers: {} },
+
+  // ── TSPHyperCredit (prefix: /tsp/) ───────────────────────────────────────────
+  'APP_WRAPPER|TSP-Hypercredit-OrderCreate_REQUEST':  { endpoint: '/tsp/order/create',    method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|TSP-Hypercredit-OrderStatus_REQUEST':  { endpoint: '/tsp/order/{orderId}', method: 'GET',  service: 'LSP', headers: {} },
+  'APP_WRAPPER|TSP-HyperCredit-Refund_REQUEST':       { endpoint: '/tsp/refund',          method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|TSP-HyperCredit-Capture_REQUEST':      { endpoint: '/tsp/capture',         method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|TSP-Hypercredit-Eligibility_REQUEST':  { endpoint: '/tsp/eligibility',     method: 'POST', service: 'LSP', headers: {} },
+
+  // ── Euler (prefix: /api/lsp/) ────────────────────────────────────────────────
+  'APP_WRAPPER|Euler-ETB-Eligibility_REQUEST':  { endpoint: '/api/lsp/eligibility',  method: 'POST', service: 'LSP', headers: {} },
+
+  // ── Generic / JuspaySDK (prefix: /api/) ─────────────────────────────────────
+  // ── JuspaySDK (prefix: /sdk/) ────────────────────────────────────────────────
+  'APP_WRAPPER|JuspaySDK-SoftEligiblity_REQUEST':                   { endpoint: '/sdk/eligibility',               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-VerifyLspOtp_REQUEST':                     { endpoint: '/sdk/verifyLspOtp',              method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-CreateLoanApplication_REQUEST':            { endpoint: '/sdk/createLoanApplication',     method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-FetchOffer-HardEligibility_REQUEST':       { endpoint: '/sdk/fetchOffer',                method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-FetchOfferStatus-HardEligibility-SDK_REQUEST': { endpoint: '/sdk/fetchOfferStatus',      method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-SetOffer_REQUEST':                         { endpoint: '/sdk/offer/set',                 method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-GetJourneyUrl_REQUEST':                    { endpoint: '/sdk/journey/url/get',           method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|GetFlowLink-SDK_REQUEST':                            { endpoint: '/sdk/getFlowLink',               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-ResumeJourney_REQUEST':                    { endpoint: '/sdk/journey/resume',            method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-TriggerOTP_REQUEST':                       { endpoint: '/sdk/otp/trigger',               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-GenerateOffers_REQUEST':                   { endpoint: '/sdk/offers/generate',           method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-GetOffers_REQUEST':                        { endpoint: '/sdk/offers/get',                method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|TriggerActionRequired_REQUEST':                      { endpoint: '/sdk/actionRequired/trigger',    method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|TriggerActionRequired_REQUEST':                      { endpoint: '/sdk/actionRequired/status',     method: 'POST', service: 'LSP', headers: {} }, // same logTag
+
+  // ── BusinessLoan (prefix: /businessloan/) ────────────────────────────────────
+  'APP_WRAPPER|BL-CreateUpdateCustomer_REQUEST':                     { endpoint: '/businessloan/customer',                   method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BL-GetCustomer_REQUEST':                              { endpoint: '/businessloan/customer/get',               method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-GetLink_REQUEST':                        { endpoint: '/businessloan/link/get',                   method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BL-VerifyAuth_REQUEST':                               { endpoint: '/businessloan/auth/verify',                method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-SoftEligibility_REQUEST':                { endpoint: '/businessloan/eligibility/soft',           method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-HardEligibility-FetchOfferRequest_REQUEST': { endpoint: '/businessloan/eligibility/hard',        method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-HardEligibility-FetchOfferStatus_REQUEST':  { endpoint: '/businessloan/eligibility/hard/status', method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-LoanIntentStatus_REQUEST':               { endpoint: '/businessloan/loanIntent/status',          method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-LoanApplicationStatus_REQUEST':          { endpoint: '/businessloan/loanApplication/status',     method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|BusinessLoan-GetKFS_REQUEST':                         { endpoint: '/businessloan/getKFS',                     method: 'POST', service: 'LSP', headers: {} },
+
+  // ── TSPHyperCredit (prefix: /tsp/) ───────────────────────────────────────────
+  'APP_WRAPPER|TSP-Hypercredit-OrderCreate_REQUEST':  { endpoint: '/tsp/order/create',    method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|TSP-Hypercredit-OrderStatus_REQUEST':  { endpoint: '/tsp/order/{orderId}', method: 'GET',  service: 'LSP', headers: {} },
+  'APP_WRAPPER|TSP-HyperCredit-Refund_REQUEST':       { endpoint: '/tsp/refund',          method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|TSP-HyperCredit-Capture_REQUEST':      { endpoint: '/tsp/capture',         method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|TSP-Hypercredit-Eligibility_REQUEST':  { endpoint: '/tsp/eligibility',     method: 'POST', service: 'LSP', headers: {} },
+
+  // ── Euler (prefix: /api/lsp/) ────────────────────────────────────────────────
+  'APP_WRAPPER|Euler-ETB-Eligibility_REQUEST':  { endpoint: '/api/lsp/eligibility',  method: 'POST', service: 'LSP', headers: {} },
+
+  // ── Generic / JuspaySDK (prefix: /api/) ─────────────────────────────────────
+  'APP_WRAPPER|JUSPAY_SDK_REQUEST':        { endpoint: '/api/eligibility', method: 'POST', service: 'LSP', headers: {} }, // commonAuth-based, used by galaxyHealth too
+  'APP_WRAPPER|JuspaySDK-GetKFS_REQUEST':  { endpoint: '/api/getKFS',      method: 'POST', service: 'LSP', headers: {} },
+
+  // ── PayIn3 (prefix: /payin3/) — note: type has duplicate "payin3" prefix ─────
+  'APP_WRAPPER|PayIn3-SoftEligiblity_REQUEST':  { endpoint: '/payin3/payin3/eligibility',  method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPPER|JuspaySDK-SetOfferV2_REQUEST':   { endpoint: '/payin3/payin3/offer/set',     method: 'POST', service: 'LSP', headers: {} },
+
+
+
   // ==================== APP_WRAPPER (Wrapper Endpoints - Incoming from APP) ====================
   // FlipKart APIs
   'APP_WRAPPER|FlipKart-Eligibility_INCOMING': { endpoint: '/flipkart/eligibility', method: 'POST', service: 'LSP', headers: {'disable_encryption': 'TRUE', 'authorization': 'Basic flipkart'} },
@@ -962,6 +1107,105 @@ export const API_TO_ENDPOINT_MAP = {
 
 // API endpoint mapping: endpoint -> { logTag, api, sourceDestination, headers }
 export const API_TO_LOGTAG_MAP = {
+  
+  
+  // ── FlipKart ─────────────────────────────────────────────────────────────────
+  '/flipkart/txn/eligibility/line':                          { logTag: 'FlipKart-RealTimeEligibility_REQUEST',              api: '/flipkart/txn/eligibility/line',                          sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/txn/eligibility/line/status':                   { logTag: 'FlipKart-HardEligibilityStatus_REQUEST',            api: '/flipkart/txn/eligibility/line/status',                   sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/initiate/line/eligibility':                     { logTag: 'FlipKart-LineOnboarding-Eligibility_REQUEST',       api: '/flipkart/initiate/line/eligibility',                     sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/initiate/line/eligibility/status':              { logTag: 'FlipKart-LineOnboarding-EligibilityStatus_REQUEST', api: '/flipkart/initiate/line/eligibility/status',              sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/line/eligibility/lender':                       { logTag: 'FlipKart-LineOnboarding-HardEligibility_REQUEST',   api: '/flipkart/line/eligibility/lender',                       sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/line/eligibility/lender/status':                { logTag: 'FlipKart-LineOnboarding-HardEligibilityStatus_REQUEST', api: '/flipkart/line/eligibility/lender/status',            sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/line/getRedirectionUrl':                        { logTag: 'FlipKart-LineOnboarding-GetRedirectionURL_REQUEST', api: '/flipkart/line/getRedirectionUrl',                        sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/line/getKFS':                                   { logTag: 'FlipKart-LineOnboarding-GetKFS_REQUEST',            api: '/flipkart/line/getKFS',                                   sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/customer/line/status':                          { logTag: 'FlipKart-LineOnboarding-LineStatus_REQUEST',        api: '/flipkart/customer/line/status',                          sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/lineonboarding/eligibility':                    { logTag: 'FlipKart-LineOnboarding-Eligibility_REQUEST',       api: '/flipkart/lineonboarding/eligibility',                    sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/lineonboarding/eligibility/status':             { logTag: 'FlipKart-LineOnboarding-EligibilityStatus_REQUEST', api: '/flipkart/lineonboarding/eligibility/status',             sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/lineonboarding/eligibility/lender':             { logTag: 'FlipKart-LineOnboarding-HardEligibility_REQUEST',   api: '/flipkart/lineonboarding/eligibility/lender',             sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/lineonboarding/eligibility/lender/status':      { logTag: 'FlipKart-LineOnboarding-HardEligibilityStatus_REQUEST', api: '/flipkart/lineonboarding/eligibility/lender/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/lineonboarding/getRedirectionUrl':              { logTag: 'FlipKart-LineOnboarding-GetRedirectionURL_REQUEST', api: '/flipkart/lineonboarding/getRedirectionUrl',              sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/lineonboarding/getKFS':                         { logTag: 'FlipKart-LineOnboarding-GetKFS_REQUEST',            api: '/flipkart/lineonboarding/getKFS',                         sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/eligibility':                                   { logTag: 'FlipKart-Eligibility_REQUEST',                      api: '/flipkart/eligibility',                                   sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/eligibility/status':                            { logTag: 'FlipKart-EligibilityStatus_REQUEST',                api: '/flipkart/eligibility/status',                            sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/eligibility/lender':                            { logTag: 'FlipKart-HardEligibility_REQUEST',                  api: '/flipkart/eligibility/lender',                            sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/eligibility/lender/status':                     { logTag: 'FlipKart-HardEligibilityStatus_REQUEST',            api: '/flipkart/eligibility/lender/status',                     sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/getKFS':                                        { logTag: 'FlipKart-GetKFS_REQUEST',                           api: '/flipkart/getKFS',                                        sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/getRedirectionUrl':                             { logTag: 'FlipKart-GetRedirectionURL_REQUEST',                api: '/flipkart/getRedirectionUrl',                             sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/txns':                                          { logTag: 'FlipKart-InitaiteTxn_REQUEST',                      api: '/flipkart/txns',                                          sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/order/status':                                  { logTag: 'FlipKart-OrderStatus_REQUEST',                      api: '/flipkart/order/status',                                  sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/refund':                                        { logTag: 'FlipKart-Refund_REQUEST',                           api: '/flipkart/refund',                                        sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/fetch/line/status':                             { logTag: 'FlipKart-LineOnboarding-FetchLineStatus_REQUEST',   api: '/flipkart/fetch/line/status',                             sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/fetch/status':                                  { logTag: 'FlipKart-FetchStatus_REQUEST',                      api: '/flipkart/fetch/status',                                  sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart/createLoan':                                    { logTag: 'FlipKart-CreateLoan_REQUEST',                       api: '/flipkart/createLoan',                                    sourceDestination: 'APP_WRAPPER', headers: {} },
+
+  // ── FlipKart2W ───────────────────────────────────────────────────────────────
+  '/flipkart2w/eligibility':              { logTag: 'Flipkart2W-Eligibility_REQUEST',           api: '/flipkart2w/eligibility',              sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/eligibility/status':       { logTag: 'Flipkart2W-EligibilityStatus_REQUEST',     api: '/flipkart2w/eligibility/status',        sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/eligibility/lender':       { logTag: 'FlipKart-2W-HardEligibility_REQUEST',      api: '/flipkart2w/eligibility/lender',        sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/eligibility/lender/status':{ logTag: 'FlipKart2W-HardEligibilityStatus_REQUEST', api: '/flipkart2w/eligibility/lender/status', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/getKFS':                   { logTag: 'FlipKart-GetKFS_REQUEST',                  api: '/flipkart2w/getKFS',                   sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/getRedirectionUrl':        { logTag: 'FlipKart-2W_REQUEST',                      api: '/flipkart2w/getRedirectionUrl',         sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/txns':                     { logTag: 'FlipKart2W-InitaiteTxn_REQUEST',            api: '/flipkart2w/txns',                     sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/refund':                   { logTag: 'FlipKart2W-Refund_REQUEST',                 api: '/flipkart2w/refund',                   sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/fetch/status':             { logTag: 'FlipKart2W-FetchStatus_REQUEST',            api: '/flipkart2w/fetch/status',             sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/createLoan':               { logTag: 'FlipKart2W-CreateLoan_REQUEST',             api: '/flipkart2w/createLoan',               sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/dp/create':                { logTag: 'FlipKart2W-CreatePayment_REQUEST',          api: '/flipkart2w/dp/create',                sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkart2w/customer/status':          { logTag: 'FlipKart2W-CustomerStatus_REQUEST',         api: '/flipkart2w/customer/status',          sourceDestination: 'APP_WRAPPER', headers: {} },
+
+  // ── FlipKartSuperMoney ───────────────────────────────────────────────────────
+  '/flipkartSM/getRedirectionUrl': { logTag: 'FlipKartSuperMoney-GetRedirectionURL_REQUEST', api: '/flipkartSM/getRedirectionUrl', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkartSM/txns':              { logTag: 'FlipKartSuperMoney-InitiateTxn_REQUEST',       api: '/flipkartSM/txns',              sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkartSM/order/status':      { logTag: 'FlipKart-OrderStatus_REQUEST',                 api: '/flipkartSM/order/status',      sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkartSM/refund':            { logTag: 'FlipKart-Refund_REQUEST',                      api: '/flipkartSM/refund',            sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/flipkartSM/fetch/status':      { logTag: 'FlipKart-FetchStatus_REQUEST',                 api: '/flipkartSM/fetch/status',      sourceDestination: 'APP_WRAPPER', headers: {} },
+
+  // ── JuspaySDK ────────────────────────────────────────────────────────────────
+  '/sdk/eligibility':              { logTag: 'JuspaySDK-SoftEligiblity_REQUEST',                    api: '/sdk/eligibility',              sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/verifyLspOtp':             { logTag: 'JuspaySDK-VerifyLspOtp_REQUEST',                      api: '/sdk/verifyLspOtp',             sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/createLoanApplication':    { logTag: 'JuspaySDK-CreateLoanApplication_REQUEST',             api: '/sdk/createLoanApplication',    sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/fetchOffer':               { logTag: 'JuspaySDK-FetchOffer-HardEligibility_REQUEST',        api: '/sdk/fetchOffer',               sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/fetchOfferStatus':         { logTag: 'JuspaySDK-FetchOfferStatus-HardEligibility-SDK_REQUEST', api: '/sdk/fetchOfferStatus',      sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/offer/set':                { logTag: 'JuspaySDK-SetOffer_REQUEST',                          api: '/sdk/offer/set',                sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/journey/url/get':          { logTag: 'JuspaySDK-GetJourneyUrl_REQUEST',                     api: '/sdk/journey/url/get',          sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/getFlowLink':              { logTag: 'GetFlowLink-SDK_REQUEST',                             api: '/sdk/getFlowLink',              sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/journey/resume':           { logTag: 'JuspaySDK-ResumeJourney_REQUEST',                     api: '/sdk/journey/resume',           sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/otp/trigger':              { logTag: 'JuspaySDK-TriggerOTP_REQUEST',                        api: '/sdk/otp/trigger',              sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/offers/generate':          { logTag: 'JuspaySDK-GenerateOffers_REQUEST',                    api: '/sdk/offers/generate',          sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/offers/get':               { logTag: 'JuspaySDK-GetOffers_REQUEST',                         api: '/sdk/offers/get',               sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/actionRequired/trigger':   { logTag: 'TriggerActionRequired_REQUEST',                       api: '/sdk/actionRequired/trigger',   sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/sdk/actionRequired/status':    { logTag: 'TriggerActionRequired_REQUEST',                       api: '/sdk/actionRequired/status',    sourceDestination: 'APP_WRAPPER', headers: {} },
+
+  // ── BusinessLoan ─────────────────────────────────────────────────────────────
+  '/businessloan/customer':                    { logTag: 'BL-CreateUpdateCustomer_REQUEST',                      api: '/businessloan/customer',                    sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/businessloan/customer/get':                { logTag: 'BL-GetCustomer_REQUEST',                               api: '/businessloan/customer/get',                sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/businessloan/link/get':                    { logTag: 'BusinessLoan-GetLink_REQUEST',                         api: '/businessloan/link/get',                    sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/businessloan/auth/verify':                 { logTag: 'BL-VerifyAuth_REQUEST',                                api: '/businessloan/auth/verify',                 sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/businessloan/eligibility/soft':            { logTag: 'BusinessLoan-SoftEligibility_REQUEST',                 api: '/businessloan/eligibility/soft',            sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/businessloan/eligibility/hard':            { logTag: 'BusinessLoan-HardEligibility-FetchOfferRequest_REQUEST', api: '/businessloan/eligibility/hard',          sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/businessloan/eligibility/hard/status':     { logTag: 'BusinessLoan-HardEligibility-FetchOfferStatus_REQUEST', api: '/businessloan/eligibility/hard/status',   sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/businessloan/loanIntent/status':           { logTag: 'BusinessLoan-LoanIntentStatus_REQUEST',                api: '/businessloan/loanIntent/status',           sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/businessloan/loanApplication/status':      { logTag: 'BusinessLoan-LoanApplicationStatus_REQUEST',           api: '/businessloan/loanApplication/status',      sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/businessloan/getKFS':                      { logTag: 'BusinessLoan-GetKFS_REQUEST',                         api: '/businessloan/getKFS',                      sourceDestination: 'APP_WRAPPER', headers: {} },
+
+  // ── TSPHyperCredit ───────────────────────────────────────────────────────────
+  '/tsp/order/create':    { logTag: 'TSP-Hypercredit-OrderCreate_REQUEST',  api: '/tsp/order/create',    sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/tsp/order/{orderId}': { logTag: 'TSP-Hypercredit-OrderStatus_REQUEST',  api: '/tsp/order/{orderId}', sourceDestination: 'APP_WRAPPER', headers: {} }, // GET
+  '/tsp/refund':          { logTag: 'TSP-HyperCredit-Refund_REQUEST',       api: '/tsp/refund',          sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/tsp/capture':         { logTag: 'TSP-HyperCredit-Capture_REQUEST',      api: '/tsp/capture',         sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/tsp/eligibility':     { logTag: 'TSP-Hypercredit-Eligibility_REQUEST',  api: '/tsp/eligibility',     sourceDestination: 'APP_WRAPPER', headers: {} },
+
+  // ── Euler ────────────────────────────────────────────────────────────────────
+  '/api/lsp/eligibility': { logTag: 'Euler-ETB-Eligibility_REQUEST', api: '/api/lsp/eligibility', sourceDestination: 'APP_WRAPPER', headers: {} },
+
+  // ── Generic / JuspaySDK (/api/) ──────────────────────────────────────────────
+  '/api/eligibility': { logTag: 'JUSPAY_SDK_REQUEST', api: '/api/eligibility', sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/api/getKFS':      { logTag: 'JuspaySDK-GetKFS_REQUEST', api: '/api/getKFS', sourceDestination: 'APP_WRAPPER', headers: {} },
+
+  // ── PayIn3 ───────────────────────────────────────────────────────────────────
+  '/payin3/payin3/eligibility':  { logTag: 'PayIn3-SoftEligiblity_REQUEST',  api: '/payin3/payin3/eligibility',  sourceDestination: 'APP_WRAPPER', headers: {} },
+  '/payin3/payin3/offer/set':    { logTag: 'JuspaySDK-SetOfferV2_REQUEST',   api: '/payin3/payin3/offer/set',    sourceDestination: 'APP_WRAPPER', headers: {} },
+
+
   // ==================== APP_WRAPPER (Wrapper Endpoints - Incoming from APP) ====================
   // FlipKart APIs
   '/flipkart/eligibility': { logTag: 'FlipKart-Eligibility_INCOMING', api: '/flipkart/eligibility', sourceDestination: 'APP_WRAPPER', headers: {} },
@@ -1210,12 +1454,25 @@ export const ORCHESTRATOR_CONFIG = {
   autoStart: process.env.AUTO_START !== 'false'
 };
 
-// Mock configuration
+// Retry configuration for stuck log entries
+// RETRY_INTERVAL_MS: how often to poll (250ms = 4 times/sec)
+// MAX_RETRY_SECONDS: how long to wait on the same entry before giving up
+export const RETRY_CONFIG = {
+  retryIntervalMs: parseInt(process.env.RETRY_INTERVAL_MS, 10) || 250,
+  maxRetrySeconds: parseInt(process.env.MAX_RETRY_SECONDS, 10) || 2,
+};
+
 export const MOCK_CONFIG = {
   enabled: process.env.MOCK_ENABLED === 'true',
-  // When mocks are enabled, these URLs override SERVICE_MAP
   mockLspUrl: process.env.MOCK_LSP_URL || 'http://127.0.0.1:4232',
   mockGwUrl: process.env.MOCK_GW_URL || 'http://127.0.0.1:2344'
+};
+
+export const MOCKS_ENABLED = MOCK_CONFIG.enabled;
+
+export const SERVICE_PORTS = {
+  dashboard: 3002,
+  orchestrator: 3001
 };
 
 /**
