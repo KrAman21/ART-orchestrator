@@ -26,12 +26,12 @@ export const SERVICE_MAP = {
 };
 
 export const LSP_API_CONFIG = {
-  baseUrl: process.env.LSP_API_BASE_URL || 'https://integ-expresscheckout-api.juspay.in',
+  baseUrl: process.env.LSP_API_BASE_URL || 'https://api.juspay.in',
   sessionToken: process.env.SESSION_TOKEN || ''
 };
 
 export const QAPI_CONFIG = {
-  baseUrl: process.env.QAPI_BASE_URL || 'https://integ-expresscheckout-api.juspay.in',
+  baseUrl: process.env.QAPI_BASE_URL || 'https://dashboard.credit.juspay.in',
   token: process.env.QAPI_TOKEN || '',
   merchantId: process.env.QAPI_MERCHANT_ID || 'test_merchant_1'
 };

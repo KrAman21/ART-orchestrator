@@ -225,7 +225,7 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = nu
     merchantIds: merchantIds || [QAPI_CONFIG.merchantId]
   });
 
-  const endpoint = '/credit/q/query';
+  const endpoint = '/analytics/query';
   const url = `${QAPI_CONFIG.baseUrl}${endpoint}`;
 
   const payload = {
