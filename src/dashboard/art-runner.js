@@ -1,4 +1,4 @@
-import { logger } from '../utils/logger.js';
+import { logger, subscribe, unsubscribe, runInSession } from '../utils/logger.js';
 import { runSequentialArt } from '../sequential-runner.js';
 import { MOCKS_ENABLED, QAPI_CONFIG } from '../config.js';
 
@@ -10,9 +10,10 @@ export async function getOrdersToProcess(merchantId, orderList, lastMinutes, sse
       orders.push({ merchantId, orderId });
     }
   } else if (lastMinutes) {
-    const endDate = new Date();
-    const startDate = new Date(endDate.getTime() - lastMinutes * 60 * 1000);
-    sseManager.broadcast('INFO', `Fetching orders from last ${lastMinutes} minutes...`);
+      const LOG_DELAY_MINUTES = 5;
+      const endDate = new Date(Date.now() - LOG_DELAY_MINUTES * 60 * 1000);
+      const startDate = new Date(endDate.getTime() - lastMinutes * 60 * 1000);
+      sseManager.broadcast('INFO', `Fetching orders from last ${lastMinutes} minutes (with ${LOG_DELAY_MINUTES}min log delay offset)...`);
     const orderIds = await fetchRecentOrderIds(merchantId, startDate, endDate);
     for (const orderId of orderIds) {
       orders.push({ merchantId, orderId });
@@ -49,44 +50,46 @@ export async function fetchRecentOrderIds(merchantId, startDate, endDate) {
   }
 }
 
-export async function runArtProcess(merchantId, orders, server) {
-  const { sseManager } = server;
+export async function runArtProcess(merchantId, orders, server, session) {
+  const sseManager = session.sseManager;
+  const mySessionId = session.sessionId;
   const stopSignal = { requested: false };
-  server.artStopSignal = stopSignal;
+  session.artStopSignal = stopSignal;
 
-  const boundInfo = logger.info.bind(logger);
-  const boundWarn = logger.warn.bind(logger);
-  const boundError = logger.error.bind(logger);
-
-  logger.info = (...args) => {
-    sseManager.broadcastRaw('INFO', typeof args[0] === 'string' ? args[0] : JSON.stringify(args[0]));
-    return boundInfo(...args);
-  };
-  logger.warn = (...args) => {
-    sseManager.broadcastRaw('WARN', typeof args[0] === 'string' ? args[0] : JSON.stringify(args[0]));
-    return boundWarn(...args);
-  };
-  logger.error = (...args) => {
-    sseManager.broadcastRaw('ERROR', typeof args[0] === 'string' ? args[0] : JSON.stringify(args[0]));
-    return boundError(...args);
-  };
+  const subId = subscribe((level, message, _meta, logSessionId) => {
+    if (logSessionId === mySessionId) {
+      sseManager.broadcastRaw(level, typeof message === 'string' ? message : JSON.stringify(message));
+    }
+  });
 
   try {
     const config = {
       MAX_JOURNEY_TIME_MS: 3 * 60 * 1000,
-      REPORT_PATH: 'report.json',
+      REPORT_PATH: session.reportPath || 'report.json',
       AUTO_FETCH_LOGS: true,
       USE_ASYNC_ORCHESTRATOR: true,
-      PORT: process.env.PORT || 3001,
+      PORT: server.orchestratorPort || 3001,
       TIMEOUT_MS: 10000,
-      LOGS_FILE_PATH: 'data/logs.json',
+      LOGS_FILE_PATH: `data/logs-${mySessionId}.json`,
       MERCHANT_ID: merchantId,
       SESSION_TOKEN: process.env.SESSION_TOKEN || '',
       ENABLE_MOCKS: MOCKS_ENABLED,
-      stopSignal
+      stopSignal,
+      sessionId: mySessionId,
+      registry: server.registry,
+      onOrchestratorReady: (orchestrator, orderId) => {
+        if (server.registry) {
+          server.registry.register(mySessionId, orchestrator, orders.map(o => o.orderId));
+        }
+      },
+      onLoanApplicationId: (loanApplicationId) => {
+        if (server.registry) {
+          server.registry.addLoanApplicationId(mySessionId, loanApplicationId);
+        }
+      }
     };
 
-    const result = await runSequentialArt(orders, config);
+    const result = await runInSession(mySessionId, () => runSequentialArt(orders, config));
 
     const wasStopped = stopSignal.requested;
     sseManager.broadcast('INFO', wasStopped
@@ -104,13 +107,14 @@ export async function runArtProcess(merchantId, orders, server) {
 
   } catch (error) {
     sseManager.broadcast('ERROR', `ART failed: ${error.message}`);
-    boundError('ART process failed', { error: error.message, stack: error.stack });
+    logger.error('ART process failed', { error: error.message, stack: error.stack, sessionId: mySessionId });
     sseManager.broadcastReportReady();
   } finally {
-    logger.info = boundInfo;
-    logger.warn = boundWarn;
-    logger.error = boundError;
-    server.isRunning = false;
-    server.artStopSignal = null;
+    unsubscribe(subId);
+    if (server.registry) {
+      server.registry.unregister(mySessionId);
+    }
+    session.isRunning = false;
+    session.artStopSignal = null;
   }
 }

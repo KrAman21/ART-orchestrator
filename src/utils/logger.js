@@ -1,10 +1,6 @@
-/**
- * Simple structured logger for ART Orchestrator
- * Logs to both console and file (art-orchestrator.log)
- */
-
 import { appendFileSync, mkdirSync, writeFileSync } from 'fs';
 import { dirname, resolve } from 'path';
+import { AsyncLocalStorage } from 'async_hooks';
 
 const LOG_LEVELS = {
   DEBUG: 0,
@@ -15,9 +11,8 @@ const LOG_LEVELS = {
 
 const CURRENT_LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase()] ?? LOG_LEVELS.INFO;
 const LOG_FILE = process.env.LOG_FILE || 'orchestrator-output.log';
-const LOG_TO_FILE = process.env.LOG_TO_FILE !== 'false'; // Default to true
+const LOG_TO_FILE = process.env.LOG_TO_FILE !== 'false';
 
-// Resolve log file path relative to cwd
 const LOG_FILE_PATH = resolve(process.cwd(), LOG_FILE);
 
 const GLOBAL_KEY = '__art_logger_initialized__';
@@ -34,6 +29,11 @@ if (LOG_TO_FILE && !global[GLOBAL_KEY]) {
   console.log(`[LOGGER_INIT] Already initialized, skipping file clear`);
 }
 
+const sessionContext = new AsyncLocalStorage();
+
+const subscribers = new Map();
+let subscriberCounter = 0;
+
 function formatTimestamp() {
   return new Date().toISOString();
 }
@@ -44,14 +44,14 @@ function logToFile(logEntry) {
   try {
     const line = JSON.stringify(logEntry) + '\n';
     appendFileSync(LOG_FILE_PATH, line, { encoding: 'utf-8' });
-  } catch (error) {
-    // Silently fail file logging - don't break the app
-    // Console output still happens
-  }
+  } catch (_) {}
 }
 
 function log(level, message, meta = {}) {
   if (LOG_LEVELS[level] < CURRENT_LEVEL) return;
+
+  const store = sessionContext.getStore();
+  const sessionId = store?.sessionId || null;
 
   const logEntry = {
     timestamp: formatTimestamp(),
@@ -60,9 +60,12 @@ function log(level, message, meta = {}) {
     ...meta
   };
 
+  if (sessionId) {
+    logEntry._sessionId = sessionId;
+  }
+
   const line = JSON.stringify(logEntry);
 
-  // Console output
   if (level === 'ERROR') {
     console.error(line);
   } else if (level === 'WARN') {
@@ -71,8 +74,27 @@ function log(level, message, meta = {}) {
     console.log(line);
   }
 
-  // File output
   logToFile(logEntry);
+
+  for (const [, callback] of subscribers) {
+    try {
+      callback(level, message, meta, sessionId);
+    } catch (_) {}
+  }
+}
+
+export function subscribe(callback) {
+  const id = ++subscriberCounter;
+  subscribers.set(id, callback);
+  return id;
+}
+
+export function unsubscribe(id) {
+  subscribers.delete(id);
+}
+
+export function runInSession(sessionId, fn) {
+  return sessionContext.run({ sessionId }, fn);
 }
 
 export const logger = {
@@ -81,7 +103,10 @@ export const logger = {
   warn: (msg, meta) => log('WARN', msg, meta),
   error: (msg, meta) => log('ERROR', msg, meta),
 
-  // Specific log types for orchestrator
+  subscribe,
+  unsubscribe,
+  runInSession,
+
   logStart: (totalLogs) => log('INFO', 'Starting ART replay', { totalLogs }),
   logComplete: (summary) => log('INFO', 'ART replay completed', summary),
 
@@ -109,10 +134,6 @@ export const logger = {
     log('INFO', 'Health check', { service: serviceName, healthy });
   },
 
-  /**
-   * Log API call or mocked request/response
-   * Format: API LOG :: <SOURCE>-><DESTINATION> <API_NAME> <REQUEST/RESPONSE> <LOG_INDEX>
-   */
   logApiCall: (source, destination, apiName, type, logIndex) => {
     const arrow = source && destination ? `${source}->${destination}` : 'N/A';
     log('INFO', `API LOG :: ${arrow} ${apiName} ${type} ${logIndex}`);

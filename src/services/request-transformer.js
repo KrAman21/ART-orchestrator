@@ -17,7 +17,9 @@ const FIELD_TRANSFORMS = {
   'address_line_1': { value: '123 Test Street', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'address_line_2': { value: 'Near Test Park', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'state': { value: 'Maharashtra', check: (v) => typeof v === 'string' && v.startsWith('XX') },
-  'city': { value: 'Pune', check: (v) => typeof v === 'string' && v.startsWith('XX') }
+  'city': { value: 'Pune', check: (v) => typeof v === 'string' && v.startsWith('XX') },
+  'employment_type': { value: 'SALARIED', check: (v) => typeof v === 'string' && v.startsWith('XX') },
+  'marital_status': { value: 'SINGLE', check: (v) => typeof v === 'string' && v.startsWith('XX') }
 };
 
 const EXPIRY_TIME_FIELDS = [
@@ -127,6 +129,46 @@ function traverseAndUpdateExpiry(obj, path, transformsApplied, minutesFromNow) {
   return obj;
 }
 
+function transformBureauData(obj, path, transformsApplied) {
+  if (obj === null || obj === undefined) return obj;
+
+  if (Array.isArray(obj)) {
+    for (let i = 0; i < obj.length; i++) {
+      obj[i] = transformBureauData(obj[i], path + '[' + i + ']', transformsApplied);
+    }
+    return obj;
+  }
+
+  if (typeof obj === 'object') {
+    for (const key of Object.keys(obj)) {
+      const value = obj[key];
+      const currentPath = path ? path + '.' + key : key;
+
+      if (key === 'bureau' && typeof value === 'string') {
+        const bureauData = {
+          format: 'JSON',
+          value: value,
+          source: value,
+          is_encrypted: false
+        };
+        obj[key] = bureauData;
+        transformsApplied.push({
+          path: currentPath,
+          key: key,
+          oldValue: value,
+          newValue: bureauData,
+          description: 'Transformed string bureau to BureauData object'
+        });
+      } else if (typeof value === 'object') {
+        obj[key] = transformBureauData(value, currentPath, transformsApplied);
+      }
+    }
+    return obj;
+  }
+
+  return obj;
+}
+
 export function transformMaskedValues(payload, context) {
   if (!payload || typeof payload !== 'object') {
     return payload;
@@ -175,6 +217,17 @@ export function transformRequest(payload, context) {
 
   transformedPayload = transformMaskedValues(transformedPayload, context);
   transformedPayload = transformExpiryTimes(transformedPayload, context, 10);
+
+  const bureauTransforms = [];
+  transformedPayload = transformBureauData(transformedPayload, '', bureauTransforms);
+
+  if (bureauTransforms.length > 0) {
+    logger.info('Transformed bureau fields in request', {
+      context: context || '',
+      count: bureauTransforms.length,
+      transforms: bureauTransforms
+    });
+  }
 
   return transformedPayload;
 }

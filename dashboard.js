@@ -2,8 +2,9 @@
 import DashboardServer from './src/dashboard/index.js';
 
 const port = process.env.DASHBOARD_PORT || 3002;
+const orchestratorPort = process.env.PORT || 3001;
 
-const server = new DashboardServer({ port });
+const server = new DashboardServer({ port, orchestratorPort });
 
 async function main() {
   try {

@@ -340,6 +340,7 @@
         <div class="status-bar">
             <div class="status-indicator idle" id="statusIndicator"></div>
             <span id="statusText">Idle - Ready to start</span>
+            <span style="margin-left:auto;font-size:11px;color:#4a7aaa">Session: <span id="sessionDisplay"></span></span>
         </div>
         
         <div class="tab-bar">
@@ -377,8 +378,23 @@
     </div>
     
     <script>
+        function generateSessionId() {
+            if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+                return crypto.randomUUID();
+            }
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        const sessionId = generateSessionId();
+
         let eventSource = null;
         let isRunning = false;
+
+        document.getElementById('sessionDisplay').textContent = sessionId.substring(0, 8);
 
         function switchTab(tab) {
             const logsPanel = document.getElementById('panel-logs');
@@ -460,18 +476,24 @@
             clearLogs();
             addLog('info', 'Starting ART process...');
 
-            // Reset report viewer and clear the report file before starting
             resetReportViewer();
-            await fetch('/api/reset-report', { method: 'POST' }).catch(() => {});
+            await fetch('/api/reset-report', {
+                method: 'POST',
+                headers: { 'x-session-id': sessionId }
+            }).catch(() => {});
 
             try {
                 const response = await fetch('/api/start-art', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-session-id': sessionId
+                    },
                     body: JSON.stringify({
                         merchantId,
                         orderList: orderList ? orderList.split(',').map(s => s.trim()) : [],
-                        lastMinutes: lastMinutes ? parseInt(lastMinutes) : null
+                        lastMinutes: lastMinutes ? parseInt(lastMinutes) : null,
+                        sessionId
                     })
                 });
 
@@ -492,10 +514,12 @@
 
         async function stopART() {
             try {
-                const response = await fetch('/api/stop-art', { method: 'POST' });
+                const response = await fetch('/api/stop-art', {
+                    method: 'POST',
+                    headers: { 'x-session-id': sessionId }
+                });
                 const data = await response.json();
                 addLog('info', `ART stopped: ${data.message}`);
-                // Keep SSE open — backend will send reportUpdate when report is written
                 updateStatus('idle', 'Stopping...');
             } catch (error) {
                 addLog('error', `Failed to stop ART: ${error.message}`);
@@ -516,7 +540,7 @@
                 eventSource.close();
             }
 
-            eventSource = new EventSource('/api/stream-logs');
+            eventSource = new EventSource(`/api/stream-logs?sessionId=${encodeURIComponent(sessionId)}`);
 
             eventSource.onopen = () => {
                 addLog('info', 'Connected to log stream');
@@ -529,7 +553,6 @@
                 if (log.reportUpdate) {
                     loadReport();
                     switchTab('report');
-                    // ART is fully done — close SSE and mark idle
                     if (eventSource) {
                         eventSource.close();
                         eventSource = null;
@@ -548,7 +571,9 @@
         
         async function loadReport() {
             try {
-                const response = await fetch('/api/report');
+                const response = await fetch('/api/report', {
+                    headers: { 'x-session-id': sessionId }
+                });
                 if (!response.ok) return;
                 
                 const report = await response.json();

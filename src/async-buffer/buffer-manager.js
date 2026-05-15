@@ -73,10 +73,15 @@ export class BufferManager {
     
     this._signalWorkAvailable();
     
+    const responsePreview = isError 
+      ? { error: response.message, status: response.statusCode, data: response.data }
+      : { status: response.status, statusText: response.statusText, data: response.data };
+    
     logger.info('Added response to buffer', { 
       requestId, 
       bufferSize: this.responseBuffer.size,
-      response: isError ? { error: response.message, status: response.statusCode } : { status: response.status, statusText: response.statusText, data: JSON.stringify(response.data).substring(0, 500) }
+      isError,
+      response: responsePreview
     });
   }
   

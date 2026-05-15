@@ -5,15 +5,15 @@ export class EnvironmentController {
       local: {
         name: 'Local Development',
         LSP: {
-          baseUrl: process.env.LSP_URL_LOCAL || 'http://localhost:8020',
+          baseUrl: process.env.LSP_URL_LOCAL || 'http://localhost:8080',
           name: 'LSP-Local'
         },
         GW: {
-          baseUrl: process.env.GW_URL_LOCAL || 'http://localhost:8012',
+          baseUrl: process.env.GW_URL_LOCAL || 'http://localhost:8011',
           name: 'Gateway-Local'
         },
         GATEWAY: {
-          baseUrl: process.env.GW_URL_LOCAL || 'http://localhost:8012',
+          baseUrl: process.env.GW_URL_LOCAL || 'http://localhost:8011',
           name: 'Gateway-Local'
         }
       },
@@ -24,11 +24,11 @@ export class EnvironmentController {
           name: 'LSP-Sandbox'
         },
         GW: {
-          baseUrl: process.env.GW_URL_SBX || 'http://localhost:8012',
+          baseUrl: process.env.GW_URL_SBX || 'http://localhost:8011',
           name: 'Gateway-Sandbox'
         },
         GATEWAY: {
-          baseUrl: process.env.GW_URL_SBX || 'http://localhost:8012',
+          baseUrl: process.env.GW_URL_SBX || 'http://localhost:8011',
           name: 'Gateway-Sandbox'
         }
       }

@@ -107,11 +107,21 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
         ok: response.ok,
         hasData: !!data,
         dataKeys: data ? Object.keys(data) : [],
+        data: data,
         error: !response.ok ? (data?.error || 'HTTP error') : null,
         requestId,
         timestamp: new Date().toISOString()
       });
     }
+
+    logger.info('HTTP_RESPONSE_FULL_BODY', {
+      requestId,
+      url,
+      status: response.status,
+      statusText: response.statusText,
+      data: data,
+      dataString: data ? JSON.stringify(data) : null
+    });
 
     logger.debug('HTTP response received', {
       status: response.status,
@@ -128,13 +138,22 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     logger.error('HTTP request failed', {
       url,
       method,
-      error: error.message
+      error: error.message,
+      errorType: error.constructor?.name,
+      errorStack: error.stack,
+      errorCause: error.cause,
+      baseUrl,
+      endpoint,
+      requestId,
+      logTag
     });
 
     return {
       error: true,
       message: error.message,
-      status: 0
+      status: 0,
+      errorType: error.constructor?.name,
+      errorDetails: error.cause || null
     };
   }
 }

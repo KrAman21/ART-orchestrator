@@ -274,16 +274,24 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       reportGenerator
     });
 
-    const app = createServer(orchestrator);
-    
-    await new Promise((resolve, reject) => {
-      server = app.listen(config.PORT, () => {
-        console.log(`\nART Server running on port ${config.PORT} for order ${orderId}`);
-        resolve();
+    if (config.onOrchestratorReady) {
+      config.onOrchestratorReady(orchestrator, orderId);
+      const loanApplicationIds = [...new Set(finalFilteredLogs
+        .map(l => l.loan_application_id || l.loanApplicationId)
+        .filter(Boolean))];
+      for (const laId of loanApplicationIds) {
+        config.onLoanApplicationId?.(laId);
+      }
+    } else {
+      const app = createServer(orchestrator);
+      await new Promise((resolve, reject) => {
+        server = app.listen(config.PORT, () => {
+          console.log(`\nART Server running on port ${config.PORT} for order ${orderId}`);
+          resolve();
+        });
+        server.on('error', reject);
       });
-
-      server.on('error', reject);
-    });
+    }
 
     logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 4: Running ART replay`, {
       orderId,
@@ -400,6 +408,10 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       await new Promise(resolve => server.close(resolve));
     }
 
+    if (config.onOrchestratorReady) {
+      config.registry?.unregister(config.sessionId);
+    }
+
     if (mocks) {
       await mocks.stop();
     }
@@ -424,6 +436,9 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     
     if (orchestrator) await orchestrator.stop();
     if (server) await new Promise(resolve => server.close(resolve));
+    if (config.onOrchestratorReady) {
+      config.registry?.unregister(config.sessionId);
+    }
     if (mocks) await mocks.stop();
 
     const currentEntry = orchestrator?.validator?.getCurrentEntry();

@@ -45,6 +45,23 @@ export class NonBlockingHttpClient {
       const activeReq = this.activeRequests.get(requestId);
       this.activeRequests.delete(requestId);
       
+      const responseBodyStr = typeof response.data === 'string' 
+        ? response.data 
+        : JSON.stringify(response.data);
+      logger.info('HTTP_RESPONSE_RECEIVED', { 
+        requestId, 
+        logTag,
+        endpoint,
+        baseUrl,
+        status: response.status,
+        statusText: response.statusText,
+        responseBody: responseBodyStr,
+        responseBodyLength: responseBodyStr?.length || 0,
+        headers: response.headers,
+        error: response.error,
+        message: response.message
+      });
+      
       const apiFailure = this.checkApiFailure(response);
       const hasFailure = response.error || apiFailure;
       
