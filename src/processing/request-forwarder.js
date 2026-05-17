@@ -348,8 +348,8 @@ export class RequestForwarder {
       );
 
       const apiFailure = this.checkApiFailure(serviceResponse);
-      
-      if (serviceResponse && (serviceResponse.error || serviceResponse.status !== 200 || apiFailure)) {
+
+      if (serviceResponse && (serviceResponse.error || serviceResponse.status !== 200)) {
         let errorMsg;
         if (apiFailure) {
           errorMsg = `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`;

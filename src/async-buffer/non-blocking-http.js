@@ -63,7 +63,7 @@ export class NonBlockingHttpClient {
       });
       
       const apiFailure = this.checkApiFailure(response);
-      const hasFailure = response.error || apiFailure;
+      const hasFailure = response.error || response.status >= 500;
       
       logger.info('Non-blocking request result', { 
         requestId, 

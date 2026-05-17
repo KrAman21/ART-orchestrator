@@ -68,9 +68,15 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     let body = method !== 'GET' ? JSON.stringify(payload ?? {}) : undefined;
 
     if (dest === 'WRAPPER' && body) {
-      body = JSON.stringify(body);
+      // body is already stringified above; just add WRAPPER-specific headers
       headers['disable_encryption'] = customHeaders['disable_encryption'] || 'TRUE';
       headers['authorization'] = customHeaders['authorization'] || 'Basic flipkart';
+      
+      // When disable_encryption is TRUE, LSP expects body as JSON String (not Object)
+      // because Servant route type is ReqBody '[JSON] Text
+      if (headers['disable_encryption'] === 'TRUE') {
+        body = JSON.stringify(body);
+      }
     }
 
     logger.info('Request body prepared', {

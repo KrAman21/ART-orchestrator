@@ -4,7 +4,7 @@ const FIELD_TRANSFORMS = {
   'address_type': { value: 'DELIVERY', check: (v) => typeof v === 'string' && v.startsWith('XX') },  // TODO: address type should be dynamic
   'mobile_number': { value: '9876543210', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'phone': { value: '9876543210', check: (v) => typeof v === 'string' && v.startsWith('XX') },
-  'date_of_birth': { value: '01-01-1990', check: (v) => typeof v === 'string' && v.startsWith('XX') },
+  'date_of_birth': { value: '01-01-1990', check: (v) => typeof v === 'string' && (v.startsWith('XX') || v === 'MASKED') },
   'dateOfBirth': { value: '01-01-1990', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'pan_number': { value: 'EHZPA1234F', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'pan': { value: 'EHZPA1234F', check: (v) => typeof v === 'string' && v.startsWith('XX') },
@@ -18,6 +18,7 @@ const FIELD_TRANSFORMS = {
   'address_line_2': { value: 'Near Test Park', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'state': { value: 'Maharashtra', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'city': { value: 'Pune', check: (v) => typeof v === 'string' && v.startsWith('XX') },
+  'pincode': { value: '560047', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'employment_type': { value: 'SALARIED', check: (v) => typeof v === 'string' && v.startsWith('XX') },
   'marital_status': { value: 'SINGLE', check: (v) => typeof v === 'string' && v.startsWith('XX') }
 };
@@ -31,7 +32,7 @@ const EXPIRY_TIME_FIELDS = [
 ];
 
 function isMasked(value) {
-  return typeof value === 'string' && value.startsWith('XX');
+  return typeof value === 'string' && (value.startsWith('XX') || value === 'MASKED');
 }
 
 function isISOTimestamp(value) {
@@ -50,6 +51,9 @@ function transformValue(key, value) {
   const transform = FIELD_TRANSFORMS[key];
   if (transform && transform.check(value)) {
     return { transformed: true, value: transform.value };
+  }
+  if (value === 'MASKED') {
+    return { transformed: true, value: null };
   }
   return { transformed: false, value };
 }
@@ -144,7 +148,7 @@ function transformBureauData(obj, path, transformsApplied) {
       const value = obj[key];
       const currentPath = path ? path + '.' + key : key;
 
-      if (key === 'bureau' && typeof value === 'string') {
+      if (key === 'bureau' && typeof value === 'string' && value !== 'MASKED') {
         const bureauData = {
           format: 'JSON',
           value: value,
@@ -166,6 +170,27 @@ function transformBureauData(obj, path, transformsApplied) {
     return obj;
   }
 
+  return obj;
+}
+
+function transformDeliveryAddress(obj, transformsApplied) {
+  if (!obj || typeof obj !== 'object') return obj;
+  
+  if (obj.delivery_address === null || obj.delivery_address === undefined) {
+    if (Array.isArray(obj.address) && obj.address.length > 0) {
+      const deliveryAddr = obj.address.find(addr => addr && addr.address_type === 'DELIVERY');
+      if (deliveryAddr) {
+        obj.delivery_address = deliveryAddr;
+        transformsApplied.push({
+          path: 'delivery_address',
+          key: 'delivery_address',
+          oldValue: null,
+          newValue: deliveryAddr,
+          description: 'Extracted delivery address from address array'
+        });
+      }
+    }
+  }
   return obj;
 }
 
@@ -217,6 +242,16 @@ export function transformRequest(payload, context) {
 
   transformedPayload = transformMaskedValues(transformedPayload, context);
   transformedPayload = transformExpiryTimes(transformedPayload, context, 10);
+
+  const deliveryTransforms = [];
+  transformedPayload = transformDeliveryAddress(transformedPayload, deliveryTransforms);
+
+  if (deliveryTransforms.length > 0) {
+    logger.info('Transformed delivery address in request', {
+      context: context || '',
+      transforms: deliveryTransforms
+    });
+  }
 
   const bureauTransforms = [];
   transformedPayload = transformBureauData(transformedPayload, '', bureauTransforms);
