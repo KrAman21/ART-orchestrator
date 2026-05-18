@@ -201,7 +201,7 @@ export class LogProcessor {
             logTag: entry.logTag
           });
 
-          response = await makeRequest(
+      response = await makeRequest(
             this.callbacks.getServiceBaseUrl(service),
             api,
             'POST',
@@ -211,7 +211,8 @@ export class LogProcessor {
             entry.logTag,
             null,
             customHeaders,
-            entry.index
+            entry.index,
+            this.callbacks.getServiceUnixSocket(service)
           );
 
           let responseData = response?.data;
@@ -272,7 +273,8 @@ export class LogProcessor {
           entry.logTag,
           null,
           customHeaders,
-          entry.index
+          entry.index,
+          this.callbacks.getServiceUnixSocket(service)
         );
       }
 

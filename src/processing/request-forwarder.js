@@ -344,7 +344,8 @@ export class RequestForwarder {
         expectedEntry.logTag,
         null,
         customHeaders,
-        expectedEntry.index
+        expectedEntry.index,
+        this.callbacks.getServiceUnixSocket(endpointConfig?.service || destination)
       );
 
       const apiFailure = this.checkApiFailure(serviceResponse);

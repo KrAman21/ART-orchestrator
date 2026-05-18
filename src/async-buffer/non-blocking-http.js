@@ -10,7 +10,7 @@ export class NonBlockingHttpClient {
     this.failedRequests = [];
   }
   
-  async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null) {
+  async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null) {
     logger.info('Non-blocking HTTP send initiated', {
       requestId,
       logTag,
@@ -28,7 +28,8 @@ export class NonBlockingHttpClient {
       logTag,
       merchantId,
       customHeaders,
-      logIndex
+      logIndex,
+      unixSocket
     );
     
     this.activeRequests.set(requestId, {

@@ -6,30 +6,36 @@ export class EnvironmentController {
         name: 'Local Development',
         LSP: {
           baseUrl: process.env.LSP_URL_LOCAL || 'http://localhost:8080',
-          name: 'LSP-Local'
+          name: 'LSP-Local',
+          unixSocket: process.env.LSP_UNIX_SOCKET || null
         },
         GW: {
           baseUrl: process.env.GW_URL_LOCAL || 'http://localhost:8011',
-          name: 'Gateway-Local'
+          name: 'Gateway-Local',
+          unixSocket: process.env.GW_UNIX_SOCKET || null
         },
         GATEWAY: {
           baseUrl: process.env.GW_URL_LOCAL || 'http://localhost:8011',
-          name: 'Gateway-Local'
+          name: 'Gateway-Local',
+          unixSocket: process.env.GW_UNIX_SOCKET || null
         }
       },
       sbx: {
         name: 'Sandbox Environment',
         LSP: {
           baseUrl: process.env.LSP_URL_SBX || 'https://integ-expresscheckout-api.juspay.in/credit/',
-          name: 'LSP-Sandbox'
+          name: 'LSP-Sandbox',
+          unixSocket: null
         },
         GW: {
           baseUrl: process.env.GW_URL_SBX || 'http://localhost:8011',
-          name: 'Gateway-Sandbox'
+          name: 'Gateway-Sandbox',
+          unixSocket: null
         },
         GATEWAY: {
           baseUrl: process.env.GW_URL_SBX || 'http://localhost:8011',
-          name: 'Gateway-Sandbox'
+          name: 'Gateway-Sandbox',
+          unixSocket: null
         }
       }
     };
@@ -63,10 +69,13 @@ export class EnvironmentController {
     const config = this.getConfig();
     serviceMap.LSP.baseUrl = config.LSP.baseUrl;
     serviceMap.LSP.name = config.LSP.name;
+    serviceMap.LSP.unixSocket = config.LSP.unixSocket;
     serviceMap.GW.baseUrl = config.GW.baseUrl;
     serviceMap.GW.name = config.GW.name;
+    serviceMap.GW.unixSocket = config.GW.unixSocket;
     serviceMap.GATEWAY.baseUrl = config.GATEWAY.baseUrl;
     serviceMap.GATEWAY.name = config.GATEWAY.name;
+    serviceMap.GATEWAY.unixSocket = config.GATEWAY.unixSocket;
   }
 }
 

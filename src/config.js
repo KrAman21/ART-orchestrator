@@ -20,9 +20,21 @@ export function getLenderId(orgId) {
 export const envController = new EnvironmentController(process.env.NODE_ENV);
 const currentEnv = envController.getConfig();
 export const SERVICE_MAP = {
-  LSP: { baseUrl: currentEnv.LSP.baseUrl, name: currentEnv.LSP.name },
-  GW: { baseUrl: currentEnv.GW.baseUrl, name: currentEnv.GW.name },
-  GATEWAY: { baseUrl: currentEnv.GATEWAY.baseUrl, name: currentEnv.GATEWAY.name }
+  LSP: { 
+    baseUrl: currentEnv.LSP.baseUrl, 
+    name: currentEnv.LSP.name,
+    unixSocket: currentEnv.LSP.unixSocket 
+  },
+  GW: { 
+    baseUrl: currentEnv.GW.baseUrl, 
+    name: currentEnv.GW.name,
+    unixSocket: currentEnv.GW.unixSocket 
+  },
+  GATEWAY: { 
+    baseUrl: currentEnv.GATEWAY.baseUrl, 
+    name: currentEnv.GATEWAY.name,
+    unixSocket: currentEnv.GATEWAY.unixSocket 
+  }
 };
 
 export const LSP_API_CONFIG = {

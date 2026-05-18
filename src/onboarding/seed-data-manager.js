@@ -92,17 +92,21 @@ export class SeedDataManager {
       merchantId, 
       lenderCount: Object.keys(lenderOrgIdToIdMap).length 
     });
+    
 
     try {
       const response = await makeRequest(
         SERVICE_MAP.LSP.baseUrl,
         '/art/configs/set',
         'POST',
-        { merchantId, lender_org_id_to_id_map: lenderOrgIdToIdMap, lineDetails },
+        { merchantId, lenderOrgIdToIdMap, lineDetails },
         null,
         null,
         null,
-        merchantId
+        merchantId,
+        null,
+        null,
+        SERVICE_MAP.LSP.unixSocket
       );
 
       if (response.error) {
@@ -129,23 +133,31 @@ export class SeedDataManager {
   /**
    * Clear LSP data after journey completion
    */
-  async clearLspData(merchantId, orderId, lspBaseUrl) {
+  async clearLspData(merchantId, orderId) {
     logger.info('Clearing LSP data via art/data/clear');
 
     try {
-      const url = `${lspBaseUrl}/art/data/clear`;
+      const response = await makeRequest(
+        SERVICE_MAP.LSP.baseUrl,
+        '/art/data/clear',
+        'POST',
+        { merchantId, orderId },
+        null,
+        null,
+        null,
+        merchantId,
+        null,
+        null,
+        SERVICE_MAP.LSP.unixSocket
+      );
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ merchantId, orderId})
-      });
-
-      if (response.ok) {
+      if (!response.error && response.status === 200) {
         logger.info('LSP data cleared successfully', { status: response.status });
+      } else if (response.error) {
+        logger.warn('Failed to clear LSP data', {
+          error: response.message,
+          status: response.status
+        });
       } else {
         logger.warn('Failed to clear LSP data', {
           status: response.status,

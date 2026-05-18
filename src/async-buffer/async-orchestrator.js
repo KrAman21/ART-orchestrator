@@ -326,7 +326,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         entry.logTag,
         null,
         customHeaders,
-        entry.index
+        entry.index,
+        this.getServiceUnixSocket(service)
       );
       
       this.validator.advance();

@@ -2,7 +2,11 @@ import express from 'express';
 import { createServer as createHttpServer } from 'http';
 import { logger } from '../utils/logger.js';
 import { getApiMapping } from '../config.js';
+import { setupUnixSocket, configureSocketPermissions } from '../utils/socket-utils.js';
 import SessionOrchestratorRegistry from './session-registry.js';
+
+const MULTIPLEXER_PORT = parseInt(process.env.MULTIPLEXER_PORT || process.env.PORT || '3001', 10);
+const MULTIPLEXER_UNIX_SOCKET = process.env.MULTIPLEXER_UNIX_SOCKET || null;
 
 export function createMultiplexerServer() {
   const app = express();
@@ -110,16 +114,27 @@ export function createMultiplexerServer() {
   return { app, registry };
 }
 
-export function startMultiplexerServer(port = 3001) {
+export function startMultiplexerServer(port = MULTIPLEXER_PORT) {
   const { app, registry } = createMultiplexerServer();
-  const server = createHttpServer(app);
+
+  if (port > 0) {
+    createHttpServer(app).listen(port, () => {
+      logger.info(`Multiplexer orchestrator server running on TCP port ${port}`);
+      console.log(`🔀 Orchestrator TCP: http://localhost:${port}/`);
+    });
+  }
+
+  if (MULTIPLEXER_UNIX_SOCKET) {
+    setupUnixSocket(MULTIPLEXER_UNIX_SOCKET);
+    createHttpServer(app).listen(MULTIPLEXER_UNIX_SOCKET, () => {
+      configureSocketPermissions(MULTIPLEXER_UNIX_SOCKET);
+      logger.info(`Multiplexer orchestrator server running on Unix socket ${MULTIPLEXER_UNIX_SOCKET}`);
+      console.log(`🔀 Orchestrator Unix socket: ${MULTIPLEXER_UNIX_SOCKET}`);
+    });
+  }
 
   return new Promise((resolve) => {
-    server.listen(port, () => {
-      logger.info(`Multiplexer orchestrator server running on port ${port}`);
-      console.log(`\n🔀 ART Orchestrator Server (multiplexer) on port ${port}`);
-      resolve({ server, registry });
-    });
+    resolve({ server: null, registry });
   });
 }
 

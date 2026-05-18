@@ -130,6 +130,7 @@ export class ReplayOrchestrator {
         recordSuccess: this.recordSuccess.bind(this),
         recordFailure: this.recordFailure.bind(this),
         getServiceBaseUrl: this.getServiceBaseUrl.bind(this),
+        getServiceUnixSocket: this.getServiceUnixSocket.bind(this),
         processNextLogEntry: this.processNextLogEntry.bind(this),
         triggerWebhooks: this.webhookManager.triggerWebhooks.bind(this.webhookManager),
         trackAsyncCompletion: this.trackAsyncCompletion.bind(this),
@@ -154,6 +155,7 @@ export class ReplayOrchestrator {
         recordFailure: this.recordFailure.bind(this),
         fail: this.fail.bind(this),
         getServiceBaseUrl: this.getServiceBaseUrl.bind(this),
+        getServiceUnixSocket: this.getServiceUnixSocket.bind(this),
         forwardToDestination: this.forwardToDestination.bind(this),
         processNextLogEntry: this.processNextLogEntry.bind(this)
       }
@@ -187,7 +189,7 @@ export class ReplayOrchestrator {
   }
 
   async clearLspData(merchantId, orderId) {
-    return this.seedDataManager.clearLspData(merchantId, orderId, this.getServiceBaseUrl('LSP'));
+    return this.seedDataManager.clearLspData(merchantId, orderId);
   }
 
   async start() {
@@ -603,6 +605,10 @@ export class ReplayOrchestrator {
       throw new Error(`Unknown service: ${serviceName}`);
     }
     return url;
+  }
+
+  getServiceUnixSocket(serviceName) {
+    return SERVICE_MAP[serviceName]?.unixSocket || null;
   }
 
   recordSuccess(step, entry) {

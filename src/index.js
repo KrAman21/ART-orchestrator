@@ -1,6 +1,9 @@
 import 'dotenv/config';
 
 import { createInterface } from 'readline';
+import { mkdirSync, chmodSync, unlinkSync, existsSync } from 'fs';
+import { createServer as createHttpServer } from 'http';
+import { dirname } from 'path';
 import { fetchLogsFromJSONFile, filterAndSortLogs, filterOrchestratorSkippableLogs } from './services/log-fetcher.js';
 import { ReplayOrchestrator } from './orchestrator.js';
 import { AsyncReplayOrchestrator } from './async-buffer/async-orchestrator.js';
@@ -13,7 +16,8 @@ import { fetchOrderIdsFromQAPI } from './services/http-client.js';
 
 // Configuration
 const CONFIG = {
-  PORT: process.env.PORT || 3001,
+  ART_PORT: parseInt(process.env.ART_PORT, 10) || 3002,
+  ART_UNIX_SOCKET_PATH: process.env.ART_UNIX_SOCKET_PATH || null,
   LOGS_FILE_PATH: process.env.LOGS_FILE_PATH || 'data/logs.json',
   TIMEOUT_MS: parseInt(process.env.TIMEOUT_MS, 10) || 10000,
   AUTO_START: process.env.AUTO_START !== 'false',
@@ -37,6 +41,7 @@ async function main() {
   let server = null;
   let orchestrator = null;
   let mocks = null;
+  let logsToProcess = null;
 
   try {
     let orderList = [];
@@ -122,31 +127,30 @@ async function main() {
 
     console.log('Loading logs from file...');
     const logs = await fetchLogsFromJSONFile(CONFIG.LOGS_FILE_PATH);
-
-    if (logs.length === 0) {
-      console.log('No logs to process');
-      process.exit(1);
-    }
-
     console.log(`Loaded ${logs.length} logs`);
 
-    console.log('Filtering and sorting logs...');
-    const filteredLogs = await filterAndSortLogs(logs, 'data/filtered-logs.json');
-    
-    if (filteredLogs.length === 0) {
-      console.log('No logs remaining after filtering');
-      process.exit(1);
-    }
+    if (logs.length > 0) {
+      console.log('Filtering and sorting logs...');
+      const filteredLogs = await filterAndSortLogs(logs, 'data/filtered-logs.json');
+      
+      if (filteredLogs.length === 0) {
+        console.log('No logs remaining after filtering');
+        process.exit(1);
+      }
 
-    console.log('Applying second-level filtering (removing orchestrator-skipped entries)...');
-    const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, 'data/final-filtered-logs.json');
-    
-    if (finalFilteredLogs.length === 0) {
-      console.log('No logs remaining after second-level filtering');
-      process.exit(1);
-    }
+      console.log('Applying second-level filtering (removing orchestrator-skipped entries)...');
+      const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, 'data/final-filtered-logs.json');
+      
+      if (finalFilteredLogs.length === 0) {
+        console.log('No logs remaining after second-level filtering');
+        process.exit(1);
+      }
 
-    console.log(`Ready to replay ${finalFilteredLogs.length} unique logs`);
+      console.log(`Ready to replay ${finalFilteredLogs.length} unique logs`);
+      logsToProcess = finalFilteredLogs;
+    } else {
+      console.log('No logs to process - starting server in standby mode');
+    }
 
     // Start mock services if enabled
     if (MOCK_CONFIG.enabled) {
@@ -159,7 +163,7 @@ async function main() {
       mocks = createMockController({
         lspPort: parseInt(lspPort, 10),
         gwPort: parseInt(gwPort, 10),
-        orchestratorUrl: `http://localhost:${CONFIG.PORT}`
+        orchestratorUrl: `http://localhost:${CONFIG.ART_PORT}`
       });
 
       await mocks.start(logs);
@@ -183,24 +187,54 @@ async function main() {
       console.log('\n⚡ Using ASYNC orchestrator with buffer system');
     }
 
-    // Create and start HTTP server
     const app = createServer(orchestrator);
-    server = app.listen(CONFIG.PORT, () => {
-      console.log(`\n🚀 ART Orchestrator Server running on port ${CONFIG.PORT}`);
-      console.log(`\nEndpoints:`);
-      console.log(`  - Health:  http://localhost:${CONFIG.PORT}/health`);
-      console.log(`  - Status:  http://localhost:${CONFIG.PORT}/status`);
-      console.log(`  - LSP:     http://localhost:${CONFIG.PORT}/lsp/*`);
-      console.log(`  - GW:      http://localhost:${CONFIG.PORT}/gw/*`);
-      console.log(`  - Control: http://localhost:${CONFIG.PORT}/control/{start|stop}`);
-      if (MOCK_CONFIG.enabled) {
-        console.log(`\n📡 Mock mode active`);
+    const httpServer = createHttpServer(app);
+    const servers = [];
+
+    if (CONFIG.ART_PORT > 0) {
+      const tcpServer = app.listen(CONFIG.ART_PORT, () => {
+        console.log(`\n🚀 ART Server running on TCP port: ${CONFIG.ART_PORT}`);
+        console.log(`   Dashboard/Browser: http://localhost:${CONFIG.ART_PORT}/`);
+      });
+      servers.push(tcpServer);
+    }
+
+    if (CONFIG.ART_UNIX_SOCKET_PATH) {
+      const socketDir = dirname(CONFIG.ART_UNIX_SOCKET_PATH);
+      if (socketDir && socketDir !== '.') {
+        mkdirSync(socketDir, { recursive: true });
       }
-      if (CONFIG.USE_ASYNC_ORCHESTRATOR) {
-        console.log(`\n⚡ Async orchestrator mode active`);
+
+      if (existsSync(CONFIG.ART_UNIX_SOCKET_PATH)) {
+        try { unlinkSync(CONFIG.ART_UNIX_SOCKET_PATH); } catch {}
       }
-      console.log(`\nReplay ready. Call /control/start to begin.\n`);
-    });
+
+      const unixServer = httpServer.listen(CONFIG.ART_UNIX_SOCKET_PATH, () => {
+        chmodSync(CONFIG.ART_UNIX_SOCKET_PATH, 0o660);
+        console.log(`🚀 ART Server running on Unix socket: ${CONFIG.ART_UNIX_SOCKET_PATH}`);
+        console.log(`   Internal IPC: curl --unix-socket ${CONFIG.ART_UNIX_SOCKET_PATH} http://localhost/health`);
+      });
+      servers.push(unixServer);
+    }
+
+    if (servers.length === 0) {
+      throw new Error('No listen method configured. Set ART_PORT or ART_UNIX_SOCKET_PATH');
+    }
+
+    server = httpServer;
+
+    console.log(`\nEndpoints:`);
+    if (CONFIG.ART_PORT > 0) {
+      console.log(`  - TCP:     http://localhost:${CONFIG.ART_PORT}/health`);
+    }
+    if (CONFIG.ART_UNIX_SOCKET_PATH) {
+      console.log(`  - Socket:  curl --unix-socket ${CONFIG.ART_UNIX_SOCKET_PATH} http://localhost/health`);
+    }
+    console.log(`  - Control: POST /control/{start|stop}`);
+    if (CONFIG.USE_ASYNC_ORCHESTRATOR) {
+      console.log(`\n⚡ Async orchestrator mode active`);
+    }
+    console.log(`\nReplay ready. Call /control/start to begin.\n`);
 
     // Auto-start if configured
     if (CONFIG.AUTO_START) {
@@ -222,6 +256,14 @@ async function main() {
       }
       if (server) {
         server.close(() => {
+          if (CONFIG.ART_UNIX_SOCKET_PATH && existsSync(CONFIG.ART_UNIX_SOCKET_PATH)) {
+            try {
+              unlinkSync(CONFIG.ART_UNIX_SOCKET_PATH);
+              console.log(`🗑️  Socket file cleaned up: ${CONFIG.ART_UNIX_SOCKET_PATH}`);
+            } catch (err) {
+              console.warn(`⚠️  Could not remove socket on shutdown: ${err.message}`);
+            }
+          }
           console.log('Server closed');
           process.exit(0);
         });
@@ -237,7 +279,17 @@ async function main() {
         await mocks.stop();
       }
       if (server) {
-        server.close(() => process.exit(0));
+        server.close(() => {
+          if (CONFIG.ART_UNIX_SOCKET_PATH && existsSync(CONFIG.ART_UNIX_SOCKET_PATH)) {
+            try {
+              unlinkSync(CONFIG.ART_UNIX_SOCKET_PATH);
+              console.log(`🗑️  Socket file cleaned up: ${CONFIG.ART_UNIX_SOCKET_PATH}`);
+            } catch (err) {
+              console.warn(`⚠️  Could not remove socket on shutdown: ${err.message}`);
+            }
+          }
+          process.exit(0);
+        });
       }
     });
 

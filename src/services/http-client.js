@@ -1,19 +1,13 @@
 import { logger } from '../utils/logger.js';
 import { MOCK_CONFIG, QAPI_CONFIG } from '../config.js';
 import { fetchS3TraceLogs as fetchS3TraceLogsFromClient } from '../log-fetcher/s3-trace-logs-client.js';
+import { unixSocketRequest } from './unix-socket-client.js';
 
-/**
- * Simple HTTP client for service calls
- * Routes to mock servers when MOCK_ENABLED is true
- */
-
-export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null) {
-  // Parse destination from sourceDestination (format: "SOURCE_DEST")
+export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null) {
   const parts = sourceDestination?.split('_') || [];
   const source = parts[0] || '';
   const dest = parts[1] || '';
 
-  // Log API call if logIndex is provided
   if (logIndex !== null) {
     logger.logApiCall(source, dest, endpoint, 'REQUEST', logIndex);
   }
@@ -27,10 +21,10 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     dest,
     logTag,
     merchantId,
-    customHeaders
+    customHeaders,
+    unixSocket
   });
 
-  // Detailed logging for LSP calls (port 8070)
   if (baseUrl.includes('8070')) {
     logger.info('=== LSP CALL INITIATED ===', {
       baseUrl,
@@ -44,8 +38,6 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     });
   }
 
-  // When mocking is enabled, we use the mock server ports
-  // The baseUrl already points to mock ports via config
   const url = `${baseUrl}${endpoint}`;
   const headers = {
     ...customHeaders,
@@ -54,7 +46,6 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     'Accept': 'application/json'
   };
 
-  // Add loan_application_id for correlation if present in payload
   if (payload?.loan_application_id) {
     headers['x-loan-application-id'] = payload.loan_application_id;
   }
@@ -96,11 +87,30 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       });
     }
 
-    const response = await fetch(url, {
-      method,
-      headers,
-      body
-    });
+    let response;
+    if (unixSocket) {
+      console.log(`🔌 Using Unix socket for request: ${unixSocket}`);
+      console.log(`🔌 URL: ${url}`);
+      logger.info('Using Unix socket for request', { socket: unixSocket, url });
+      const socketResponse = await unixSocketRequest(unixSocket, baseUrl, endpoint, {
+        method,
+        payload,
+        headers
+      });
+      response = {
+        ok: socketResponse.ok,
+        status: socketResponse.status,
+        statusText: socketResponse.statusText,
+        json: () => Promise.resolve(socketResponse.data),
+        headers: new Map(Object.entries(socketResponse.headers || {}))
+      };
+    } else {
+      response = await fetch(url, {
+        method,
+        headers,
+        body
+      });
+    }
 
     const data = await response.json().catch(() => null);
 

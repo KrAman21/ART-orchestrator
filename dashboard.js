@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import DashboardServer from './src/dashboard/index.js';
 
-const port = process.env.DASHBOARD_PORT || 3002;
-const orchestratorPort = process.env.PORT || 3001;
+const port = parseInt(process.env.DASHBOARD_PORT || '3002', 10);
+const orchestratorPort = parseInt(process.env.MULTIPLEXER_PORT || '3001', 10);
 
 const server = new DashboardServer({ port, orchestratorPort });
 
