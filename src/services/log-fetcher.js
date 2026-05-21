@@ -13,6 +13,10 @@ function shouldSkipLog(log) {
     return true;
   }
   
+  if (logTag.includes('_ENCRYPTED')) {
+    return true;
+  }
+  
   if (!logTag || logTag === '') {
     return true;
   }

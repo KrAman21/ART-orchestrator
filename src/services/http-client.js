@@ -71,7 +71,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     }
 
     logger.info('Request body prepared', {
-      bodyPreview: body ? body.substring(0, 200) + (body.length > 200 ? '...' : '') : null,
+      bodyPreview: body,
       contentType: headers['Content-Type']
     });
 

@@ -63,16 +63,31 @@ export async function fetchS3TraceLogs(merchantId, orderId, sessionToken = null)
         ? data[0].result 
         : (Array.isArray(data) ? data : []));
 
+    // Filter out encrypted logs - they cannot be meaningfully compared
+    const filteredLogs = logs.filter(log => {
+      const logTag = log.log_tag || log.logTag || '';
+      return !logTag.includes('_ENCRYPTED');
+    });
+
+    const excludedCount = logs.length - filteredLogs.length;
+    if (excludedCount > 0) {
+      logger.info('Filtered out encrypted logs from S3 Trace Logs', {
+        totalFetched: logs.length,
+        excludedCount,
+        remainingCount: filteredLogs.length
+      });
+    }
+
     logger.info('Successfully fetched S3 Trace Logs', {
       merchantId,
       orderId,
-      logCount: logs.length
+      logCount: filteredLogs.length
     });
 
     return {
       success: true,
-      logs: logs,
-      count: logs.length
+      logs: filteredLogs,
+      count: filteredLogs.length
     };
 
   } catch (error) {

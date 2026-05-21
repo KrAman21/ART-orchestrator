@@ -231,6 +231,56 @@ function transformIsAccountAggregatorRequired(obj, path, transformsApplied) {
     return obj;
 }
 
+function transformRiskDetails(obj, path, transformsApplied) {
+    if (obj === null || obj === undefined) return obj;
+
+    if (Array.isArray(obj)) {
+        for (let i = 0; i < obj.length; i++) {
+            obj[i] = transformRiskDetails(
+                obj[i],
+                path + '[' + i + ']',
+                transformsApplied
+            );
+        }
+        return obj;
+    }
+
+    if (typeof obj === 'object') {
+        for (const key of Object.keys(obj)) {
+            const currentPath = path ? path + '.' + key : key;
+
+            if ((key === 'risk_details' || key === 'riskDetails') && (obj[key] === 'MASKED' || obj[key] === null)) {
+                const newValue = {
+                    "risk_score": "82",
+                    "risk_level": "HIGH",
+                    "fraud_flag": "true",
+                    "source": "bureau"
+                };
+
+                transformsApplied.push({
+                    path: currentPath,
+                    key: key,
+                    oldValue: obj[key],
+                    newValue: newValue,
+                    description: 'Converted MASKED/null risk_details to sample object'
+                });
+
+                obj[key] = newValue;
+            } else if (typeof obj[key] === 'object') {
+                obj[key] = transformRiskDetails(
+                    obj[key],
+                    currentPath,
+                    transformsApplied
+                );
+            }
+        }
+
+        return obj;
+    }
+
+    return obj;
+}
+
 export function transformMaskedValues(payload, context) {
     if (!payload || typeof payload !== 'object') {
         return payload;
@@ -309,6 +359,16 @@ export function transformRequest(payload, context) {
             context: context || '',
             count: aaTransforms.length,
             transforms: aaTransforms
+        });
+    }
+    const riskTransform = [];
+    transformedPayload = transformRiskDetails(transformedPayload, '', riskTransform);
+
+    if (riskTransform.length > 0) {
+        logger.info('Transformed risk details in request', {
+            context: context || '',
+            count: riskTransform.length,
+            transforms: riskTransform
         });
     }
 
