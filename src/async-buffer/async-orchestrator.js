@@ -373,7 +373,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       });
       return await this.handleThemisEligibilityBatchAsync(incoming);
     }
-    
+    if (incoming.logTag === 'Themis-KFS_REQUEST' && 
+        incoming.source === 'GATEWAY' && 
+        (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
+      logger.info('Handling Themis-KFS batch request asynchronously', {
+        lenderOrgId: incoming.lenderOrgId,
+        requestId: incoming.requestId
+      });
+      return await this.handleThemisKFSBatchAsync(incoming);
+    }
     const currentEntry = this.validator.getCurrentEntry();
     
     if (currentEntry && this.matchesCurrentEntry(incoming, currentEntry)) {
@@ -421,7 +429,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         requestEntry = entry;
         responseEntry = this.validator.entries.find(e =>
           e.logTag === 'Themis-Eligibility_RESPONSE' &&
-          e.sourceDestination === 'GATEWAY_THEMIS' &&
+          (e.sourceDestination === 'GATEWAY_THEMIS' || e.sourceDestination === 'GATEWAY_LSP' || e.sourceDestination === 'GATEWAY_LENDER') &&
           e.lenderOrgId === incoming.lenderOrgId &&
           !this.validator.processedIndices.has(e.index)
         );
@@ -468,7 +476,81 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     
     return {
       success: true,
-      payload: responseEntry.payload,
+      payload: transformRequest(responseEntry.payload, responseEntry.logTag),
+      lenderOrgId: incoming.lenderOrgId
+    };
+  }
+
+  async handleThemisKFSBatchAsync(incoming) {
+    logger.info('Processing Themis-KFS batch asynchronously', {
+      lenderOrgId: incoming.lenderOrgId,
+      requestId: incoming.requestId
+    });
+    
+    // Find the matching request and response entries by lenderOrgId
+    const allThemisKfsEntries = this.validator.entries.filter(entry =>
+      entry.logTag === 'Themis-KFS_REQUEST' &&
+      entry.source === 'GATEWAY' &&
+      (entry.destination === 'LENDER' || entry.destination === 'LSP' || entry.destination === 'THEMIS') &&
+      !this.validator.processedIndices.has(entry.index)
+    );
+    
+    let requestEntry = null;
+    let responseEntry = null;
+    
+    for (const entry of allThemisKfsEntries) {
+      if (entry.lenderOrgId === incoming.lenderOrgId) {
+        requestEntry = entry;
+        responseEntry = this.validator.entries.find(e =>
+          e.logTag === 'Themis-KFS_RESPONSE' &&
+          (e.sourceDestination === 'GATEWAY_THEMIS' || e.sourceDestination === 'GATEWAY_LSP' || e.sourceDestination === 'GATEWAY_LENDER') &&
+          e.lenderOrgId === incoming.lenderOrgId &&
+          !this.validator.processedIndices.has(e.index)
+        );
+        
+        if (responseEntry) {
+          this.validator.processedIndices.add(entry.index);
+          this.validator.processedIndices.add(responseEntry.index);
+          this.recordSuccess('themis_kfs_batch_request_validation', entry);
+          this.recordSuccess('themis_kfs_batch_response_validation', responseEntry);
+          logger.info('Marked Themis-KFS pair as processed', {
+            requestIndex: entry.index,
+            responseIndex: responseEntry.index,
+            lenderOrgId: entry.lenderOrgId
+          });
+        }
+        break;
+      }
+    }
+    
+    if (!responseEntry) {
+      logger.error('No matching Themis-KFS response found', {
+        lenderOrgId: incoming.lenderOrgId,
+        requestId: incoming.requestId
+      });
+      return {
+        success: false,
+        error: 'No matching response found'
+      };
+    }
+    
+    // Compare request payload
+    const comparison = this.comparePayloads(requestEntry.payload, incoming.payload, incoming.logTag);
+    if (!comparison.match) {
+      await this.fail('Themis-KFS payload mismatch', comparison.differences);
+      return {
+        success: false,
+        error: 'Payload mismatch'
+      };
+    }
+    
+    logger.info('Themis-KFS batch request validated, returning response', {
+      lenderOrgId: incoming.lenderOrgId
+    });
+    
+    return {
+      success: true,
+      payload: transformRequest(responseEntry.payload, responseEntry.logTag),
       lenderOrgId: incoming.lenderOrgId
     };
   }
@@ -534,7 +616,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     // Return response immediately
     return {
       success: true,
-      payload: responseEntry.payload
+      payload: transformRequest(responseEntry.payload, responseEntry.logTag)
     };
   }
   

@@ -1,4 +1,5 @@
 import { isAsyncParallelApi } from '../config.js';
+import { transformRequest } from '../services/request-transformer.js';
 
 /**
  * RetryHandler - Handles retry detection for incoming requests
@@ -77,7 +78,7 @@ export class RetryHandler {
           // Return the expected response payload
           return {
             success: true,
-            payload: pendingInfo.responseEntry.payload,
+            payload: transformRequest(pendingInfo.responseEntry.payload, pendingInfo.responseEntry.logTag),
             retried: true
           };
         }
@@ -153,7 +154,7 @@ export class RetryHandler {
 
             return {
               success: true,
-              payload: responseEntry.payload,
+              payload: transformRequest(responseEntry.payload, responseEntry.logTag),
               retried: true
             };
           }

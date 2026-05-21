@@ -245,7 +245,7 @@ export class RequestForwarder {
         // Return marker so caller knows to wait for all pending external calls
         return {
           success: true,
-          payload: expectedResponse.payload,
+          payload: transformRequest(expectedResponse.payload, expectedResponse.logTag),
           tracked: true,
           externalSkipped: true
         };
@@ -269,7 +269,7 @@ export class RequestForwarder {
       // Return success immediately without tracking/waiting
       return {
         success: true,
-        payload: expectedResponse.payload,
+        payload: transformRequest(expectedResponse.payload, expectedResponse.logTag),
         tracked: false,
         externalSkipped: false,
         asyncComplete: isComplete
@@ -653,7 +653,7 @@ export class RequestForwarder {
 
           return {
             success: true,
-            payload: pendingInfo.responseEntry.payload,
+            payload: transformRequest(pendingInfo.responseEntry.payload, pendingInfo.responseEntry.logTag),
             retry: true
           };
         }

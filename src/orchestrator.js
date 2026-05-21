@@ -323,8 +323,18 @@ export class ReplayOrchestrator {
       timestamp: new Date().toISOString()
     });
 
-    if (incoming.logTag === 'Themis-Eligibility_REQUEST' && incoming.source === 'GATEWAY' && (incoming.destination === 'LENDER' || incoming.destination === 'LSP')) {
+    if (incoming.logTag === 'Themis-Eligibility_REQUEST' && incoming.source === 'GATEWAY' && (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
       return await this.handleThemisEligibilityBatch(incoming);
+    }
+
+    if(incoming.logTag === 'Themis-KFS_REQUEST'){
+      logger.info('Received request for THEMIS-KFS, checking if it should be mocked', {
+        source: incoming.source,
+        destination: incoming.destination,
+        api: incoming.api,
+        logTag: incoming.logTag
+      });
+      return await this.handleThemisKFSReq(incoming);
     }
 
     const expectedEntry = this.validator.getCurrentEntry();
@@ -393,7 +403,7 @@ export class ReplayOrchestrator {
           });
           return {
             success: true,
-            payload: responseEntry.payload,
+            payload: transformRequest(responseEntry.payload, responseEntry.logTag),
             cached: true
           };
         }
@@ -683,7 +693,65 @@ export class ReplayOrchestrator {
 
     return {
       success: true,
-      payload: responseEntry.payload,
+      payload: transformRequest(responseEntry.payload, responseEntry.logTag),
+      batchProcessed: true
+    };
+  }
+
+  async handleThemisKFSReq(incoming) {
+    logger.info('Handling Themis-KFS_REQUEST', {
+      lenderOrgId: incoming.lenderOrgId,
+      requestId: incoming.requestId
+    });
+
+    const allThemisEntries = this.validator.entries.filter(entry =>
+      entry.logTag === 'Themis-KFS_REQUEST' &&
+      entry.source === 'GATEWAY' &&
+      (entry.destination === 'LENDER' || entry.destination === 'LSP' || entry.destination === 'THEMIS') &&
+      !this.validator.processedIndices.has(entry.index)
+    );
+
+    let requestEntry = null;
+    let responseEntry = null;
+    for (const entry of allThemisEntries) {
+      if (entry.lenderOrgId === incoming.lenderOrgId) {
+        requestEntry = entry;
+        responseEntry = this.validator.entries.find(e =>
+          e.logTag === 'Themis-KFS_RESPONSE' &&
+          e.sourceDestination === 'GATEWAY_THEMIS' &&
+          e.lenderOrgId === incoming.lenderOrgId &&
+          !this.validator.processedIndices.has(e.index)
+        );
+        if (responseEntry) {
+          this.validator.processedIndices.add(entry.index);
+          this.validator.processedIndices.add(responseEntry.index);
+          this.recordSuccess('request_validation', entry);
+          this.recordSuccess('response_validation', responseEntry);
+          logger.info('Marked Themis-KFS pair as processed', {
+            requestIndex: entry.index,
+            responseIndex: responseEntry.index,
+            lenderOrgId: entry.lenderOrgId
+          });
+        }
+        break;
+      }
+    }
+
+    if (!responseEntry) {
+      return await this.fail(`No matching Themis-KFS_RESPONSE found for lenderOrgId: ${incoming.lenderOrgId}`);
+    }
+
+    const unprocessedCount = allThemisEntries.filter(e => !this.validator.processedIndices.has(e.index)).length;
+    if (unprocessedCount === 0) {
+      logger.info('All Themis-KFS_REQUEST calls processed, advancing log sequence');
+      this.currentIndex = Math.max(...this.validator.entries
+        .filter(e => e.logTag === 'Themis-KFS_REQUEST' && e.source === 'GATEWAY')
+        .map(e => e.index)) + 1;
+    }
+
+    return {
+      success: true,
+      payload: transformRequest(responseEntry.payload, responseEntry.logTag),
       batchProcessed: true
     };
   }

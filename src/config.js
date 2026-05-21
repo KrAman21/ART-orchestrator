@@ -55,7 +55,6 @@ export const API_TO_ENDPOINT_MAP = {
   
   // ── FlipKart (merchantId = "flipkart" | "imposter") ──────────────────────────
   'APP_WRAPPER|FlipKart-RealTimeEligibility_REQUEST':         { endpoint: '/flipkart/txn/eligibility/line',                          method: 'POST', service: 'LSP', headers: {} },
-  'APP_WRAPPER|FlipKart-HardEligibilityStatus_REQUEST':       { endpoint: '/flipkart/txn/eligibility/line/status',                   method: 'POST', service: 'LSP', headers: {} },
 
   'APP_WRAPPER|FlipKart-LineOnboarding-Eligibility_REQUEST':       { endpoint: '/flipkart/initiate/line/eligibility',                method: 'POST', service: 'LSP', headers: {} },
   'APP_WRAPPER|FlipKart-LineOnboarding-EligibilityStatus_REQUEST': { endpoint: '/flipkart/initiate/line/eligibility/status',         method: 'POST', service: 'LSP', headers: {} },
@@ -318,6 +317,7 @@ export const API_TO_ENDPOINT_MAP = {
   
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing/REQUEST) ====================
   // REQUEST variants (used by logs.json)
+  'CORE_GATEWAY|LSP-GetKFS_REQUEST': { endpoint: '/gateway/v1.0/getKFS', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|FetchOfferRequest_REQUEST': { endpoint: '/gateway/v1.0/fetchOffer', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-Eligibility_REQUEST': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-SelectOffer_REQUEST': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
@@ -1079,9 +1079,10 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LENDER|TVS_CHECKOUT_REFUND_API_REQUEST': { endpoint: 'refundCancellation', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|FFPL_CANCELLATION_OAUTH_TOKEN_API_REQUEST': { endpoint: 'api/oauth/token', method: 'POST', service: 'LENDER', headers: {} },
 
+  /// MIHURU LENDER APIs
 
-
-
+  'GTAEWAY_LENDER|GENERATE PARTNER AUTH TOKEN_REQUEST': {endpoint: 'assistmodule/v2/login/apiuser', method: 'POST', service: 'LENDER', headers: {}},
+  
 
   
   // ==================== LENDER_GATEWAY (Lender to Gateway - Callbacks/Webhooks) ====================
@@ -1111,6 +1112,7 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LSP|FETCH_OFFER_ASYNC_RESPONSE_RESPONSE': { endpoint: "/v1.0/fetchOfferResponse", method: 'POST', service: 'LSP', headers: {}},
   
   // ==================== GATEWAY_THEMIS (Gateway to Themis - Forwarding) ====================
+  'GATEWAY_THEMIS|Themis-KFS_REQUEST': { endpoint: '/lsp/generateKFS', method: 'POST', service: 'THEMIS', headers: {} },
   'GATEWAY_THEMIS|Themis-Eligibility_REQUEST': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'THEMIS', headers: {} },
   'GATEWAY_THEMIS|Themis-Eligibility_RESPONSE': { endpoint: '/v1/themis/eligibility/forward', method: 'POST', service: 'GW', headers: {} },
   'GATEWAY_THEMIS|Themis-PriorityLogic_REQUEST': { endpoint: '/themis/v5/priorityLogic', method: 'POST', service: 'THEMIS', headers: {} },
@@ -1123,7 +1125,6 @@ export const API_TO_LOGTAG_MAP = {
   
   // ── FlipKart ─────────────────────────────────────────────────────────────────
   '/flipkart/txn/eligibility/line':                          { logTag: 'FlipKart-RealTimeEligibility_REQUEST',              api: '/flipkart/txn/eligibility/line',                          sourceDestination: 'APP_WRAPPER', headers: {} },
-  '/flipkart/txn/eligibility/line/status':                   { logTag: 'FlipKart-HardEligibilityStatus_REQUEST',            api: '/flipkart/txn/eligibility/line/status',                   sourceDestination: 'APP_WRAPPER', headers: {} },
   '/flipkart/initiate/line/eligibility':                     { logTag: 'FlipKart-LineOnboarding-Eligibility_REQUEST',       api: '/flipkart/initiate/line/eligibility',                     sourceDestination: 'APP_WRAPPER', headers: {} },
   '/flipkart/initiate/line/eligibility/status':              { logTag: 'FlipKart-LineOnboarding-EligibilityStatus_REQUEST', api: '/flipkart/initiate/line/eligibility/status',              sourceDestination: 'APP_WRAPPER', headers: {} },
   '/flipkart/line/eligibility/lender':                       { logTag: 'FlipKart-LineOnboarding-HardEligibility_REQUEST',   api: '/flipkart/line/eligibility/lender',                       sourceDestination: 'APP_WRAPPER', headers: {} },
@@ -1341,6 +1342,7 @@ export const API_TO_LOGTAG_MAP = {
   
   
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing) ====================
+  '/v1.0/getKFS': { logTag: "LSP-GetKFS_REQUEST", api: "/gateway/v1.0/getKFS", sourceDestination: "CORE_GATEWAY", headers: {}},
   "/v1.0/fetchOfferResponse" : {logTag: "FETCH_OFFER_ASYNC_RESPONSE_REQUEST", api: "/v1.0/fetchOfferResponse", sourceDestination: "GATEWAY_LSP", headers: {}},
   '/v1.0/fetchOfferRequest' : {logTag: 'LSP-FetchOfferRequest_REQUEST', api: '/gateway/v1.0/fetchOfferRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/v1.0/eligibility': { logTag: 'LSP-Eligibility_REQUEST', api: '/gateway/v1.0/eligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
@@ -1409,6 +1411,7 @@ export const API_TO_LOGTAG_MAP = {
   '/v1/lsp/loanStatus/response': { logTag: 'LSP-LoanStatus_OUTGOING', api: '/v1/lsp/loanStatus/response', sourceDestination: 'CORE_APP', headers: {} },
   '/webhook/lsp/callback': { logTag: 'LSP-Callback Response', api: '/webhook/lsp/callback', sourceDestination: 'CORE_APP', headers: {} },
   
+  '/lsp/generateKFS': {logTag: 'Themis-KFS_REQUEST', api: '/lsp/generateKFS', sourceDestination: 'GATEWAY_THEMIS', headers: {} },
   '/lsp/softEligibility': { logTag: 'Themis-Eligibility_REQUEST', api: '/lsp/softEligibility', sourceDestination: 'GATEWAY_THEMIS', headers: {} },
   '/lsp/hardEligibility': { logTag: 'Themis-HardEligibility_REQUEST', api: '/lsp/hardEligibility', sourceDestination: 'GATEWAY_LSP', headers: {} },
   '/lsp/grantLoan': { logTag: 'Themis-GrantLoan_REQUEST', api: '/lsp/grantLoan', sourceDestination: 'GATEWAY_LSP', headers: {} },
@@ -1429,7 +1432,8 @@ export const API_TO_LOGTAG_MAP = {
   '/v1/themis/offers/response': { logTag: 'ThemisGenerateOffersResponse Response', api: '/v1/themis/offers/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
 
 
-  '/api/v1/authenticate-token': {logTag: 'HDB_TOKEN_API_REQUEST', api: '/api/v1/authenticate-token', sourceDestination: 'GATEWAY_LENDER', headers: {} }
+  '/api/v1/authenticate-token': {logTag: 'HDB_TOKEN_API_REQUEST', api: '/api/v1/authenticate-token', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/base/flipkart/fk/generateToken': { logTag:'GENERATE PARTNER AUTH TOKEN_REQUEST', api: '/base/flipkart/fk/generateToken', sourceDestination: 'GATEWAY_LENDER', headers: {} }
 };
 
 // Destinations that should not be called (external services)

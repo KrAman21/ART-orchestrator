@@ -16,7 +16,7 @@ export function createUnixSocketAgent(socketPath) {
 }
 
 export async function unixSocketRequest(socketPath, baseUrl, endpoint, options = {}) {
-  const { method = 'GET', payload, headers = {}, timeout = 30000 } = options;
+  const { method = 'GET', body, headers = {}, timeout = 30000 } = options;
   
   let url;
   if (baseUrl.startsWith('http')) {
@@ -89,8 +89,8 @@ export async function unixSocketRequest(socketPath, baseUrl, endpoint, options =
 
     req.setTimeout(timeout);
 
-    if (payload) {
-      req.write(JSON.stringify(payload));
+    if (body) {
+      req.write(body);
     }
     req.end();
   });

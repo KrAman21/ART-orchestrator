@@ -94,7 +94,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       logger.info('Using Unix socket for request', { socket: unixSocket, url });
       const socketResponse = await unixSocketRequest(unixSocket, baseUrl, endpoint, {
         method,
-        payload,
+        body,
         headers
       });
       response = {
