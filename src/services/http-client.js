@@ -41,10 +41,13 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
   const url = `${baseUrl}${endpoint}`;
   const headers = {
     ...customHeaders,
-    'x-request-id': requestId,
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   };
+
+  if (requestId) {
+    headers['x-request-id'] = requestId;
+  }
 
   if (payload?.loan_application_id) {
     headers['x-loan-application-id'] = payload.loan_application_id;

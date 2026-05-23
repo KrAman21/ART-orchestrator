@@ -604,6 +604,8 @@
             const stuck = summary.stuck || 0;
             const stopped = summary.stopped || 0;
             const timeout = summary.timeout || 0;
+            const totalFailedLogs = summary.totalFailedLogs || 0;
+            const totalTimeoutLogs = summary.totalTimeoutLogs || 0;
             const pending = total - completed - failed - stuck - stopped - timeout;
             
             let ordersHtml = '';
@@ -612,19 +614,46 @@
                 const errorLine = order.errorMessage
                     ? `<div class="order-error">⚠ ${order.errorMessage}</div>`
                     : '';
+                const diagnostics = order.diagnostics?.summary || {};
+                const lastProcessed = diagnostics.lastProcessedLog;
+                const timeoutAt = diagnostics.timeoutAt;
+                const failureAt = diagnostics.failureAt;
+                const latestBufferFailure = diagnostics.latestBufferFailure;
+                const failedLogs = diagnostics.failedLogs || [];
+                const failedLogsCount = diagnostics.failedLogsCount || order.artResults?.failed || 0;
+                const timeoutLogsCount = diagnostics.timeoutLogsCount || (timeoutAt ? 1 : 0);
+                const failedLogsHtml = failedLogs.length
+                    ? `<div><strong>Failed logs:</strong><div style="margin-top: 6px;">${failedLogs.slice(0, 5).map(log => `<div style="margin-left: 12px;">${log.entry || log.step || 'unknown'}${log.details?.error ? ` - ${log.details.error}` : ''}</div>`).join('')}${failedLogs.length > 5 ? `<div style="margin-left: 12px;">...and ${failedLogs.length - 5} more</div>` : ''}</div></div>`
+                    : '';
+                const detailRows = [
+                    lastProcessed ? `<div><strong>Last processed:</strong> ${lastProcessed.logTag || 'N/A'}${lastProcessed.logIndex !== undefined ? ` (#${lastProcessed.logIndex})` : ''}</div>` : '',
+                    timeoutAt ? `<div><strong>Timeout at:</strong> ${timeoutAt.logTag || 'N/A'}${timeoutAt.logIndex !== undefined ? ` (#${timeoutAt.logIndex})` : ''} ${timeoutAt.reason ? `- ${timeoutAt.reason}` : ''}</div>` : '',
+                    failureAt ? `<div><strong>Failure detected:</strong> ${failureAt.logTag || 'N/A'}${failureAt.logIndex !== undefined ? ` (#${failureAt.logIndex})` : ''} ${failureAt.message ? `- ${failureAt.message}` : ''}</div>` : '',
+                    latestBufferFailure ? `<div><strong>API failure:</strong> ${latestBufferFailure.endpoint || 'N/A'} ${latestBufferFailure.errorMessage || latestBufferFailure.error || ''}</div>` : '',
+                    failedLogsHtml,
+                    order.artResults ? `<div><strong>Assertions:</strong> passed ${order.artResults.passed || 0}, failed ${order.artResults.failed || 0}, total ${order.artResults.total || 0}</div>` : '',
+                    order.stopReason ? `<div><strong>Stop reason:</strong> ${order.stopReason}</div>` : ''
+                ].filter(Boolean).join('');
                 ordersHtml += `
-                    <div class="order-item ${status}">
-                        <div class="order-header">
-                            <span class="order-id">${order.orderId}</span>
-                            <span class="order-status ${status}">${order.status || 'PENDING'}</span>
-                        </div>
-                        <div class="order-details">
-                            ${order.stopReason || 'Waiting...'}
-                            ${order.logsProcessed ? `| Logs: ${order.logsProcessed}` : ''}
-                            ${order.duration ? `| Duration: ${Math.round(order.duration/1000)}s` : ''}
-                        </div>
+                    <details class="order-item ${status}">
+                        <summary>
+                            <div class="order-header">
+                                <span class="order-id">${order.orderId}</span>
+                                <span class="order-status ${status}">${order.status || 'PENDING'}</span>
+                            </div>
+                            <div class="order-details">
+                                ${order.stopReason || 'Waiting...'}
+                                ${order.logsProcessed ? `| Logs: ${order.logsProcessed}` : ''}
+                                ${failedLogsCount ? `| Failed logs: ${failedLogsCount}` : ''}
+                                ${timeoutLogsCount ? `| Timeout logs: ${timeoutLogsCount}` : ''}
+                                ${order.duration ? `| Duration: ${Math.round(order.duration/1000)}s` : ''}
+                            </div>
+                        </summary>
                         ${errorLine}
-                    </div>
+                        <div class="order-details" style="margin-top: 10px; line-height: 1.6;">
+                            ${detailRows || '<div>No detailed diagnostics recorded yet.</div>'}
+                        </div>
+                    </details>
                 `;
             }
             
@@ -637,6 +666,18 @@
                     <div class="stat-card failed">
                         <div class="number">${failed}</div>
                         <div class="label">Failed</div>
+                    </div>
+                    <div class="stat-card pending">
+                        <div class="number">${timeout}</div>
+                        <div class="label">Timeout Orders</div>
+                    </div>
+                    <div class="stat-card failed">
+                        <div class="number">${totalFailedLogs}</div>
+                        <div class="label">Failed Logs</div>
+                    </div>
+                    <div class="stat-card pending">
+                        <div class="number">${totalTimeoutLogs}</div>
+                        <div class="label">Timeout Logs</div>
                     </div>
                     <div class="stat-card pending">
                         <div class="number">${stuck}</div>

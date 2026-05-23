@@ -48,14 +48,18 @@ class SessionOrchestratorRegistry {
     return null;
   }
 
-  findOrchestrator(requestPayload) {
-    const loanApplicationId = requestPayload?.loan_application_id;
+  findOrchestrator(requestPayload, requestHeaders = {}) {
+    const loanApplicationId = requestPayload?.loan_application_id ||
+      requestPayload?.loanApplicationId ||
+      requestHeaders['x-loan-application-id'];
     if (loanApplicationId) {
       const orchestrator = this.findByLoanApplicationId(loanApplicationId);
       if (orchestrator) return orchestrator;
     }
 
-    const orderId = requestPayload?.order_id || requestPayload?.orderId;
+    const orderId = requestPayload?.order_id ||
+      requestPayload?.orderId ||
+      requestHeaders['x-order-id'];
     if (orderId) {
       const orchestrator = this.findByOrderId(orderId);
       if (orchestrator) return orchestrator;

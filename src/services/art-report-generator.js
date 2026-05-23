@@ -39,7 +39,17 @@ export class ArtReportGenerator {
         total: 0
       },
       timeline: [],
-      bufferFailures: []
+      bufferFailures: [],
+      diagnostics: {
+        lastProcessedLog: null,
+        timeoutAt: null,
+        failureAt: null,
+        latestBufferFailure: null,
+        failedLogs: [],
+        failedLogsCount: 0,
+        timeoutLogsCount: 0,
+        summary: null
+      }
     };
     this.orders.push(orderReport);
     return orderReport;
@@ -58,6 +68,12 @@ export class ArtReportGenerator {
     if (progress.logsProcessed !== undefined) {
       order.logsProcessed = progress.logsProcessed;
     }
+    order.diagnostics.lastProcessedLog = {
+      timestamp: new Date().toISOString(),
+      logTag: order.currentLogTag,
+      logIndex: order.currentLogIndex,
+      logsProcessed: order.logsProcessed
+    };
     if (progress.timeline) {
       order.timeline.push({
         timestamp: new Date().toISOString(),
@@ -76,6 +92,14 @@ export class ArtReportGenerator {
       stack: error.stack,
       step: error.step || 'unknown'
     });
+    order.diagnostics.failureAt = {
+      timestamp: new Date().toISOString(),
+      type: 'ORDER_ERROR',
+      logTag: order.currentLogTag,
+      logIndex: order.currentLogIndex,
+      message: error.message || error,
+      step: error.step || 'unknown'
+    };
     order.status = 'ERROR';
   }
 
@@ -89,6 +113,13 @@ export class ArtReportGenerator {
       logIndex: stuckInfo.logIndex,
       reason: stuckInfo.reason
     };
+    order.diagnostics.timeoutAt = {
+      timestamp: new Date().toISOString(),
+      logTag: stuckInfo.logTag,
+      logIndex: stuckInfo.logIndex,
+      reason: stuckInfo.reason
+    };
+    order.diagnostics.timeoutLogsCount = 1;
     order.status = 'STUCK';
   }
 
@@ -117,6 +148,16 @@ export class ArtReportGenerator {
     const order = this.orders.find(o => o.orderId === orderId);
     if (order) {
       order.bufferFailures.push(bufferEntry);
+      order.diagnostics.latestBufferFailure = bufferEntry;
+      order.diagnostics.failureAt = {
+        timestamp: bufferEntry.timestamp,
+        type: 'BUFFER_FAILURE',
+        logTag: bufferEntry.logTag,
+        logIndex: order.currentLogIndex,
+        endpoint: bufferEntry.endpoint,
+        baseUrl: bufferEntry.baseUrl,
+        message: bufferEntry.errorMessage || bufferEntry.error || 'Buffer failure'
+      };
     }
   }
 
@@ -158,6 +199,57 @@ export class ArtReportGenerator {
       failed: result.artResults?.failed || 0,
       total: result.artResults?.processedLogs?.length || 0
     };
+
+    const failedLogs = (result.artResults?.errors || []).map(error => ({
+      timestamp: error.timestamp || new Date().toISOString(),
+      step: error.step || 'unknown',
+      entry: error.entry || null,
+      details: error.details || null
+    }));
+
+    order.diagnostics.failedLogs = failedLogs;
+    order.diagnostics.failedLogsCount = failedLogs.length || order.artResults.failed || 0;
+    order.diagnostics.timeoutLogsCount = order.diagnostics.timeoutAt ? 1 : 0;
+
+    if (!order.diagnostics.lastProcessedLog && order.currentLogTag) {
+      order.diagnostics.lastProcessedLog = {
+        timestamp: new Date().toISOString(),
+        logTag: order.currentLogTag,
+        logIndex: order.currentLogIndex,
+        logsProcessed: order.logsProcessed
+      };
+    }
+
+    if (!order.diagnostics.failureAt && failedLogs.length > 0) {
+      const latestFailedLog = failedLogs[failedLogs.length - 1];
+      order.diagnostics.failureAt = {
+        timestamp: latestFailedLog.timestamp,
+        type: 'FAILED_LOG',
+        logTag: latestFailedLog.entry,
+        logIndex: order.currentLogIndex,
+        message: latestFailedLog.details?.error || latestFailedLog.step || order.stopReason
+      };
+    } else if (!order.diagnostics.failureAt && order.status === 'FAILED') {
+      order.diagnostics.failureAt = {
+        timestamp: new Date().toISOString(),
+        type: 'FAILED_ORDER',
+        logTag: order.currentLogTag,
+        logIndex: order.currentLogIndex,
+        message: order.errorMessage || order.stopReason
+      };
+    }
+
+    order.diagnostics.summary = {
+      lastProcessedLog: order.diagnostics.lastProcessedLog,
+      timeoutAt: order.diagnostics.timeoutAt,
+      failureAt: order.diagnostics.failureAt,
+      latestBufferFailure: order.diagnostics.latestBufferFailure,
+      failedLogs: order.diagnostics.failedLogs,
+      failedLogsCount: order.diagnostics.failedLogsCount,
+      timeoutLogsCount: order.diagnostics.timeoutLogsCount,
+      stopReason: order.stopReason,
+      errorMessage: order.errorMessage
+    };
   }
 
   completeExecution(overallSuccess) {
@@ -179,6 +271,8 @@ export class ArtReportGenerator {
 
     const totalBufferFailures = this.globalBufferFailures.length;
     const ordersWithBufferFailures = this.orders.filter(o => o.bufferFailures && o.bufferFailures.length > 0).length;
+    const totalFailedLogs = this.orders.reduce((acc, order) => acc + (order.diagnostics?.failedLogsCount || order.artResults?.failed || 0), 0);
+    const totalTimeoutLogs = this.orders.reduce((acc, order) => acc + (order.diagnostics?.timeoutLogsCount || 0), 0);
 
     const report = {
       executionId: `art-${Date.now()}`,
@@ -195,6 +289,8 @@ export class ArtReportGenerator {
         stuck: this.orders.filter(o => o.status === 'STUCK').length,
         timeout: this.orders.filter(o => o.status === 'TIMEOUT').length,
         stopped: this.orders.filter(o => o.status === 'STOPPED').length,
+        totalFailedLogs,
+        totalTimeoutLogs,
         totalBufferFailures,
         ordersWithBufferFailures
       },

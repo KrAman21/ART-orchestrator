@@ -3,7 +3,7 @@ import { ReplayOrchestrator } from './orchestrator.js';
 import { AsyncReplayOrchestrator } from './async-buffer/async-orchestrator.js';
 import { createServer } from './server.js';
 import { createMockController } from './mocks/index.js';
-import { MOCK_CONFIG, SERVICE_MAP, RETRY_CONFIG } from './config.js';
+import { MOCK_CONFIG, SERVICE_MAP, RETRY_CONFIG, RETRY_TIMEOUT_OVERRIDES } from './config.js';
 import { BatchLogFetcher } from './log-fetcher/index.js';
 import { ArtReportGenerator } from './services/art-report-generator.js';
 import { logger } from './utils/logger.js';
@@ -468,7 +468,9 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
   const startTime = Date.now();
   let lastLoggedMinute = 0;
   const { retryIntervalMs, maxRetrySeconds } = RETRY_CONFIG;
-  const maxRetryMs = maxRetrySeconds * 1000;
+
+  const getMaxRetrySeconds = (logTag) =>
+    RETRY_TIMEOUT_OVERRIDES[logTag] || maxRetrySeconds;
 
   let stuckEntryIndex = null;
   let stuckSince = null;
@@ -508,14 +510,17 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
 
     // Track how long we've been stuck on the same entry
     if (currentIndex !== null && currentIndex === stuckEntryIndex) {
-      if (Date.now() - stuckSince >= maxRetryMs) {
-        logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Entry stuck for ${maxRetrySeconds}s, giving up - Stuck at: ${currentEntry?.logTag || 'unknown'}`, {
+      const currentMaxRetrySeconds = getMaxRetrySeconds(currentEntry?.logTag);
+      const currentMaxRetryMs = currentMaxRetrySeconds * 1000;
+
+      if (Date.now() - stuckSince >= currentMaxRetryMs) {
+        logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Entry stuck for ${currentMaxRetrySeconds}s, giving up - Stuck at: ${currentEntry?.logTag || 'unknown'}`, {
           orderId,
           orderIndex,
           totalOrders,
           currentLogTag: currentEntry?.logTag,
           currentLogIndex: currentIndex,
-          maxRetrySeconds,
+          maxRetrySeconds: currentMaxRetrySeconds,
           retryIntervalMs,
           phase: 'ENTRY_TIMEOUT'
         });

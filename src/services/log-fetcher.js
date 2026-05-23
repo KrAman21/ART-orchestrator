@@ -1,6 +1,29 @@
 import { readFile, writeFile } from 'fs/promises';
 import { resolve } from 'path';
 
+function removeExtraDuplicateTagResponses(logs, targetTag) {
+  const indices = [];
+
+  logs.forEach((log, i) => {
+    const msg = log?.message || {};
+    const logTag = (msg.log_tag || '').trim();
+    if (logTag === targetTag) {
+      indices.push(i);
+    }
+  });
+
+  if (indices.length <= 1) {
+    return logs;
+  }
+
+  const dropSet = new Set(indices.slice(1));
+  const result = logs.filter((_, i) => !dropSet.has(i));
+
+  console.log(`Removed ${indices.length - 1} extra ${targetTag} log(s) (kept index ${indices[0]}, dropped indices [${indices.slice(1).join(', ')}])`);
+
+  return result;
+}
+
 function shouldSkipLog(log) {
   const msg = log?.message || {};
   const traceRoute = msg.trace_route || '';
@@ -14,6 +37,12 @@ function shouldSkipLog(log) {
   }
   
   if (logTag.includes('_ENCRYPTED')) {
+    return true;
+  }
+
+  // Async fetch-offer completion is already represented by
+  // FETCH_OFFER_ASYNC_RESPONSE_RESPONSE in the replay flow.
+  if (logTag === 'LSP-FetchOfferResponse_RESPONSE') {
     return true;
   }
   
@@ -48,19 +77,23 @@ export async function filterOrchestratorSkippableLogs(logs, outputPath = null) {
   });
 
   console.log(`Second-level filtering: ${logs.length} -> ${filtered.length} (removed ${logs.length - filtered.length} orchestrator-skipped entries)`);
+
+  const authTokenDeduped = removeExtraDuplicateTagResponses(filtered, 'GENERATE PARTNER AUTH TOKEN_RESPONSE');
+  const eligibilityDeduped = removeExtraDuplicateTagResponses(authTokenDeduped, 'CHECK ELIGIBILITY API_RESPONSE');
+  const deduped = removeExtraDuplicateTagResponses(eligibilityDeduped, 'CHECK ELIGIBILITY STATUS API_RESPONSE');
   
   // Save final filtered logs to file if outputPath provided
   if (outputPath) {
     try {
       const absolutePath = resolve(process.cwd(), outputPath);
-      await writeFile(absolutePath, JSON.stringify(filtered, null, 2), 'utf-8');
+      await writeFile(absolutePath, JSON.stringify(deduped, null, 2), 'utf-8');
       console.log(`Saved final filtered logs to: ${outputPath}`);
     } catch (error) {
       console.error(`Failed to save final filtered logs: ${error.message}`);
     }
   }
   
-  return filtered;
+  return deduped;
 }
 
 /**

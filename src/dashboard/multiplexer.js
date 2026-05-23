@@ -50,19 +50,33 @@ export function createMultiplexerServer() {
     }
 
     const payload = req.body;
-    const loanApplicationId = payload?.loan_application_id;
+    const loanApplicationId = payload?.loan_application_id || payload?.loanApplicationId || req.headers['x-loan-application-id'];
+    const orderId = payload?.order_id || payload?.orderId || req.headers['x-order-id'];
     const lenderOrgId = payload?.lender_org_id ||
                          payload?.themisDetail?.lenderOrgId ||
                          payload?.lenderOrgId ||
                          req.headers['x-lender-org-id'] ||
                          req.headers['X-Lender-Org-Id'];
 
-    const orchestrator = registry.findOrchestrator(payload);
+    const orchestrator = registry.findOrchestrator(payload, req.headers);
+
+    if (api === '/v1.0/fetchOfferResponse') {
+      logger.info('FETCH_OFFER_ASYNC callback routing', {
+        api,
+        loanApplicationId,
+        orderId,
+        lenderOrgId,
+        activeSessions: registry.getActiveCount(),
+        matchedSessionRunning: !!(orchestrator && orchestrator.isRunning),
+        registeredSessions: registry.getAllSessions()
+      });
+    }
 
     if (!orchestrator || !orchestrator.isRunning) {
       logger.warn('No active orchestrator found for request', {
         api,
         loanApplicationId,
+        orderId,
         lenderOrgId,
         activeSessions: registry.getActiveCount()
       });
@@ -118,24 +132,36 @@ export function startMultiplexerServer(port = MULTIPLEXER_PORT) {
   const { app, registry } = createMultiplexerServer();
 
   if (port > 0) {
-    createHttpServer(app).listen(port, () => {
-      logger.info(`Multiplexer orchestrator server running on TCP port ${port}`);
-      console.log(`🔀 Orchestrator TCP: http://localhost:${port}/`);
+    const server = createHttpServer(app);
+    server.listen(port, () => {
+      logger.info(`ART multiplexer listening on http://localhost:${port}`);
     });
   }
 
   if (MULTIPLEXER_UNIX_SOCKET) {
-    setupUnixSocket(MULTIPLEXER_UNIX_SOCKET);
-    createHttpServer(app).listen(MULTIPLEXER_UNIX_SOCKET, () => {
-      configureSocketPermissions(MULTIPLEXER_UNIX_SOCKET);
-      logger.info(`Multiplexer orchestrator server running on Unix socket ${MULTIPLEXER_UNIX_SOCKET}`);
-      console.log(`🔀 Orchestrator Unix socket: ${MULTIPLEXER_UNIX_SOCKET}`);
-    });
+    try {
+      setupUnixSocket(MULTIPLEXER_UNIX_SOCKET);
+      logger.info('Prepared multiplexer unix socket path', {
+        socketPath: MULTIPLEXER_UNIX_SOCKET
+      });
+
+      const unixServer = createHttpServer(app);
+      unixServer.listen(MULTIPLEXER_UNIX_SOCKET, () => {
+        configureSocketPermissions(MULTIPLEXER_UNIX_SOCKET);
+        logger.info('ART multiplexer listening on unix socket', {
+          socketPath: MULTIPLEXER_UNIX_SOCKET
+        });
+      });
+      unixServer.on('error', (error) => {
+        logger.error('ART multiplexer unix socket server error', {
+          socketPath: MULTIPLEXER_UNIX_SOCKET,
+          error: error.message
+        });
+      });
+    } catch (error) {
+      logger.error('Failed to prepare multiplexer unix socket', { error: error.message });
+    }
   }
 
-  return new Promise((resolve) => {
-    resolve({ server: null, registry });
-  });
+  return { registry };
 }
-
-export { SessionOrchestratorRegistry };

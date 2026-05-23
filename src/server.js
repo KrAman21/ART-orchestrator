@@ -97,13 +97,24 @@ export function createServer(orchestrator) {
       });
 
       // Extract correlation fields from payload for matching
-      const loanApplicationId = payload?.loan_application_id;
+      const loanApplicationId = payload?.loan_application_id || payload?.loanApplicationId || req.headers['x-loan-application-id'];
       // lender_org_id can be at top level, nested in themisDetail, or in headers
       const lenderOrgId = payload?.lender_org_id ||
                           payload?.themisDetail?.lenderOrgId ||
                           payload?.lenderOrgId ||
                           req.headers['x-lender-org-id'] ||
                           req.headers['X-Lender-Org-Id'];
+
+      if (api === '/v1.0/fetchOfferResponse') {
+        logger.info('FETCH_OFFER_ASYNC callback received on direct server', {
+          api,
+          requestId,
+          loanApplicationId,
+          lenderOrgId,
+          hasOrchestrator: !!orchestrator,
+          isRunning: !!orchestrator?.isRunning
+        });
+      }
 
       const result = await orchestrator.handleIncomingRequest({
         source,

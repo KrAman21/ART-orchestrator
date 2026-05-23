@@ -1083,7 +1083,7 @@ export const API_TO_ENDPOINT_MAP = {
   /// MIHURU LENDER APIs
 
   'GTAEWAY_LENDER|GENERATE PARTNER AUTH TOKEN_REQUEST': {endpoint: 'assistmodule/v2/login/apiuser', method: 'POST', service: 'LENDER', headers: {}},
-  
+  'CHECK ELIGIBILITY STATUS API_REQUEST':{endpoint: '/base/flipkart/fk/checkEligibilityStatus', method: 'POST', service: 'LENDER', headers: {}},
 
   
   // ==================== LENDER_GATEWAY (Lender to Gateway - Callbacks/Webhooks) ====================
@@ -1432,7 +1432,7 @@ export const API_TO_LOGTAG_MAP = {
   '/v1/themis/repayment/response': { logTag: 'Themis-Repayment Response', api: '/v1/themis/repayment/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
   '/v1/themis/offers/response': { logTag: 'ThemisGenerateOffersResponse Response', api: '/v1/themis/offers/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
 
-
+  '/base/flipkart/fk/checkEligibilityStatus': { logTag: 'CHECK ELIGIBILITY STATUS API_REQUEST', api: '/base/flipkart/fk/checkEligibilityStatus', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/api/v1/authenticate-token': {logTag: 'HDB_TOKEN_API_REQUEST', api: '/api/v1/authenticate-token', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/base/flipkart/fk/checkEligibility':{logTag: 'CHECK ELIGIBILITY API_REQUEST', api: '/base/flipkart/fk/checkEligibility', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/base/flipkart/fk/generateToken': { logTag:'GENERATE PARTNER AUTH TOKEN_REQUEST', api: '/base/flipkart/fk/generateToken', sourceDestination: 'GATEWAY_LENDER', headers: {} }
@@ -1478,6 +1478,15 @@ export const ORCHESTRATOR_CONFIG = {
 export const RETRY_CONFIG = {
   retryIntervalMs: parseInt(process.env.RETRY_INTERVAL_MS, 10) || 250,
   maxRetrySeconds: parseInt(process.env.MAX_RETRY_SECONDS, 10) || 2,
+};
+
+export const RETRY_TIMEOUT_OVERRIDES = {
+  FETCH_OFFER_ASYNC_RESPONSE_REQUEST:
+    parseInt(process.env.FETCH_OFFER_ASYNC_RESPONSE_MAX_RETRY_SECONDS, 10) || 30,
+  'LSP-FetchOfferResponse_RESPONSE':
+    parseInt(process.env.LSP_FETCH_OFFER_RESPONSE_MAX_RETRY_SECONDS, 10) || 30,
+  'CHECK ELIGIBILITY STATUS API_REQUEST':
+    parseInt(process.env.CHECK_ELIGIBILITY_STATUS_MAX_RETRY_SECONDS, 10) || 30,
 };
 
 export const MOCK_CONFIG = {

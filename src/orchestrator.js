@@ -354,7 +354,7 @@ export class ReplayOrchestrator {
       destination: parts[1]
     };
 
-    const validation = this.validator.validateIncomingRequest({
+    let validation = this.validator.validateIncomingRequest({
       source: normalizedIncoming.source,
       destination: normalizedIncoming.destination,
       logTag: normalizedIncoming.logTag,
@@ -362,6 +362,34 @@ export class ReplayOrchestrator {
       requestId: normalizedIncoming.requestId,
       lenderOrgId: normalizedIncoming.lenderOrgId
     });
+
+    if (!validation.valid && incoming.logTag === 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST') {
+      const maxRetries = 5;
+      const retryIntervalMs = 1000;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        logger.info(`FETCH_OFFER_ASYNC_RESPONSE_REQUEST not found in logs, waiting ${retryIntervalMs}ms before retry ${attempt}/${maxRetries}`);
+        await new Promise(resolve => setTimeout(resolve, retryIntervalMs));
+
+        validation = this.validator.validateIncomingRequest({
+          source: normalizedIncoming.source,
+          destination: normalizedIncoming.destination,
+          logTag: normalizedIncoming.logTag,
+          isRequest: true,
+          requestId: normalizedIncoming.requestId,
+          lenderOrgId: normalizedIncoming.lenderOrgId
+        });
+
+        if (validation.valid || validation.foundInLookahead || validation.isAsyncParallelCall) {
+          logger.info(`FETCH_OFFER_ASYNC_RESPONSE_REQUEST found on retry ${attempt}`);
+          break;
+        }
+
+        if (attempt === maxRetries) {
+          logger.error(`FETCH_OFFER_ASYNC_RESPONSE_REQUEST not found after ${maxRetries} retries, proceeding with normal failure handling`);
+        }
+      }
+    }
 
     if (incoming.source === 'LENDER' && incoming.destination === 'GW') {
       return await this.handleExternalServiceResponse(incoming);
