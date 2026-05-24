@@ -31,7 +31,8 @@ const CONFIG = {
     : [],
   SESSION_TOKEN: process.env.SESSION_TOKEN || '',
   MAX_JOURNEY_TIME_MS: parseInt(process.env.MAX_JOURNEY_TIME_MS, 10) || 180000,
-  REPORT_PATH: process.env.REPORT_PATH || 'report.json'
+  REPORT_PATH: process.env.REPORT_PATH || 'report.json',
+  KEEP_ORDER_TEMP_FILES: process.env.KEEP_ORDER_TEMP_FILES === 'true'
 };
 
 /**

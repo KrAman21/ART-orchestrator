@@ -276,8 +276,9 @@ export const API_TO_ENDPOINT_MAP = {
   'APP_WRAPPER|JuspaySDK-GetKFS_INCOMING_generic': { endpoint: '/api/getKFS', method: 'POST', service: 'LSP', headers: {} },
   
   // ==================== APP_CORE (Direct App to Core Endpoints) ====================
+  'APP_CORE|LSP-LoanStatus_REQUEST':{endpoint:'credit/api/v3.3/loan/status', method:'POST', service:'LSP', headers:{}},
+  'APP_CORE|GetLenderFlows_REQUEST': {endpoint:'credit/api/v4.0/getLenderFlows', method:'POST', service:'LSP', headers:{}},
   'APP_CORE|LSP-VerifyLspOtp_REQUEST': { endpoint: 'credit/api/v4.0/lspotp/verify', method: 'POST', service: 'LSP', headers: {} },
-  'APP_CORE|LSP-LoanStatus_REQUEST': { endpoint: 'credit/api/v3.3/loanStatus', method: 'POST', service: 'LSP', headers: {} },
   'APP_CORE|LSP-GrantLoanRequest_REQUEST': { endpoint: 'credit/api/v3.3/grantLoan', method: 'POST', service: 'LSP', headers: {} },
   'APP_CORE|LSP-GetFlowLink_REQUEST': { endpoint: 'credit/api/v5.0/getLenderFlows', method: 'POST', service: 'LSP', headers: {} },
   'APP_CORE|LSP-GetCustomerInfo_REQUEST': { endpoint: 'credit/api/v4.0/customer', method: 'POST', service: 'LSP', headers: {} },
@@ -320,7 +321,7 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_GATEWAY|LSP-GetKFS_REQUEST': { endpoint: '/gateway/v1.0/getKFS', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|FetchOfferRequest_REQUEST': { endpoint: '/gateway/v1.0/fetchOffer', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-Eligibility_REQUEST': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
-  'CORE_GATEWAY|LSP-SelectOffer_REQUEST': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|LSP-SelectOffer_REQUEST': { endpoint: '/gateway/v3.3/offer/setOfferRequest', method: 'POST', service: 'GW', headers: {} }, // duplicate logTag for backward compatibility
   'CORE_GATEWAY|LSP-CreatePayment_REQUEST': { endpoint: '/gateway/v1.0/createPayment', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-CreateOrder_REQUEST': { endpoint: '/gateway/v1.0/order', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-RefundTriggerV2_REQUEST': { endpoint: '/gateway/v1.0/refund', method: 'POST', service: 'GW', headers: {} },
@@ -379,13 +380,13 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_GATEWAY|LSP-GetApplicant_OUTGOING': { endpoint: '/gateway/v1.0/getApplicant', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-GetGuarantor_OUTGOING': { endpoint: '/gateway/v1.0/getGuarantor', method: 'POST', service: 'GW', headers: {} },
   // REQUEST/RESPONSE mappings (actual log format from production)
+  'CORE_GATEWAY|Lsp-LoanStatusRequest_REQUEST':{endpoint: '/gateway/v4.0/loanStatusRequest', method: 'POST', service: 'GW', headers: {}},
   'CORE_GATEWAY|LSP-Eligibility_REQUEST': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-Eligibility_RESPONSE': { endpoint: '/gateway/v1.0/eligibility', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|GetRefundDetails-LSP_REQUEST': { endpoint: '/gateway/v1.0/getRefundDetails', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|GetRefundDetails-LSP_RESPONSE': { endpoint: '/gateway/v1.0/getRefundDetails', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|RefundStatusGatewayPT_REQUEST': { endpoint: '/gateway/v1.0/refundStatus', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|RefundStatusGatewayPT_RESPONSE': { endpoint: '/gateway/v1.0/refundStatus', method: 'POST', service: 'GW', headers: {} },
-  'CORE_GATEWAY|Lsp-LoanStatusRequest_REQUEST': { endpoint: '/gateway/v1.0/loanStatus', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|Lsp-LoanStatusRequest_RESPONSE': { endpoint: '/gateway/v1.0/loanStatus', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|SetOffer-LSP_REQUEST': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|SetOffer-LSP_RESPONSE': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
@@ -690,6 +691,8 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUWEncrypt_REQUEST': { endpoint: '/uw-decision', method: 'POST', service: 'EARLYSALARY', headers: {} },
   'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUWEncrypt Response': { type: 'MerchantConfirmationOnUWResponse', headers: {}, encrypted: true },
   'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUWEncrypt_RESPONSE': { type: 'MerchantConfirmationOnUWResponse', headers: {}, encrypted: true },
+  'GATEWAY_LENDER|LOAN OFFER API_REQUEST':{endpoint: '/base/flipkart/fk/loanOffer', method: 'POST', service: 'LENDER', headers: {}},
+  'GATEWAY_LENDER|LOAN STATUS API_REQUEST':{endpoint: '/base/flipkart/fk/loanStatus', method: 'POST', service: 'LENDER', headers: {}},
 
   // ============================================================================
   // BIMAPAY LENDER APIs
@@ -1111,6 +1114,7 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LSP|Themis-SelectOffer_RESPONSE': { endpoint: '/v1/themis/selectOffer/callback', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_LSP|FETCH_OFFER_ASYNC_RESPONSE_REQUEST': { endpoint: "/v1.0/fetchOfferResponse", method: 'POST', service: 'LSP', headers: {}},
   'GATEWAY_LSP|FETCH_OFFER_ASYNC_RESPONSE_RESPONSE': { endpoint: "/v1.0/fetchOfferResponse", method: 'POST', service: 'LSP', headers: {}},
+  'GATEWAY_LSP|LOAN_STATUS_ASYNC_RESPONSE_REQUEST': { endpoint: "/v4.0/loanStatusResponse", method: 'POST', service: 'LSP', headers: {}},
   
   // ==================== GATEWAY_THEMIS (Gateway to Themis - Forwarding) ====================
   'GATEWAY_THEMIS|Themis-KFS_REQUEST': { endpoint: '/lsp/generateKFS', method: 'POST', service: 'THEMIS', headers: {} },
@@ -1302,7 +1306,7 @@ export const API_TO_LOGTAG_MAP = {
   // ==================== APP_CORE (Direct App to Core Endpoints) ====================
   // REQUEST variants (used by logs.json)
   '/credit/api/v4.0/lspotp/verify': { logTag: 'LSP-VerifyLspOtp_REQUEST', api: '/credit/api/v4.0/lspotp/verify', sourceDestination: 'APP_CORE', headers: {} },
-  '/credit/api/v3.3/loanStatus': { logTag: 'LSP-LoanStatus_REQUEST', api: '/credit/api/v3.3/loanStatus', sourceDestination: 'APP_CORE', headers: {} },
+  '/credit/api/v3.3/loan/status': { logTag: 'LSP-LoanStatus_REQUEST', api: '/credit/api/v3.3/loan/status', sourceDestination: 'APP_CORE', headers: {} },
   '/credit/api/v3.3/grantLoan': { logTag: 'LSP-GrantLoanRequest_REQUEST', api: '/credit/api/v3.3/grantLoan', sourceDestination: 'APP_CORE', headers: {} },
   '/credit/api/v5.0/getLenderFlows': { logTag: 'LSP-GetFlowLink_REQUEST', api: '/credit/api/v5.0/getLenderFlows', sourceDestination: 'APP_CORE', headers: {} },
   '/credit/api/v4.0/customer': { logTag: 'LSP-GetCustomerInfo_REQUEST', api: '/credit/api/v4.0/customer', sourceDestination: 'APP_CORE', headers: {} },
@@ -1328,6 +1332,8 @@ export const API_TO_LOGTAG_MAP = {
   '/api/v5.0/loanAgreement/trigger': { logTag: 'LSP-TriggerLoanAgreement_INCOMING', api: '/api/v5.0/loanAgreement/trigger', sourceDestination: 'APP_CORE', headers: {} },
   '/api/v5.0/loanAgreement/status': { logTag: 'LSP-GetLoanAgreementStatus_INCOMING', api: '/api/v5.0/loanAgreement/status', sourceDestination: 'APP_CORE', headers: {} },
   '/api/v5.0/setOffer': { logTag: 'LSP-SetOffer_INCOMING', api: '/api/v5.0/setOffer', sourceDestination: 'APP_CORE', headers: {} },
+  '/api/v3.3/offer/setOfferRequest': { logTag: 'LSP-SelectOffer_REQUEST', api: '/gateway/v1.0/selectOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/v3.3/offer/setOfferRequest': { logTag: 'LSP-SelectOffer_REQUEST', api: '/gateway/v1.0/selectOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/api/v4.0/generateOffers': { logTag: 'LSP-GenerateOffers_INCOMING', api: '/api/v4.0/generateOffers', sourceDestination: 'APP_CORE', headers: {} },
   '/api/v4.0/fetchOfferResponse': { logTag: 'LSP-FetchOfferResponse_INCOMING', api: '/api/v4.0/fetchOfferResponse', sourceDestination: 'APP_CORE', headers: {} },
   '/api/v3.3/loanAgreementStatus': { logTag: 'LSP-LoanAgreementStatus_INCOMING', api: '/api/v3.3/loanAgreementStatus', sourceDestination: 'APP_CORE', headers: {} },
@@ -1340,9 +1346,12 @@ export const API_TO_LOGTAG_MAP = {
   '/api/v5.0/ticket/list': { logTag: 'LSP-ListTicket_INCOMING', api: '/api/v5.0/ticket/list', sourceDestination: 'APP_CORE', headers: {} },
   '/api/v3.3/verifyCustomer': { logTag: 'LSP-VerifyCustomer_INCOMING', api: '/api/v3.3/verifyCustomer', sourceDestination: 'APP_CORE', headers: {} },
   '/api/themis/rules': { logTag: 'LSP-Rules_INCOMING', api: '/api/themis/rules', sourceDestination: 'APP_CORE', headers: {} },
-  
+  '/api/v4.0/getLenderFlows': {logTag: 'GetLenderFlows_REQUEST', api: '/api/v4.0/getLenderFlows', sourceDestination: 'APP_CORE', headers: {} },
+  '/api/v3.3/loan/status': { logTag: 'LSP-LoanStatus_REQUEST', api: '/api/v3.3/loan/status', sourceDestination: 'APP_CORE', headers: {} },
   
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing) ====================
+  '/v4.0/loanStatusResponse':{logTag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST', api: '/v4.0/loanStatusResponse', sourceDestination: 'GATEWAY_LSP', headers: {}},
+  '/v4.0/loanStatusRequest':{logTag: 'Lsp-LoanStatusRequest_REQUEST', api: '/v4.0/loanStatusRequest', sourceDestination: 'CORE_GATEWAY', headers: {}},
   '/v1.0/getKFS': { logTag: "LSP-GetKFS_REQUEST", api: "/gateway/v1.0/getKFS", sourceDestination: "CORE_GATEWAY", headers: {}},
   "/v1.0/fetchOfferResponse" : {logTag: "FETCH_OFFER_ASYNC_RESPONSE_REQUEST", api: "/v1.0/fetchOfferResponse", sourceDestination: "GATEWAY_LSP", headers: {}},
   '/v1.0/fetchOfferRequest' : {logTag: 'LSP-FetchOfferRequest_REQUEST', api: '/gateway/v1.0/fetchOfferRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
@@ -1435,7 +1444,9 @@ export const API_TO_LOGTAG_MAP = {
   '/base/flipkart/fk/checkEligibilityStatus': { logTag: 'CHECK ELIGIBILITY STATUS API_REQUEST', api: '/base/flipkart/fk/checkEligibilityStatus', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/api/v1/authenticate-token': {logTag: 'HDB_TOKEN_API_REQUEST', api: '/api/v1/authenticate-token', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/base/flipkart/fk/checkEligibility':{logTag: 'CHECK ELIGIBILITY API_REQUEST', api: '/base/flipkart/fk/checkEligibility', sourceDestination: 'GATEWAY_LENDER', headers: {} },
-  '/base/flipkart/fk/generateToken': { logTag:'GENERATE PARTNER AUTH TOKEN_REQUEST', api: '/base/flipkart/fk/generateToken', sourceDestination: 'GATEWAY_LENDER', headers: {} }
+  '/base/flipkart/fk/generateToken': { logTag:'GENERATE PARTNER AUTH TOKEN_REQUEST', api: '/base/flipkart/fk/generateToken', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/base/flipkart/fk/loanOffer': { logTag: 'LOAN OFFER API_REQUEST', api: '/base/flipkart/fk/loanOffer', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/base/flipkart/fk/loanStatus': { logTag: 'LOAN STATUS API_REQUEST', api: '/base/flipkart/fk/loanStatus', sourceDestination: 'GATEWAY_LENDER', headers: {} }
 };
 
 // Destinations that should not be called (external services)

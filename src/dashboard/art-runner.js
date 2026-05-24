@@ -74,17 +74,20 @@ export async function runArtProcess(merchantId, orders, server, session) {
       MERCHANT_ID: merchantId,
       SESSION_TOKEN: process.env.SESSION_TOKEN || '',
       ENABLE_MOCKS: MOCKS_ENABLED,
+      PARALLEL_ORDERS: 10,
+      KEEP_ORDER_TEMP_FILES: process.env.KEEP_ORDER_TEMP_FILES === 'true',
       stopSignal,
       sessionId: mySessionId,
       registry: server.registry,
-      onOrchestratorReady: (orchestrator, orderId) => {
+      getRegistrySessionId: (orderId) => `${mySessionId}:${orderId}`,
+      onOrchestratorReady: (orchestrator, orderId, registrySessionId) => {
         if (server.registry) {
-          server.registry.register(mySessionId, orchestrator, orders.map(o => o.orderId));
+          server.registry.register(registrySessionId, orchestrator, [orderId]);
         }
       },
-      onLoanApplicationId: (loanApplicationId) => {
+      onLoanApplicationId: (loanApplicationId, orderId, registrySessionId) => {
         if (server.registry) {
-          server.registry.addLoanApplicationId(mySessionId, loanApplicationId);
+          server.registry.addLoanApplicationId(registrySessionId, loanApplicationId);
         }
       }
     };

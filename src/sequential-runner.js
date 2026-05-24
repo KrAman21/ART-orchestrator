@@ -7,9 +7,15 @@ import { MOCK_CONFIG, SERVICE_MAP, RETRY_CONFIG, RETRY_TIMEOUT_OVERRIDES } from 
 import { BatchLogFetcher } from './log-fetcher/index.js';
 import { ArtReportGenerator } from './services/art-report-generator.js';
 import { logger } from './utils/logger.js';
+import { basename, dirname, extname, join } from 'path';
+import { unlink } from 'fs/promises';
 
 export async function runSequentialArt(orderList, config) {
   const maxJourneyTimeMs = config.MAX_JOURNEY_TIME_MS || 3 * 60 * 1000;
+  const requestedParallelOrders = Math.max(1, Math.min(config.PARALLEL_ORDERS || 10, 10));
+  const parallelOrders = (!config.onOrchestratorReady || MOCK_CONFIG.enabled)
+    ? 1
+    : requestedParallelOrders;
   const reportGenerator = new ArtReportGenerator({
     reportPath: config.REPORT_PATH || 'report.json'
   });
@@ -27,37 +33,42 @@ export async function runSequentialArt(orderList, config) {
 
   process.on('SIGINT', onShutdown);
   process.on('SIGTERM', onShutdown);
-  // Clean up handlers when done so they don't accumulate across multiple runs
   const cleanupHandlers = () => {
     process.off('SIGINT', onShutdown);
     process.off('SIGTERM', onShutdown);
   };
 
+  if (requestedParallelOrders > 1 && parallelOrders === 1) {
+    logger.warn('Parallel order execution requested but disabled for this run mode', {
+      requestedParallelOrders,
+      hasMultiplexer: !!config.onOrchestratorReady,
+      mocksEnabled: MOCK_CONFIG.enabled
+    });
+  }
+
   console.log(`\n========================================`);
-  console.log(`Sequential ART Runner`);
+  console.log(parallelOrders > 1 ? 'Concurrent ART Runner' : 'Sequential ART Runner');
   console.log(`Total Orders: ${orderList.length}`);
+  console.log(`Max Concurrent Orders: ${parallelOrders}`);
   console.log(`Max Journey Time: ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes`);
   console.log(`========================================\n`);
 
   reportGenerator.startExecution();
-  const results = [];
+  const results = new Array(orderList.length);
+  let nextOrderIndex = 0;
 
-  for (let i = 0; i < orderList.length; i++) {
-    if (config.stopSignal?.requested) {
-      logger.info('Stop requested, aborting remaining orders');
-      break;
-    }
+  const runOrderAtIndex = async (absoluteIndex) => {
+    const { merchantId, orderId } = orderList[absoluteIndex];
 
-    const { merchantId, orderId } = orderList[i];
-    
     console.log(`\n========================================`);
-    console.log(`Playing Order ${i + 1}/${orderList.length}`);
+    console.log(`Playing Order ${absoluteIndex + 1}/${orderList.length}`);
     console.log(`Merchant: ${merchantId}, Order: ${orderId}`);
     console.log(`========================================\n`);
 
-    logger.info(`ART_PROGRESS: Playing order ${i + 1} out of ${orderList.length}`, {
-      currentOrder: i + 1,
+    logger.info(`ART_PROGRESS: Playing order ${absoluteIndex + 1} out of ${orderList.length}`, {
+      currentOrder: absoluteIndex + 1,
       totalOrders: orderList.length,
+      activeSlots: parallelOrders,
       orderId,
       merchantId,
       phase: 'ORDER_START'
@@ -65,63 +76,92 @@ export async function runSequentialArt(orderList, config) {
 
     try {
       const orderResult = await processSingleOrder(
-        merchantId, 
-        orderId, 
-        config, 
-        i + 1, 
+        merchantId,
+        orderId,
+        config,
+        absoluteIndex + 1,
         orderList.length,
         maxJourneyTimeMs,
         reportGenerator
       );
-      
-      results.push({
-        orderIndex: i + 1,
+
+      const result = {
+        orderIndex: absoluteIndex + 1,
         merchantId,
         orderId,
         success: orderResult.success,
         logsProcessed: orderResult.logCount,
         error: orderResult.error
-      });
+      };
 
       if (!orderResult.success) {
-        console.error(`❌ Failed to process order ${orderId}: ${orderResult.error}`);
+        console.error(`Failed to process order ${orderId}: ${orderResult.error}`);
       } else {
-        console.log(`\n✅ Order ${orderId} completed successfully`);
+        console.log(`\nOrder ${orderId} completed successfully`);
       }
 
-      if (i < orderList.length - 1) {
-        console.log(`\nWaiting 3 seconds before next order...\n`);
-        await sleep(3000);
-      }
+      return { index: absoluteIndex, result };
     } catch (error) {
-      console.error(`❌ Exception processing order ${orderId}:`, error.message);
+      console.error(`Exception processing order ${orderId}:`, error.message);
       reportGenerator.recordOrderError(orderId, error);
-      
-      results.push({
-        orderIndex: i + 1,
-        merchantId,
-        orderId,
-        success: false,
-        error: error.message
-      });
+
+      return {
+        index: absoluteIndex,
+        result: {
+          orderIndex: absoluteIndex + 1,
+          merchantId,
+          orderId,
+          success: false,
+          error: error.message
+        }
+      };
     }
-  }
+  };
+
+  const worker = async (workerId) => {
+    while (true) {
+      if (config.stopSignal?.requested) {
+        logger.info('Stop requested, aborting remaining orders', { workerId });
+        return;
+      }
+
+      if (nextOrderIndex >= orderList.length) {
+        return;
+      }
+
+      const currentIndex = nextOrderIndex;
+      nextOrderIndex += 1;
+
+      logger.info('Dispatching order to worker slot', {
+        workerId,
+        orderIndex: currentIndex + 1,
+        totalOrders: orderList.length
+      });
+
+      const { index, result } = await runOrderAtIndex(currentIndex);
+      results[index] = result;
+    }
+  };
+
+  const workerCount = Math.min(parallelOrders, orderList.length);
+  await Promise.all(Array.from({ length: workerCount }, (_, index) => worker(index + 1)));
 
   cleanupHandlers();
-  const overallSuccess = results.every(r => r.success);
+  const finalizedResults = results.filter(Boolean);
+  const overallSuccess = finalizedResults.every(r => r.success);
   reportGenerator.completeExecution(overallSuccess);
 
   console.log(`\n========================================`);
-  console.log(`Sequential Processing Complete`);
+  console.log(parallelOrders > 1 ? 'Concurrent Processing Complete' : 'Sequential Processing Complete');
   console.log(`========================================`);
-  const successful = results.filter(r => r.success).length;
-  const failed = results.filter(r => !r.success).length;
+  const successful = finalizedResults.filter(r => r.success).length;
+  const failed = finalizedResults.filter(r => !r.success).length;
   console.log(`Successful: ${successful}`);
   console.log(`Failed: ${failed}`);
-  console.log(`Total: ${results.length}`);
+  console.log(`Total: ${finalizedResults.length}`);
   console.log(`========================================\n`);
 
-  return { success: failed === 0, results };
+  return { success: failed === 0, results: finalizedResults };
 }
 
 async function processSingleOrder(merchantId, orderId, config, orderIndex, totalOrders, maxJourneyTimeMs, reportGenerator) {
@@ -129,6 +169,10 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
   let orchestrator = null;
   let mocks = null;
   let progressInterval = null;
+  const registrySessionId = getRegistrySessionId(config, orderId);
+  const logsFilePath = getOrderScopedFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex);
+  const filteredLogsPath = getOrderScopedFilePath('data/filtered-logs.json', orderId, orderIndex);
+  const finalFilteredLogsPath = getOrderScopedFilePath('data/final-filtered-logs.json', orderId, orderIndex);
 
   const orderReport = reportGenerator.addOrder({
     orderId,
@@ -152,7 +196,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
       const fetcher = new BatchLogFetcher({
         sessionToken: config.SESSION_TOKEN,
-        outputPath: config.LOGS_FILE_PATH,
+        outputPath: logsFilePath,
         delayBetweenRequests: 500,
         maxRetries: 3
       });
@@ -200,7 +244,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       phase: 'FILTER_LOGS'
     });
     
-    const logs = await fetchLogsFromJSONFile(config.LOGS_FILE_PATH);
+    const logs = await fetchLogsFromJSONFile(logsFilePath);
 
     if (logs.length === 0) {
       reportGenerator.finalizeOrder(orderId, {
@@ -213,7 +257,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
 
     console.log(`Loaded ${logs.length} logs`);
 
-    const filteredLogs = await filterAndSortLogs(logs, 'data/filtered-logs.json');
+    const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
     
     if (filteredLogs.length === 0) {
       reportGenerator.finalizeOrder(orderId, {
@@ -224,7 +268,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       return { success: false, logCount: 0, error: 'No logs after filtering' };
     }
 
-    const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, 'data/final-filtered-logs.json');
+    const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
     
     if (finalFilteredLogs.length === 0) {
       reportGenerator.finalizeOrder(orderId, {
@@ -275,12 +319,12 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     });
 
     if (config.onOrchestratorReady) {
-      config.onOrchestratorReady(orchestrator, orderId);
+      config.onOrchestratorReady(orchestrator, orderId, registrySessionId);
       const loanApplicationIds = [...new Set(finalFilteredLogs
         .map(l => l.loan_application_id || l.loanApplicationId)
         .filter(Boolean))];
       for (const laId of loanApplicationIds) {
-        config.onLoanApplicationId?.(laId);
+        config.onLoanApplicationId?.(laId, orderId, registrySessionId);
       }
     } else {
       const app = createServer(orchestrator);
@@ -409,7 +453,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     }
 
     if (config.onOrchestratorReady) {
-      config.registry?.unregister(config.sessionId);
+      config.registry?.unregister(registrySessionId);
     }
 
     if (mocks) {
@@ -437,7 +481,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     if (orchestrator) await orchestrator.stop();
     if (server) await new Promise(resolve => server.close(resolve));
     if (config.onOrchestratorReady) {
-      config.registry?.unregister(config.sessionId);
+      config.registry?.unregister(registrySessionId);
     }
     if (mocks) await mocks.stop();
 
@@ -457,11 +501,66 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       logCount: 0,
       error: error.message
     };
+  } finally {
+    if (shouldCleanupOrderTempFiles(config)) {
+      await cleanupOrderTempFiles(orderId, orderIndex, [
+        logsFilePath,
+        filteredLogsPath,
+        finalFilteredLogsPath
+      ]);
+    }
   }
 }
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function shouldCleanupOrderTempFiles(config) {
+  return config.KEEP_ORDER_TEMP_FILES !== true;
+}
+
+function getRegistrySessionId(config, orderId) {
+  if (typeof config.getRegistrySessionId === 'function') {
+    return config.getRegistrySessionId(orderId);
+  }
+
+  return config.sessionId || orderId;
+}
+
+async function cleanupOrderTempFiles(orderId, orderIndex, filePaths) {
+  const deletedFiles = [];
+
+  for (const filePath of filePaths) {
+    try {
+      await unlink(filePath);
+      deletedFiles.push(filePath);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        logger.warn('Failed to delete order temp file', {
+          orderId,
+          orderIndex,
+          filePath,
+          error: error.message
+        });
+      }
+    }
+  }
+
+  if (deletedFiles.length > 0) {
+    logger.info('Deleted order temp files', {
+      orderId,
+      orderIndex,
+      deletedFiles
+    });
+  }
+}
+
+function getOrderScopedFilePath(basePath, orderId, orderIndex) {
+  const extension = extname(basePath);
+  const name = basename(basePath, extension);
+  const safeOrderId = String(orderId).replace(/[^a-zA-Z0-9_-]/g, '_');
+  return join(dirname(basePath), `${name}-${orderIndex}-${safeOrderId}${extension}`);
 }
 
 async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal) {

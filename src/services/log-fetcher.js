@@ -1,27 +1,116 @@
 import { readFile, writeFile } from 'fs/promises';
 import { resolve } from 'path';
 
-function removeExtraDuplicateTagResponses(logs, targetTag) {
-  const indices = [];
+function getCreatedAtTime(log) {
+  const createdAt = log?.message?.created_at;
+  const timestamp = createdAt ? new Date(createdAt).getTime() : Number.NaN;
+  return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp;
+}
 
-  logs.forEach((log, i) => {
-    const msg = log?.message || {};
-    const logTag = (msg.log_tag || '').trim();
-    if (logTag === targetTag) {
-      indices.push(i);
-    }
-  });
-
-  if (indices.length <= 1) {
-    return logs;
+function getPairingGroupKey(tagInfo, traceRoute) {
+  // Themis request/response logs use different trace routes for the same logical pair.
+  if (tagInfo.baseTag === 'Themis-Eligibility') {
+    return tagInfo.baseTag;
   }
 
-  const dropSet = new Set(indices.slice(1));
-  const result = logs.filter((_, i) => !dropSet.has(i));
+  return `${tagInfo.baseTag}__${traceRoute}`;
+}
 
-  console.log(`Removed ${indices.length - 1} extra ${targetTag} log(s) (kept index ${indices[0]}, dropped indices [${indices.slice(1).join(', ')}])`);
+function getRequestResponseTagInfo(logTag) {
+  const normalizedTag = (logTag || '').trim();
 
-  return result;
+  if (!normalizedTag) {
+    return null;
+  }
+
+  if (/_REQUEST$/i.test(normalizedTag)) {
+    return {
+      kind: 'request',
+      baseTag: normalizedTag.replace(/_REQUEST$/i, '')
+    };
+  }
+
+  if (/REQUEST$/i.test(normalizedTag)) {
+    return {
+      kind: 'request',
+      baseTag: normalizedTag.replace(/REQUEST$/i, '')
+    };
+  }
+
+  if (/_RESPONSE$/i.test(normalizedTag)) {
+    return {
+      kind: 'response',
+      baseTag: normalizedTag.replace(/_RESPONSE$/i, '')
+    };
+  }
+
+  if (/RESPONSE$/i.test(normalizedTag)) {
+    return {
+      kind: 'response',
+      baseTag: normalizedTag.replace(/RESPONSE$/i, '')
+    };
+  }
+
+  return null;
+}
+
+function balanceRequestResponsePairs(logs) {
+  const groups = new Map();
+  const keepSet = new Set();
+  const stats = new Map();
+
+  logs.forEach((log, index) => {
+    const msg = log?.message || {};
+    const logTag = (msg.log_tag || '').trim();
+    const traceRoute = msg.trace_route || '';
+    const tagInfo = getRequestResponseTagInfo(logTag);
+
+    if (!tagInfo) {
+      keepSet.add(index);
+      return;
+    }
+
+    const groupKey = getPairingGroupKey(tagInfo, traceRoute);
+    const group = groups.get(groupKey) || {
+      baseTag: tagInfo.baseTag,
+      traceRoute,
+      pendingRequests: []
+    };
+
+    const groupStats = stats.get(groupKey) || {
+      baseTag: tagInfo.baseTag,
+      traceRoute,
+      requestsSeen: 0,
+      responsesSeen: 0,
+      pairsKept: 0
+    };
+
+    if (tagInfo.kind === 'request') {
+      group.pendingRequests.push(index);
+      groupStats.requestsSeen += 1;
+    } else if (group.pendingRequests.length > 0) {
+      const requestIndex = group.pendingRequests.shift();
+      keepSet.add(requestIndex);
+      keepSet.add(index);
+      groupStats.responsesSeen += 1;
+      groupStats.pairsKept += 1;
+    } else {
+      groupStats.responsesSeen += 1;
+    }
+
+    groups.set(groupKey, group);
+    stats.set(groupKey, groupStats);
+  });
+
+  for (const groupStats of stats.values()) {
+    if (groupStats.requestsSeen !== groupStats.responsesSeen) {
+      console.log(
+        `Balanced ${groupStats.baseTag} on [${groupStats.traceRoute}]: kept ${groupStats.pairsKept} pair(s), removed ${groupStats.requestsSeen - groupStats.pairsKept} request(s) and ${groupStats.responsesSeen - groupStats.pairsKept} response(s)`
+      );
+    }
+  }
+
+  return logs.filter((_, index) => keepSet.has(index));
 }
 
 function shouldSkipLog(log) {
@@ -78,22 +167,20 @@ export async function filterOrchestratorSkippableLogs(logs, outputPath = null) {
 
   console.log(`Second-level filtering: ${logs.length} -> ${filtered.length} (removed ${logs.length - filtered.length} orchestrator-skipped entries)`);
 
-  const authTokenDeduped = removeExtraDuplicateTagResponses(filtered, 'GENERATE PARTNER AUTH TOKEN_RESPONSE');
-  const eligibilityDeduped = removeExtraDuplicateTagResponses(authTokenDeduped, 'CHECK ELIGIBILITY API_RESPONSE');
-  const deduped = removeExtraDuplicateTagResponses(eligibilityDeduped, 'CHECK ELIGIBILITY STATUS API_RESPONSE');
+  const balanced = balanceRequestResponsePairs(filtered);
   
   // Save final filtered logs to file if outputPath provided
   if (outputPath) {
     try {
       const absolutePath = resolve(process.cwd(), outputPath);
-      await writeFile(absolutePath, JSON.stringify(deduped, null, 2), 'utf-8');
+      await writeFile(absolutePath, JSON.stringify(balanced, null, 2), 'utf-8');
       console.log(`Saved final filtered logs to: ${outputPath}`);
     } catch (error) {
       console.error(`Failed to save final filtered logs: ${error.message}`);
     }
   }
   
-  return deduped;
+  return balanced;
 }
 
 /**
@@ -196,18 +283,21 @@ export async function filterAndSortLogs(logs, outputPath = null) {
     return [];
   }
 
+  const sortedByTime = [...logs].sort((a, b) => getCreatedAtTime(a) - getCreatedAtTime(b));
   const seen = new Set();
   const duplicates = [];
   const missingPayloadLogs = [];
 
-  const filtered = logs.filter((log, index) => {
+  const filtered = sortedByTime.filter((log, index) => {
     const msg = log?.message || {};
 
     const hasTraceRequest = msg.trace_request !== undefined && msg.trace_request !== null;
     const hasTraceResponse = msg.trace_response !== undefined && msg.trace_response !== null;
     const hasTraceError = msg.trace_error_msg !== undefined && msg.trace_error_msg !== null;
+    const hasTraceRequestAck = msg.trace_request_ack !== undefined && msg.trace_request_ack !== null;
+    const hasTraceResponseAck = msg.trace_response_ack !== undefined && msg.trace_response_ack !== null;
 
-    if (!hasTraceRequest && !hasTraceResponse && !hasTraceError) {
+    if (!hasTraceRequest && !hasTraceResponse && !hasTraceError && !hasTraceRequestAck && !hasTraceResponseAck) {
       missingPayloadLogs.push({
         index,
         requestId: msg.request_id || log?.xRequestId || '',
@@ -238,16 +328,11 @@ export async function filterAndSortLogs(logs, outputPath = null) {
   });
 
   if (missingPayloadLogs.length > 0) {
-    console.log(`Removed ${missingPayloadLogs.length} logs without trace_request/trace_response (checkpoint/metadata logs)`);
+    console.log(`Removed ${missingPayloadLogs.length} logs without trace_request/trace_response/ack payloads (checkpoint/metadata logs)`);
     console.log(`Sample logs removed:`, missingPayloadLogs.slice(0, 3));
   }
 
-  // Sort by created_at timestamp
-  const sorted = filtered.sort((a, b) => {
-    const timeA = a.message?.created_at || '';
-    const timeB = b.message?.created_at || '';
-    return new Date(timeA) - new Date(timeB);
-  });
+  const sorted = filtered;
 
   console.log(`Filtered logs: ${logs.length} -> ${sorted.length} (removed ${duplicates.length} duplicates)`);
   if (duplicates.length > 0) {

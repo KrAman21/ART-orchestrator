@@ -65,6 +65,9 @@ export class StateManager {
     // Map to store response headers per correlation key
     this.responseHeaders = new Map();
 
+    // Maps recorded IDs to the local IDs created during replay
+    this.loanApplicationIdMappings = new Map();
+
     this.config = {
       defaultTimeoutMs: 10000,
       maxBufferedResponses: 100,
@@ -235,6 +238,32 @@ export class StateManager {
       }
     }
     return null;
+  }
+
+  registerLoanApplicationIdMapping(originalLoanApplicationId, localLoanApplicationId) {
+    if (!originalLoanApplicationId || !localLoanApplicationId) return false;
+    if (originalLoanApplicationId === localLoanApplicationId) return false;
+
+    const existing = this.loanApplicationIdMappings.get(originalLoanApplicationId);
+    if (existing === localLoanApplicationId) {
+      return false;
+    }
+
+    this.loanApplicationIdMappings.set(originalLoanApplicationId, localLoanApplicationId);
+    logger.info('Registered loan application ID mapping', {
+      originalLoanApplicationId,
+      localLoanApplicationId
+    });
+    return true;
+  }
+
+  getMappedLoanApplicationId(loanApplicationId) {
+    if (!loanApplicationId) return loanApplicationId;
+    return this.loanApplicationIdMappings.get(loanApplicationId) || loanApplicationId;
+  }
+
+  getLoanApplicationIdMappings() {
+    return Object.fromEntries(this.loanApplicationIdMappings.entries());
   }
 
   /**

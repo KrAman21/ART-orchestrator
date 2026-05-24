@@ -4,6 +4,29 @@ import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { getEndpointConfig } from '../config.js';
+import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
+
+function remapLoanApplicationIds(value, stateManager) {
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => remapLoanApplicationIds(item, stateManager));
+  }
+
+  const remapped = {};
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if ((key === 'loanApplicationId' || key === 'loan_application_id') && typeof nestedValue === 'string') {
+      remapped[key] = stateManager.getMappedLoanApplicationId(nestedValue);
+    } else {
+      remapped[key] = remapLoanApplicationIds(nestedValue, stateManager);
+    }
+  }
+
+  return remapped;
+}
 
 export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   constructor(logs, config = {}) {
@@ -203,6 +226,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       bufferKey: buffered.key
     });
     
+    this.registerReplayLoanApplicationIdMappings(expectedEntry, incoming);
+
     const comparison = this.comparePayloads(expectedEntry.payload, incoming.payload, incoming.logTag);
     
     if (!comparison.match) {
@@ -304,10 +329,14 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     try {
       const api = this.getApiForLogTag(entry.logTag);
       const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
-      const customHeaders = endpointConfig?.headers || {};
+      const customHeaders = {
+        ...(endpointConfig?.headers || {}),
+        ...buildAppCoreAuthHeaders(entry, this.validator.entries)
+      };
       const service = endpointConfig?.service || entry.destination;
       
-      const transformedPayload = transformRequest(entry.payload, entry.logTag);
+      const remappedPayload = remapLoanApplicationIds(entry.payload, this.stateManager);
+      const transformedPayload = transformRequest(remappedPayload, entry.logTag);
       
       logger.info('ORCH_SENDING_ASYNC', {
         destination: service,

@@ -458,6 +458,8 @@ export class ReplayOrchestrator {
       incoming = buffered.data;
     }
 
+    this.registerReplayLoanApplicationIdMappings(expectedEntry, incoming);
+
     logger.logApiCall(incoming.source, incoming.destination, incoming.api, 'REQUEST', expectedEntry.index);
 
     const expectedPayload = expectedEntry.payload;
@@ -635,6 +637,48 @@ export class ReplayOrchestrator {
 
   comparePayloads(expected, actual, logTag) {
     return compareLog(expected, actual, logTag);
+  }
+
+  registerReplayLoanApplicationIdMappings(expectedEntry, incoming) {
+    const expectedIds = this.collectLoanApplicationIds(expectedEntry);
+    const actualIds = this.collectLoanApplicationIds(incoming);
+
+    for (let index = 0; index < Math.min(expectedIds.length, actualIds.length); index += 1) {
+      this.stateManager.registerLoanApplicationIdMapping(expectedIds[index], actualIds[index]);
+    }
+  }
+
+  collectLoanApplicationIds(source) {
+    const ids = [];
+    const seen = new Set();
+
+    const visit = value => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+
+      for (const [key, nestedValue] of Object.entries(value)) {
+        if ((key === 'loanApplicationId' || key === 'loan_application_id') && typeof nestedValue === 'string' && !seen.has(nestedValue)) {
+          seen.add(nestedValue);
+          ids.push(nestedValue);
+        } else {
+          visit(nestedValue);
+        }
+      }
+    };
+
+    visit({
+      loanApplicationId: source?.loanApplicationId,
+      payload: source?.payload,
+      message: source?.message
+    });
+
+    return ids;
   }
 
   getServiceBaseUrl(serviceName) {

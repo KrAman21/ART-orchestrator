@@ -1,6 +1,29 @@
 import { getEndpointConfig } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
+import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
+
+function remapLoanApplicationIds(value, stateManager) {
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => remapLoanApplicationIds(item, stateManager));
+  }
+
+  const remapped = {};
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if ((key === 'loanApplicationId' || key === 'loan_application_id') && typeof nestedValue === 'string') {
+      remapped[key] = stateManager.getMappedLoanApplicationId(nestedValue);
+    } else {
+      remapped[key] = remapLoanApplicationIds(nestedValue, stateManager);
+    }
+  }
+
+  return remapped;
+}
 
 /**
  * LogProcessor - Handles log sequence processing logic extracted from orchestrator.js
@@ -141,7 +164,10 @@ export class LogProcessor {
       }
 
       const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
-      const customHeaders = endpointConfig?.headers || {};
+      const customHeaders = {
+        ...(endpointConfig?.headers || {}),
+        ...buildAppCoreAuthHeaders(entry, this.validator.entries)
+      };
       const service = endpointConfig?.service || entry.destination;
 
       const expectedResponses = this.validator.peekNext(100).filter(e => {
@@ -164,7 +190,8 @@ export class LogProcessor {
       const sourceDestinationForRequest = entry.originalSourceDestination || entry.sourceDestination;
 
       // Transform masked values in payload before sending
-      const transformedPayload = transformRequest(entry.payload, entry.logTag);
+      const remappedPayload = remapLoanApplicationIds(entry.payload, this.stateManager);
+      const transformedPayload = transformRequest(remappedPayload, entry.logTag);
 
       // Log API call before making request
       this.logger.logApiCall(entry.source, entry.destination, api, 'REQUEST', entry.index);
