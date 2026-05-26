@@ -255,12 +255,64 @@ export async function checkHealth(serviceConfig) {
 
 export { fetchS3TraceLogsFromClient as fetchS3TraceLogs };
 
-export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = null) {
+function buildOrderFetchFilters(merchantIds, queryFilters = {}) {
+  const normalizedMerchantIds = Array.isArray(merchantIds)
+    ? merchantIds.filter(Boolean).map(id => String(id).trim()).filter(Boolean)
+    : [];
+  const merchantId = queryFilters.merchantId || normalizedMerchantIds[0] || QAPI_CONFIG.merchantId;
+  const flowType = queryFilters.flowType ? String(queryFilters.flowType).trim() : '';
+  const subType = queryFilters.subType ? String(queryFilters.subType).trim() : '';
+
+  if (flowType || subType) {
+    let filters = {
+      field: 'merchant_id',
+      condition: 'Equals',
+      val: merchantId
+    };
+
+    if (flowType) {
+      filters = {
+        and: {
+          left: filters,
+          right: {
+            field: 'flow_type',
+            condition: 'Equals',
+            val: flowType
+          }
+        }
+      };
+    }
+
+    if (subType) {
+      filters = {
+        and: {
+          left: filters,
+          right: {
+            field: 'sub_type',
+            condition: 'Equals',
+            val: subType
+          }
+        }
+      };
+    }
+
+    return filters;
+  }
+
+  return {
+    field: 'merchant_id',
+    condition: 'In',
+    val: normalizedMerchantIds.length > 0 ? normalizedMerchantIds : [QAPI_CONFIG.merchantId]
+  };
+}
+
+export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = null, queryFilters = {}) {
   logger.info('Fetching order IDs from QAPI', {
     startDate,
     endDate,
     merchantId: QAPI_CONFIG.merchantId,
-    merchantIds: merchantIds || [QAPI_CONFIG.merchantId]
+    merchantIds: merchantIds || [QAPI_CONFIG.merchantId],
+    queryFilters
   });
 
   const endpoint = '/analytics/query';
@@ -269,11 +321,7 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = nu
   const payload = {
     metric: "fetch_order_id",
     dimensions: [],
-    filters: {
-      field: "merchant_id",
-      condition: "In",
-      val: merchantIds || [QAPI_CONFIG.merchantId]
-    },
+    filters: buildOrderFetchFilters(merchantIds, queryFilters),
     domain: "orderAnalytics",
     interval: {
       start: startDate,

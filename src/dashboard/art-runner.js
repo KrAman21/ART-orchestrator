@@ -2,7 +2,7 @@ import { logger, subscribe, unsubscribe, runInSession } from '../utils/logger.js
 import { runSequentialArt } from '../sequential-runner.js';
 import { MOCKS_ENABLED, QAPI_CONFIG } from '../config.js';
 
-export async function getOrdersToProcess(merchantId, orderList, lastMinutes, sseManager) {
+export async function getOrdersToProcess(merchantId, orderList, lastMinutes, orderFetchFilters = {}, sseManager) {
   const orders = [];
 
   if (orderList && orderList.length > 0) {
@@ -14,7 +14,7 @@ export async function getOrdersToProcess(merchantId, orderList, lastMinutes, sse
       const endDate = new Date(Date.now() - LOG_DELAY_MINUTES * 60 * 1000);
       const startDate = new Date(endDate.getTime() - lastMinutes * 60 * 1000);
       sseManager.broadcast('INFO', `Fetching orders from last ${lastMinutes} minutes (with ${LOG_DELAY_MINUTES}min log delay offset)...`);
-    const orderIds = await fetchRecentOrderIds(merchantId, startDate, endDate);
+    const orderIds = await fetchRecentOrderIds(merchantId, startDate, endDate, orderFetchFilters);
     for (const orderId of orderIds) {
       orders.push({ merchantId, orderId });
     }
@@ -23,7 +23,7 @@ export async function getOrdersToProcess(merchantId, orderList, lastMinutes, sse
   return orders;
 }
 
-export async function fetchRecentOrderIds(merchantId, startDate, endDate) {
+export async function fetchRecentOrderIds(merchantId, startDate, endDate, orderFetchFilters = {}) {
   if (!QAPI_CONFIG.token) {
     logger.warn('QAPI_TOKEN not configured, skipping order fetch from QAPI');
     return [];
@@ -35,7 +35,11 @@ export async function fetchRecentOrderIds(merchantId, startDate, endDate) {
     const result = await fetchOrderIdsFromQAPI(
       startDate.toISOString(),
       endDate.toISOString(),
-      [merchantId]
+      [merchantId],
+      {
+        merchantId,
+        ...orderFetchFilters
+      }
     );
 
     if (result.success && result.orders) {

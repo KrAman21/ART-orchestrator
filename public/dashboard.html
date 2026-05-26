@@ -326,6 +326,14 @@
                     <label for="lastMinutes">Process Last N Minutes</label>
                     <input type="number" id="lastMinutes" placeholder="e.g., 60" min="1">
                 </div>
+                <div class="form-group">
+                    <label for="flowType">Flow Type</label>
+                    <input type="text" id="flowType" placeholder="e.g., NTB">
+                </div>
+                <div class="form-group">
+                    <label for="subType">Sub Type</label>
+                    <input type="text" id="subType" placeholder="e.g., CHECKOUT">
+                </div>
             </div>
             <div style="display: flex; gap: 15px;">
                 <button class="btn btn-primary" id="startBtn" onclick="startART()">
@@ -460,6 +468,8 @@
             const merchantId = document.getElementById('merchantId').value.trim();
             const orderList = document.getElementById('orderList').value.trim();
             const lastMinutes = document.getElementById('lastMinutes').value;
+            const flowType = document.getElementById('flowType').value.trim();
+            const subType = document.getElementById('subType').value.trim();
 
             if (!merchantId) {
                 alert('Please enter a Merchant ID');
@@ -493,6 +503,8 @@
                         merchantId,
                         orderList: orderList ? orderList.split(',').map(s => s.trim()) : [],
                         lastMinutes: lastMinutes ? parseInt(lastMinutes) : null,
+                        flowType: flowType || null,
+                        subType: subType || null,
                         sessionId
                     })
                 });

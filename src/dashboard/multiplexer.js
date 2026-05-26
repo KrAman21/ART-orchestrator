@@ -130,12 +130,21 @@ export function createMultiplexerServer() {
 
 export function startMultiplexerServer(port = MULTIPLEXER_PORT) {
   const { app, registry } = createMultiplexerServer();
+  let server = null;
+  let unixServer = null;
+
+  const readyPromises = [];
 
   if (port > 0) {
-    const server = createHttpServer(app);
-    server.listen(port, () => {
-      logger.info(`ART multiplexer listening on http://localhost:${port}`);
-    });
+    server = createHttpServer(app);
+    readyPromises.push(new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, () => {
+        logger.info(`ART multiplexer listening on http://localhost:${port}`);
+        server.off('error', reject);
+        resolve();
+      });
+    }));
   }
 
   if (MULTIPLEXER_UNIX_SOCKET) {
@@ -145,13 +154,18 @@ export function startMultiplexerServer(port = MULTIPLEXER_PORT) {
         socketPath: MULTIPLEXER_UNIX_SOCKET
       });
 
-      const unixServer = createHttpServer(app);
-      unixServer.listen(MULTIPLEXER_UNIX_SOCKET, () => {
-        configureSocketPermissions(MULTIPLEXER_UNIX_SOCKET);
-        logger.info('ART multiplexer listening on unix socket', {
-          socketPath: MULTIPLEXER_UNIX_SOCKET
+      unixServer = createHttpServer(app);
+      readyPromises.push(new Promise((resolve, reject) => {
+        unixServer.once('error', reject);
+        unixServer.listen(MULTIPLEXER_UNIX_SOCKET, () => {
+          configureSocketPermissions(MULTIPLEXER_UNIX_SOCKET);
+          logger.info('ART multiplexer listening on unix socket', {
+            socketPath: MULTIPLEXER_UNIX_SOCKET
+          });
+          unixServer.off('error', reject);
+          resolve();
         });
-      });
+      }));
       unixServer.on('error', (error) => {
         logger.error('ART multiplexer unix socket server error', {
           socketPath: MULTIPLEXER_UNIX_SOCKET,
@@ -163,5 +177,10 @@ export function startMultiplexerServer(port = MULTIPLEXER_PORT) {
     }
   }
 
-  return { registry };
+  return {
+    server,
+    unixServer,
+    registry,
+    ready: Promise.all(readyPromises).then(() => undefined)
+  };
 }

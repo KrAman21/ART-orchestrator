@@ -13,6 +13,7 @@ import { createMockController } from './mocks/index.js';
 import { MOCK_CONFIG, SERVICE_MAP } from './config.js';
 import { runSequentialArt } from './sequential-runner.js';
 import { fetchOrderIdsFromQAPI } from './services/http-client.js';
+import { startMultiplexerServer } from './dashboard/multiplexer.js';
 
 // Configuration
 const CONFIG = {
@@ -24,9 +25,12 @@ const CONFIG = {
   USE_ASYNC_ORCHESTRATOR: process.env.USE_ASYNC_ORCHESTRATOR === 'true',
   AUTO_FETCH_LOGS: process.env.AUTO_FETCH_LOGS === 'true',
   AUTO_FETCH_ORDER_IDS: process.env.AUTO_FETCH_ORDER_IDS === 'true',
+  LAST_MINUTES: process.env.LAST_MINUTES ? parseInt(process.env.LAST_MINUTES, 10) : null,
   QAPI_ORDER_LIMIT: parseInt(process.env.QAPI_ORDER_LIMIT, 10) || null,
   MERCHANT_ID: process.env.MERCHANT_ID || 'flipkart',
-  ORDER_LIST: process.env.ORDER_LIST 
+  FLOW_TYPE: process.env.FLOW_TYPE || '',
+  SUB_TYPE: process.env.SUB_TYPE || '',
+  ORDER_LIST: process.env.ORDER_LIST
     ? process.env.ORDER_LIST.split(',').map(s => s.trim()).filter(Boolean)
     : [],
   SESSION_TOKEN: process.env.SESSION_TOKEN || '',
@@ -35,6 +39,24 @@ const CONFIG = {
   KEEP_ORDER_TEMP_FILES: process.env.KEEP_ORDER_TEMP_FILES === 'true',
   ENABLE_BATCH_PROCESSING: process.env.ENABLE_BATCH_PROCESSING !== 'false'
 };
+
+function getConfiguredFetchInputs() {
+  if (process.env.LAST_MINUTES === undefined || process.env.LAST_MINUTES === '') {
+    return null;
+  }
+
+  if (!Number.isInteger(CONFIG.LAST_MINUTES) || CONFIG.LAST_MINUTES <= 0) {
+    throw new Error('LAST_MINUTES must be set to a positive integer when using env-based QAPI order fetching');
+  }
+
+  return {
+    minutesBack: CONFIG.LAST_MINUTES,
+    merchantId: CONFIG.MERCHANT_ID,
+    orderLimit: CONFIG.QAPI_ORDER_LIMIT,
+    flowType: CONFIG.FLOW_TYPE,
+    subType: CONFIG.SUB_TYPE
+  };
+}
 
 /**
  * Main execution flow
@@ -76,10 +98,11 @@ async function main() {
 
   try {
     let orderList = [];
+    const configuredFetchInputs = getConfiguredFetchInputs();
 
-    if (CONFIG.AUTO_FETCH_ORDER_IDS || CONFIG.ORDER_LIST.length === 0) {
-      const answers = await askInteractiveConfig();
-      
+    if (configuredFetchInputs || CONFIG.AUTO_FETCH_ORDER_IDS || CONFIG.ORDER_LIST.length === 0) {
+      const answers = configuredFetchInputs || await askInteractiveConfig();
+
       const minutesBack = answers.minutesBack;
       const endDate = new Date();
       const startDate = new Date(endDate.getTime() - minutesBack * 60 * 1000);
@@ -92,6 +115,12 @@ async function main() {
       console.log(`Merchant: ${answers.merchantId}`);
       console.log(`Lookback: ${minutesBack} minutes`);
       console.log(`Date Range: ${startDateStr} to ${endDateStr}`);
+      if (answers.flowType) {
+        console.log(`Flow Type: ${answers.flowType}`);
+      }
+      if (answers.subType) {
+        console.log(`Sub Type: ${answers.subType}`);
+      }
       if (answers.orderLimit) {
         console.log(`Limit: ${answers.orderLimit} orders`);
       }
@@ -100,7 +129,12 @@ async function main() {
       const qapiResult = await fetchOrderIdsFromQAPI(
         startDateStr,
         endDateStr,
-        [answers.merchantId]
+        [answers.merchantId],
+        {
+          merchantId: answers.merchantId,
+          flowType: answers.flowType,
+          subType: answers.subType
+        }
       );
 
       if (!qapiResult.success) {
@@ -140,19 +174,45 @@ async function main() {
       }));
     }
 
-    if (CONFIG.AUTO_FETCH_LOGS && orderList.length > 0) {
+    if (orderList.length > 0) {
       console.log('\n========================================');
-      console.log('Auto-fetch enabled - Running Sequential ART');
+      console.log('Running Sequential ART');
       console.log(`Total Orders: ${orderList.length}`);
       console.log('========================================\n');
 
-      const result = await runSequentialArt(orderList, CONFIG);
-      
+      const multiplexerPort = parseInt(process.env.MULTIPLEXER_PORT || process.env.PORT || '3001', 10);
+      const cliSessionId = `cli-${Date.now()}`;
+      const { registry, ready } = startMultiplexerServer(multiplexerPort);
+      await ready;
+      const dashboardLikeConfig = {
+        ...CONFIG,
+        MAX_JOURNEY_TIME_MS: 3 * 60 * 1000,
+        REPORT_PATH: CONFIG.REPORT_PATH || 'report.json',
+        AUTO_FETCH_LOGS: true,
+        USE_ASYNC_ORCHESTRATOR: true,
+        PORT: multiplexerPort,
+        TIMEOUT_MS: 10000,
+        LOGS_FILE_PATH: `data/logs-${cliSessionId}.json`,
+        MERCHANT_ID: CONFIG.MERCHANT_ID,
+        SESSION_TOKEN: process.env.SESSION_TOKEN || '',
+        PARALLEL_ORDERS: 10,
+        registry,
+        getRegistrySessionId: (orderId) => `${cliSessionId}:${orderId}`,
+        onOrchestratorReady: (orchestratorInstance, orderId, registrySessionId) => {
+          registry.register(registrySessionId, orchestratorInstance, [orderId]);
+        },
+        onLoanApplicationId: (loanApplicationId, orderId, registrySessionId) => {
+          registry.addLoanApplicationId(registrySessionId, loanApplicationId);
+        }
+      };
+
+      const result = await runSequentialArt(orderList, dashboardLikeConfig);
+
       console.log('\n========================================');
       console.log('Sequential ART Complete');
       console.log(`Overall Success: ${result.success}`);
       console.log('========================================\n');
-      
+
       process.exit(result.success ? 0 : 1);
     }
 
@@ -163,7 +223,7 @@ async function main() {
     if (logs.length > 0) {
       console.log('Filtering and sorting logs...');
       const filteredLogs = await filterAndSortLogs(logs, 'data/filtered-logs.json');
-      
+
       if (filteredLogs.length === 0) {
         console.log('No logs remaining after filtering');
         process.exit(1);
@@ -171,7 +231,7 @@ async function main() {
 
       console.log('Applying second-level filtering (removing orchestrator-skipped entries)...');
       const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, 'data/final-filtered-logs.json');
-      
+
       if (finalFilteredLogs.length === 0) {
         console.log('No logs remaining after second-level filtering');
         process.exit(1);
@@ -197,20 +257,20 @@ async function main() {
         orchestratorUrl: `http://localhost:${CONFIG.ART_PORT}`
       });
 
-      await mocks.start(logs);
+      await mocks.start(logsToProcess || []);
 
       // Override service URLs to point to mocks
       SERVICE_MAP.LSP.baseUrl = MOCK_CONFIG.mockLspUrl;
       SERVICE_MAP.GW.baseUrl = MOCK_CONFIG.mockGwUrl;
 
-      console.log(`✅ Mock services started:`);
+      console.log('✅ Mock services started:');
       console.log(`   - LSP mock: ${MOCK_CONFIG.mockLspUrl}`);
       console.log(`   - GW mock:  ${MOCK_CONFIG.mockGwUrl}`);
     }
 
     // Create orchestrator
     const OrchestratorClass = CONFIG.USE_ASYNC_ORCHESTRATOR ? AsyncReplayOrchestrator : ReplayOrchestrator;
-    orchestrator = new OrchestratorClass(finalFilteredLogs, {
+    orchestrator = new OrchestratorClass(logsToProcess || [], {
       timeoutMs: CONFIG.TIMEOUT_MS
     });
 
@@ -254,18 +314,18 @@ async function main() {
 
     server = httpServer;
 
-    console.log(`\nEndpoints:`);
+    console.log('\nEndpoints:');
     if (CONFIG.ART_PORT > 0) {
       console.log(`  - TCP:     http://localhost:${CONFIG.ART_PORT}/health`);
     }
     if (CONFIG.ART_UNIX_SOCKET_PATH) {
       console.log(`  - Socket:  curl --unix-socket ${CONFIG.ART_UNIX_SOCKET_PATH} http://localhost/health`);
     }
-    console.log(`  - Control: POST /control/{start|stop}`);
+    console.log('  - Control: POST /control/{start|stop}');
     if (CONFIG.USE_ASYNC_ORCHESTRATOR) {
-      console.log(`\n⚡ Async orchestrator mode active`);
+      console.log('\n⚡ Async orchestrator mode active');
     }
-    console.log(`\nReplay ready. Call /control/start to begin.\n`);
+    console.log('\nReplay ready. Call /control/start to begin.\n');
 
     // Auto-start if configured
     if (CONFIG.AUTO_START) {
@@ -358,11 +418,15 @@ function askQuestion(query, defaultValue = '') {
 }
 
 async function askInteractiveConfig() {
+  if (!process.stdin.isTTY) {
+    throw new Error('Interactive order fetching requires a TTY. Set LAST_MINUTES, MERCHANT_ID, FLOW_TYPE, SUB_TYPE, and optional QAPI_ORDER_LIMIT in env instead.');
+  }
+
   console.log('\n========================================');
   console.log('ART - Automated Regression Testing');
   console.log('========================================\n');
 
-  const defaultMinutes = CONFIG.QAPI_START_DATE ? 10080 : 1440;
+  const defaultMinutes = Number.isInteger(CONFIG.LAST_MINUTES) && CONFIG.LAST_MINUTES > 0 ? CONFIG.LAST_MINUTES : 1440;
   const minutesBackInput = await askQuestion('How many minutes back should we fetch orders for?', String(defaultMinutes));
   const minutesBack = parseInt(minutesBackInput, 10);
   if (isNaN(minutesBack) || minutesBack <= 0) {
@@ -371,6 +435,8 @@ async function askInteractiveConfig() {
   }
 
   const merchantId = await askQuestion('Merchant ID', CONFIG.MERCHANT_ID || 'flipkart');
+  const flowType = await askQuestion('Flow Type (empty = any)', CONFIG.FLOW_TYPE || '');
+  const subType = await askQuestion('Sub Type (empty = any)', CONFIG.SUB_TYPE || '');
 
   const orderLimitInput = await askQuestion('Max orders to process (empty = no limit)', CONFIG.QAPI_ORDER_LIMIT ? String(CONFIG.QAPI_ORDER_LIMIT) : '');
   const orderLimit = orderLimitInput ? parseInt(orderLimitInput, 10) : null;
@@ -379,7 +445,7 @@ async function askInteractiveConfig() {
     process.exit(1);
   }
 
-  return { minutesBack, merchantId, orderLimit };
+  return { minutesBack, merchantId, orderLimit, flowType, subType };
 }
 
 // Run main

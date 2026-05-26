@@ -54,7 +54,7 @@ export function setupRoutes(app, server) {
       return res.status(400).json({ success: false, message: 'ART is already running in this session' });
     }
 
-    const { merchantId, orderList, lastMinutes } = req.body;
+    const { merchantId, orderList, lastMinutes, flowType, subType } = req.body;
 
     if (!merchantId) {
       return res.status(400).json({ success: false, message: 'merchantId is required' });
@@ -68,7 +68,16 @@ export function setupRoutes(app, server) {
       session.sseManager.broadcast('INFO', 'Starting ART process...');
       session.isRunning = true;
 
-      const ordersToProcess = await getOrdersToProcess(merchantId, orderList, lastMinutes, session.sseManager);
+      const ordersToProcess = await getOrdersToProcess(
+        merchantId,
+        orderList,
+        lastMinutes,
+        {
+          flowType,
+          subType
+        },
+        session.sseManager
+      );
 
       if (ordersToProcess.length === 0) {
         session.isRunning = false;
