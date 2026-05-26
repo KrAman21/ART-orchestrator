@@ -12,17 +12,25 @@ class PendingRequest {
     this.resolve = null;
     this.reject = null;
     this.timedOut = false;
+    this.settled = false;
 
-    // Create promise that can be resolved externally
+    // Create promise that can be resolved externally.
     this.promise = new Promise((resolve, reject) => {
       this.resolve = resolve;
       this.reject = reject;
     });
 
-    // Set up timeout
+    // Mark the promise as handled immediately so timeout rejections do not crash
+    // Node before the caller gets a chance to await the result.
+    this.promise.catch(() => {});
+
+    // Set up timeout.
     this.timeoutHandle = setTimeout(() => {
+      if (this.settled) {
+        return;
+      }
       this.timedOut = true;
-      this.reject(new Error(
+      this.fail(new Error(
         `Request ${correlationId} timed out after ${timeoutMs}ms. ` +
         `Expected response for: ${expectedLogEntry?.message?.log_tag}`
       ));
@@ -30,14 +38,16 @@ class PendingRequest {
   }
 
   complete(response) {
-    if (this.timedOut) return false;
+    if (this.settled) return false;
+    this.settled = true;
     clearTimeout(this.timeoutHandle);
     this.resolve(response);
     return true;
   }
 
   fail(error) {
-    if (this.timedOut) return false;
+    if (this.settled) return false;
+    this.settled = true;
     clearTimeout(this.timeoutHandle);
     this.reject(error);
     return true;
@@ -104,7 +114,23 @@ export class StateManager {
       pendingCount: this.pendingRequests.size
     });
 
+    pending.promise.then(
+      () => this.cleanupPendingRequest(correlationId, pending),
+      () => this.cleanupPendingRequest(correlationId, pending)
+    );
+
     return pending.promise;
+  }
+
+  cleanupPendingRequest(correlationId, pending) {
+    const activePending = this.pendingRequests.get(correlationId);
+    if (activePending === pending) {
+      this.pendingRequests.delete(correlationId);
+      logger.debug('Cleaned up settled pending request', {
+        correlationId,
+        pendingCount: this.pendingRequests.size
+      });
+    }
   }
 
   /**

@@ -36,6 +36,8 @@ export class RetryHandler {
       pendingCount: this.pendingExternalRequests.size
     });
 
+    const currentEntry = this.validator.getCurrentEntry();
+
     // Check if this request matches an already-processed log entry
     // Look for entries that were skipped (external destinations like LENDER)
     for (const [contextKey, pendingInfo] of this.pendingExternalRequests.entries()) {
@@ -65,6 +67,15 @@ export class RetryHandler {
             });
             continue; // Skip to next pending entry
           }
+        }
+
+        if (contextMatches && currentEntry && currentEntry.isRequest && currentEntry.index !== requestEntry.index && currentEntry.source === incoming.source && currentEntry.destination === incoming.destination && currentEntry.logTag === incoming.logTag) {
+          this.logger.info('Skipping retry match for older pending external call because incoming matches current replay entry', {
+            currentEntryIndex: currentEntry.index,
+            pendingEntryIndex: requestEntry.index,
+            contextKey
+          });
+          continue;
         }
 
         if (contextMatches) {

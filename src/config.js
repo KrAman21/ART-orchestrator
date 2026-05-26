@@ -439,6 +439,7 @@ export const API_TO_ENDPOINT_MAP = {
   // ============================================================================
   
   // Themis Eligibility APIs
+  'GATEWAY_LENDER|POLLING API :: LINE_STATUS_REQUEST': {endpoint: '/pb-uat-polling', method: 'POST', service: 'LENDER', headers: {}}, 
   'GATEWAY_LENDER|HDB_TOKEN_API_REQUEST': { endpoint: '/api/v1/authenticate-token', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|Themis-Eligibility Request': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'LSP', headers: {} },
   'GATEWAY_LENDER|Themis-Eligibility_REQUEST': { endpoint: '/lsp/softEligibility', method: 'POST', service: 'LSP', headers: {} },
@@ -838,7 +839,6 @@ export const API_TO_ENDPOINT_MAP = {
   // ============================================================================
   // IDFC LENDER APIs
   // ============================================================================
-  
   'GATEWAY_LENDER|IDFC-Token Request': { endpoint: '/authorization/oauth2/token', method: 'POST', service: 'IDFC', headers: {} },
   'GATEWAY_LENDER|IDFC-Token_REQUEST': { endpoint: '/authorization/oauth2/token', method: 'POST', service: 'IDFC', headers: {} },
   'GATEWAY_LENDER|IDFC-Token Response': { type: 'TokenAPIResponse', headers: {} },
@@ -1064,6 +1064,7 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LENDER|GRAYQUEST_WEBHOOK_FETCH_API_REQUEST': { endpoint: 'misc/status', method: 'GET', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|FIBE_GENERATE_TOKEN_API_REQUEST': { endpoint: 'generateToken', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|FIBE_PROFILE_INGESTION_API_REQUEST': { endpoint: 'profileIngestion', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|PROFILE_INGESTION_REQUEST': { endpoint: 'profileIngestion', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|FIBE_CALCULATE_EMI_API_REQUEST': { endpoint: 'calculate-emi', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|FIBE_GET_REDIRECTION_URL_API_REQUEST': { endpoint: 'getredirectionurl', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|FIBE_LOCK_TENURE_API_REQUEST': { endpoint: 'lockTenure', method: 'POST', service: 'LENDER', headers: {} },
@@ -1082,6 +1083,9 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LENDER|TVS_CHECKOUT_ACTIVATE_LOAN_API_REQUEST': { endpoint: 'loanActivation', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|TVS_CHECKOUT_REFUND_API_REQUEST': { endpoint: 'refundCancellation', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|FFPL_CANCELLATION_OAUTH_TOKEN_API_REQUEST': { endpoint: 'api/oauth/token', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|HARD_ELIGIBILITY_REQUEST': { endpoint: '/api/lazypay/cof/v0/eligibility', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|CREATE APPLICATION API_REQUEST':{endpoint: '/uat/applicationcreation', method: 'POST', service: 'LENDER', headers: {}},
+  'GATEWAY_LENDER|FK SCORE API_REQUEST': { endpoint: '/uat/partner_score', method: 'POST', service: 'LENDER', headers: {} },
 
   /// MIHURU LENDER APIs
 
@@ -1446,7 +1450,14 @@ export const API_TO_LOGTAG_MAP = {
   '/base/flipkart/fk/checkEligibility':{logTag: 'CHECK ELIGIBILITY API_REQUEST', api: '/base/flipkart/fk/checkEligibility', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/base/flipkart/fk/generateToken': { logTag:'GENERATE PARTNER AUTH TOKEN_REQUEST', api: '/base/flipkart/fk/generateToken', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/base/flipkart/fk/loanOffer': { logTag: 'LOAN OFFER API_REQUEST', api: '/base/flipkart/fk/loanOffer', sourceDestination: 'GATEWAY_LENDER', headers: {} },
-  '/base/flipkart/fk/loanStatus': { logTag: 'LOAN STATUS API_REQUEST', api: '/base/flipkart/fk/loanStatus', sourceDestination: 'GATEWAY_LENDER', headers: {} }
+  '/base/flipkart/fk/loanStatus': { logTag: 'LOAN STATUS API_REQUEST', api: '/base/flipkart/fk/loanStatus', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/pb-uat-polling': { logTag: 'POLLING API :: LINE_STATUS_REQUEST', api: '/pb-uat-polling', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/profileIngestion': { logTag: 'PROFILE_INGESTION_REQUEST', api: '/profileIngestion', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/cselcdfkapi/1.0.0/credit-decision': { logTag: 'CREDIT_DECISION_REQUEST', api: '/cselcdfkapi/1.0.0/credit-decision', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/core/api/v2/workflows/hard-eligibility': { logTag: 'HARD_ELIGIBILITY_API_REQUEST', api: '/core/api/v2/workflows/hard-eligibility', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/api/lazypay/cof/v0/eligibility': { logTag: 'HARD_ELIGIBILITY_API_REQUEST', api: '/api/lazypay/cof/v0/eligibility', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/uat/applicationcreation':{logTag: 'CREATE APPLICATION API_REQUEST', api: '/uat/applicationcreation', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/uat/partner_score':{logTag:'FK SCORE API_REQUEST', api: '/uat/partner_score', sourceDestination: 'GATEWAY_LENDER', headers: {} },
 };
 
 // Destinations that should not be called (external services)
@@ -1549,13 +1560,47 @@ export function getLogTagForApi(api) {
   return API_TO_LOGTAG_MAP[api]?.logTag || null;
 }
 
+function getHeaderValue(headers = {}, key) {
+  if (!headers || typeof headers !== 'object') {
+    return undefined;
+  }
+
+  return headers[key] ?? headers[key.toLowerCase()] ?? headers[key.toUpperCase()];
+}
+
+function extractLenderOrgId(payload = {}, headers = {}) {
+  return payload?.lender_org_id ||
+    payload?.lenderOrgId ||
+    payload?.themisDetail?.lenderOrgId ||
+    payload?.eligibility?.lenderOrgId ||
+    getHeaderValue(headers, 'x-lender-org-id');
+}
+
 /**
  * Get full mapping info for an API endpoint
  * @param {string} api - API endpoint path
+ * @param {Object} [context]
+ * @param {Object} [context.payload] - Request payload
+ * @param {Object} [context.headers] - Request headers
  * @returns {Object|null} - { logTag, api, sourceDestination }
  */
-export function getApiMapping(api) {
-  return API_TO_LOGTAG_MAP[api] || null;
+export function getApiMapping(api, context = {}) {
+  const mapping = API_TO_LOGTAG_MAP[api];
+  if (!mapping) {
+    return null;
+  }
+
+  if (api === '/lsp/generateKFS') {
+    const lenderOrgId = extractLenderOrgId(context.payload, context.headers);
+    if (lenderOrgId) {
+      return {
+        ...mapping,
+        sourceDestination: 'GATEWAY_LENDER'
+      };
+    }
+  }
+
+  return mapping;
 }
 
 /**

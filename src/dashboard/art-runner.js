@@ -76,6 +76,7 @@ export async function runArtProcess(merchantId, orders, server, session) {
       ENABLE_MOCKS: MOCKS_ENABLED,
       PARALLEL_ORDERS: 10,
       KEEP_ORDER_TEMP_FILES: process.env.KEEP_ORDER_TEMP_FILES === 'true',
+      ENABLE_BATCH_PROCESSING: process.env.ENABLE_BATCH_PROCESSING !== 'false',
       stopSignal,
       sessionId: mySessionId,
       registry: server.registry,

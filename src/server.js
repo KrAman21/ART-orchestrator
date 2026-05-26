@@ -62,7 +62,7 @@ export function createServer(orchestrator) {
       
 
       // Determine source/destination and logTag from API endpoint mapping
-      const mapping = getApiMapping(api);
+      const mapping = getApiMapping(api, { payload: req.body, headers: req.headers });
       if (!mapping) {
         // Unknown API endpoint - likely a webhook/callback, ignore gracefully
         logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);

@@ -32,7 +32,8 @@ const CONFIG = {
   SESSION_TOKEN: process.env.SESSION_TOKEN || '',
   MAX_JOURNEY_TIME_MS: parseInt(process.env.MAX_JOURNEY_TIME_MS, 10) || 180000,
   REPORT_PATH: process.env.REPORT_PATH || 'report.json',
-  KEEP_ORDER_TEMP_FILES: process.env.KEEP_ORDER_TEMP_FILES === 'true'
+  KEEP_ORDER_TEMP_FILES: process.env.KEEP_ORDER_TEMP_FILES === 'true',
+  ENABLE_BATCH_PROCESSING: process.env.ENABLE_BATCH_PROCESSING !== 'false'
 };
 
 /**
@@ -43,6 +44,35 @@ async function main() {
   let orchestrator = null;
   let mocks = null;
   let logsToProcess = null;
+
+  const logUnexpectedProcessError = async (kind, error) => {
+    const normalizedError = error instanceof Error ? error : new Error(String(error));
+
+    console.error(`\n${kind}:`, normalizedError.message);
+    logger.error(kind, {
+      error: normalizedError.message,
+      stack: normalizedError.stack
+    });
+
+    if (orchestrator?.isRunning) {
+      try {
+        await orchestrator.stop();
+      } catch (stopError) {
+        logger.error(`Failed to stop orchestrator after ${kind}`, {
+          error: stopError.message,
+          stack: stopError.stack
+        });
+      }
+    }
+  };
+
+  process.on('unhandledRejection', reason => {
+    void logUnexpectedProcessError('Unhandled promise rejection', reason);
+  });
+
+  process.on('uncaughtException', error => {
+    void logUnexpectedProcessError('Uncaught exception', error);
+  });
 
   try {
     let orderList = [];

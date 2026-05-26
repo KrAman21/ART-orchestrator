@@ -269,7 +269,8 @@ export class ReplayOrchestrator {
     }
 
     const orchestratorInitiatedSources = ['APP', 'LENDER', 'EULER', 'THEMIS'];
-    const shouldOrchestratorInitiate = orchestratorInitiatedSources.includes(entry.source);
+    const shouldOrchestratorInitiate = orchestratorInitiatedSources.includes(entry.source) ||
+      (entry.source === 'CORE' && entry.destination === 'GATEWAY' && entry.logTag === 'LSP-FetchOfferSync_REQUEST');
 
     if (shouldOrchestratorInitiate && entry.isRequest) {
       logger.info('External source request - triggering from orchestrator', {
@@ -776,45 +777,51 @@ export class ReplayOrchestrator {
       requestId: incoming.requestId
     });
 
-    const allThemisEntries = this.validator.entries.filter(entry =>
+    const kfsRequestEntries = this.validator.entries.filter(entry =>
       entry.logTag === 'Themis-KFS_REQUEST' &&
       entry.source === 'GATEWAY' &&
       (entry.destination === 'LENDER' || entry.destination === 'LSP' || entry.destination === 'THEMIS') &&
-      !this.validator.processedIndices.has(entry.index)
+      entry.lenderOrgId === incoming.lenderOrgId
+    );
+    const kfsResponseEntries = this.validator.entries.filter(entry =>
+      entry.logTag === 'Themis-KFS_RESPONSE' &&
+      (entry.sourceDestination === 'GATEWAY_THEMIS' || entry.sourceDestination === 'GATEWAY_LSP' || entry.sourceDestination === 'GATEWAY_LENDER') &&
+      entry.lenderOrgId === incoming.lenderOrgId
     );
 
-    let requestEntry = null;
-    let responseEntry = null;
-    for (const entry of allThemisEntries) {
-      if (entry.lenderOrgId === incoming.lenderOrgId) {
-        requestEntry = entry;
-        responseEntry = this.validator.entries.find(e =>
-          e.logTag === 'Themis-KFS_RESPONSE' &&
-          e.sourceDestination === 'GATEWAY_THEMIS' &&
-          e.lenderOrgId === incoming.lenderOrgId &&
-          !this.validator.processedIndices.has(e.index)
-        );
-        if (responseEntry) {
-          this.validator.processedIndices.add(entry.index);
-          this.validator.processedIndices.add(responseEntry.index);
-          this.recordSuccess('request_validation', entry);
-          this.recordSuccess('response_validation', responseEntry);
-          logger.info('Marked Themis-KFS pair as processed', {
-            requestIndex: entry.index,
-            responseIndex: responseEntry.index,
-            lenderOrgId: entry.lenderOrgId
-          });
-        }
-        break;
-      }
-    }
+    const requestEntry = kfsRequestEntries.find(entry => !this.validator.processedIndices.has(entry.index)) || kfsRequestEntries[0] || null;
+    const responseEntry = kfsResponseEntries.find(entry => !this.validator.processedIndices.has(entry.index)) || kfsResponseEntries[0] || null;
 
-    if (!responseEntry) {
+    if (!requestEntry || !responseEntry) {
       return await this.fail(`No matching Themis-KFS_RESPONSE found for lenderOrgId: ${incoming.lenderOrgId}`);
     }
 
-    const unprocessedCount = allThemisEntries.filter(e => !this.validator.processedIndices.has(e.index)).length;
-    if (unprocessedCount === 0) {
+    if (!this.validator.processedIndices.has(requestEntry.index)) {
+      this.validator.processedIndices.add(requestEntry.index);
+      this.recordSuccess('request_validation', requestEntry);
+    }
+    if (!this.validator.processedIndices.has(responseEntry.index)) {
+      this.validator.processedIndices.add(responseEntry.index);
+      this.recordSuccess('response_validation', responseEntry);
+    }
+
+    logger.info('Marked Themis-KFS pair as processed', {
+      requestIndex: requestEntry.index,
+      responseIndex: responseEntry.index,
+      lenderOrgId: requestEntry.lenderOrgId
+    });
+
+    const comparison = this.comparePayloads(requestEntry.payload, incoming.payload, incoming.logTag);
+    if (!comparison.match) {
+      logger.warn('Themis-KFS payload mismatch tolerated', {
+        lenderOrgId: incoming.lenderOrgId,
+        requestId: incoming.requestId,
+        differences: comparison.differences
+      });
+    }
+
+    const remainingUnprocessed = kfsRequestEntries.filter(entry => !this.validator.processedIndices.has(entry.index)).length;
+    if (remainingUnprocessed === 0) {
       logger.info('All Themis-KFS_REQUEST calls processed, advancing log sequence');
       this.currentIndex = Math.max(...this.validator.entries
         .filter(e => e.logTag === 'Themis-KFS_REQUEST' && e.source === 'GATEWAY')

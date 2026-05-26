@@ -12,7 +12,10 @@ import { unlink } from 'fs/promises';
 
 export async function runSequentialArt(orderList, config) {
   const maxJourneyTimeMs = config.MAX_JOURNEY_TIME_MS || 3 * 60 * 1000;
-  const requestedParallelOrders = Math.max(1, Math.min(config.PARALLEL_ORDERS || 10, 10));
+  const batchProcessingEnabled = config.ENABLE_BATCH_PROCESSING !== false;
+  const requestedParallelOrders = batchProcessingEnabled
+    ? Math.max(1, Math.min(config.PARALLEL_ORDERS || 10, 10))
+    : 1;
   const parallelOrders = (!config.onOrchestratorReady || MOCK_CONFIG.enabled)
     ? 1
     : requestedParallelOrders;

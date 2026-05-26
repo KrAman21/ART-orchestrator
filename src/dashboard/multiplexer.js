@@ -42,7 +42,7 @@ export function createMultiplexerServer() {
 
   app.use('/:api(*)', async (req, res) => {
     const api = '/' + req.params.api;
-    const mapping = getApiMapping(api);
+    const mapping = getApiMapping(api, { payload: req.body, headers: req.headers });
 
     if (!mapping) {
       logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);

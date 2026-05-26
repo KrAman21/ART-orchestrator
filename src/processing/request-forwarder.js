@@ -501,7 +501,12 @@ export class RequestForwarder {
         api,
         error: error.message
       });
-      throw error;
+      return await this.callbacks.fail(`Forwarding failed for ${destination} ${api}: ${error.message}`, {
+        destination,
+        api,
+        requestId: incoming.requestId,
+        expectedEntry: expectedEntry?.toString?.()
+      });
     }
   }
 

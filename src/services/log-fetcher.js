@@ -8,8 +8,9 @@ function getCreatedAtTime(log) {
 }
 
 function getPairingGroupKey(tagInfo, traceRoute) {
-  // Themis request/response logs use different trace routes for the same logical pair.
-  if (tagInfo.baseTag === 'Themis-Eligibility') {
+  // Some Themis flows log requests and responses on different trace routes,
+  // but they are still one logical replay pair.
+  if (tagInfo.baseTag === 'Themis-Eligibility' || tagInfo.baseTag === 'Themis-KFS') {
     return tagInfo.baseTag;
   }
 
