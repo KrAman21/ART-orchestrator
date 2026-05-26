@@ -185,7 +185,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
  * @param {Object} headers - Additional headers
  * @returns {Promise<Object>} - Response from GW
  */
-export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = {}) {
+export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = {}, gwUnixSocket = null) {
   const endpoint = `/gateway/webhook/${lenderOrgId}`;
   const url = `${gwBaseUrl}${endpoint}`;
 
@@ -196,15 +196,35 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
   });
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...headers
-      },
-      body: JSON.stringify(payload)
-    });
+    let response;
+    if (gwUnixSocket) {
+      logger.info('Using Unix socket for webhook request', { socket: gwUnixSocket, url });
+      const socketResponse = await unixSocketRequest(gwUnixSocket, gwBaseUrl, endpoint, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          ...headers
+        }
+      });
+      response = {
+        ok: socketResponse.ok,
+        status: socketResponse.status,
+        statusText: socketResponse.statusText,
+        json: () => Promise.resolve(socketResponse.data)
+      };
+    } else {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          ...headers
+        },
+        body: JSON.stringify(payload)
+      });
+    }
 
     const data = await response.json().catch(() => null);
 

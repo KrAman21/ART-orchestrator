@@ -5,17 +5,17 @@ export class EnvironmentController {
       local: {
         name: 'Local Development',
         LSP: {
-          baseUrl: process.env.LSP_URL_LOCAL || 'http://localhost:8080',
+          baseUrl: 'http://localhost:8055',
           name: 'LSP-Local',
           unixSocket: process.env.LSP_UNIX_SOCKET || null
         },
         GW: {
-          baseUrl: process.env.GW_URL_LOCAL || 'http://localhost:8011',
+          baseUrl: 'http://localhost:8066',
           name: 'Gateway-Local',
           unixSocket: process.env.GW_UNIX_SOCKET || null
         },
         GATEWAY: {
-          baseUrl: process.env.GW_URL_LOCAL || 'http://localhost:8011',
+          baseUrl: 'http://localhost:8066',
           name: 'Gateway-Local',
           unixSocket: process.env.GW_UNIX_SOCKET || null
         }

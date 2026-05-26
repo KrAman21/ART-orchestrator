@@ -1,4 +1,5 @@
 import { triggerWebhook } from '../services/http-client.js';
+import { SERVICE_MAP } from '../config.js';
 
 /**
  * WebhookManager - Handles webhook triggering logic for the orchestrator
@@ -34,14 +35,17 @@ export class WebhookManager {
    * @returns {string} Base URL for the service
    */
   getServiceBaseUrl(serviceName) {
-    const normalizedName = serviceName === 'GATEWAY' ? 'GW' : 
-                          serviceName === 'CORE' ? 'LSP' : serviceName;
-    
-    const urls = {
-      'LSP': process.env.LSP_URL || 'http://localhost:4232',
-      'GW': process.env.GW_URL || 'http://localhost:2344'
-    };
-    return urls[normalizedName];
+    const normalizedName = serviceName === 'GATEWAY' ? 'GW' :
+      serviceName === 'CORE' ? 'LSP' : serviceName;
+
+    return SERVICE_MAP[normalizedName]?.baseUrl;
+  }
+
+  getServiceUnixSocket(serviceName) {
+    const normalizedName = serviceName === 'GATEWAY' ? 'GW' :
+      serviceName === 'CORE' ? 'LSP' : serviceName;
+
+    return SERVICE_MAP[normalizedName]?.unixSocket || null;
   }
 
   /**
@@ -142,6 +146,7 @@ export class WebhookManager {
 
       try {
         const gwBaseUrl = this.getServiceBaseUrl('GW');
+        const gwUnixSocket = this.getServiceUnixSocket('GW');
         const result = await triggerWebhook(
           gwBaseUrl,
           lenderOrgId,
@@ -149,7 +154,8 @@ export class WebhookManager {
           {
             'x-request-id': webhook.requestId || `webhook-${webhook.index}`,
             'x-log-index': webhook.index.toString()
-          }
+          },
+          gwUnixSocket
         );
 
         if (result.success) {
