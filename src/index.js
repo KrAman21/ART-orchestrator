@@ -24,8 +24,9 @@ const CONFIG = {
   USE_ASYNC_ORCHESTRATOR: process.env.USE_ASYNC_ORCHESTRATOR === 'true',
   AUTO_FETCH_LOGS: process.env.AUTO_FETCH_LOGS === 'true',
   AUTO_FETCH_ORDER_IDS: process.env.AUTO_FETCH_ORDER_IDS === 'true',
+  QAPI_LOOKBACK_MINUTES: parseInt(process.env.QAPI_LOOKBACK_MINUTES, 10) || null,
   QAPI_ORDER_LIMIT: parseInt(process.env.QAPI_ORDER_LIMIT, 10) || null,
-  MERCHANT_ID: process.env.MERCHANT_ID || 'flipkart',
+  MERCHANT_ID: process.env.MERCHANT_ID || process.env.QAPI_MERCHANT_ID || 'flipkart',
   ORDER_LIST: process.env.ORDER_LIST 
     ? process.env.ORDER_LIST.split(',').map(s => s.trim()).filter(Boolean)
     : [],
@@ -333,16 +334,22 @@ async function askInteractiveConfig() {
   console.log('========================================\n');
 
   const defaultMinutes = CONFIG.QAPI_START_DATE ? 10080 : 1440;
-  const minutesBackInput = await askQuestion('How many minutes back should we fetch orders for?', String(defaultMinutes));
+  const minutesBackInput = CONFIG.QAPI_LOOKBACK_MINUTES
+    ? String(CONFIG.QAPI_LOOKBACK_MINUTES)
+    : await askQuestion('How many minutes back should we fetch orders for?', String(defaultMinutes));
   const minutesBack = parseInt(minutesBackInput, 10);
   if (isNaN(minutesBack) || minutesBack <= 0) {
     console.error(`Invalid minutes: "${minutesBackInput}". Must be a positive number.`);
     process.exit(1);
   }
 
-  const merchantId = await askQuestion('Merchant ID', CONFIG.MERCHANT_ID || 'flipkart');
+  const merchantId = process.env.MERCHANT_ID || process.env.QAPI_MERCHANT_ID
+    ? CONFIG.MERCHANT_ID
+    : await askQuestion('Merchant ID', CONFIG.MERCHANT_ID || 'flipkart');
 
-  const orderLimitInput = await askQuestion('Max orders to process (empty = no limit)', CONFIG.QAPI_ORDER_LIMIT ? String(CONFIG.QAPI_ORDER_LIMIT) : '');
+  const orderLimitInput = process.env.QAPI_ORDER_LIMIT
+    ? String(CONFIG.QAPI_ORDER_LIMIT)
+    : await askQuestion('Max orders to process (empty = no limit)', CONFIG.QAPI_ORDER_LIMIT ? String(CONFIG.QAPI_ORDER_LIMIT) : '');
   const orderLimit = orderLimitInput ? parseInt(orderLimitInput, 10) : null;
   if (orderLimitInput && (isNaN(orderLimit) || orderLimit <= 0)) {
     console.error(`Invalid limit: "${orderLimitInput}". Must be a positive number or empty.`);
