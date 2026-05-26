@@ -56,7 +56,8 @@ async function resolveOrderList() {
   if (configuredFetchInputs) {
     const answers = configuredFetchInputs;
     const minutesBack = answers.minutesBack;
-    const endDate = new Date();
+    const logDelayMinutes = 5;
+    const endDate = new Date(Date.now() - logDelayMinutes * 60 * 1000);
     const startDate = new Date(endDate.getTime() - minutesBack * 60 * 1000);
     const startDateStr = startDate.toISOString();
     const endDateStr = endDate.toISOString();
@@ -66,6 +67,7 @@ async function resolveOrderList() {
     console.log('========================================');
     console.log(`Merchant: ${answers.merchantId}`);
     console.log(`Lookback: ${minutesBack} minutes`);
+    console.log(`Log Delay Offset: ${logDelayMinutes} minutes`);
     console.log(`Date Range: ${startDateStr} to ${endDateStr}`);
     if (answers.flowType) {
       console.log(`Flow Type: ${answers.flowType}`);
@@ -168,25 +170,28 @@ async function main() {
     console.log('========================================\n');
 
     const multiplexerPort = parseInt(process.env.MULTIPLEXER_PORT || process.env.PORT || '3001', 10);
-    const cliSessionId = `cli-${Date.now()}`;
     const { registry, ready } = startMultiplexerServer(multiplexerPort);
     await ready;
 
-    console.log('Loading logs from file...');
-    const logs = await fetchLogsFromJSONFile(CONFIG.LOGS_FILE_PATH);
-    console.log(`Loaded ${logs.length} logs`);
-
-    if (logs.length > 0) {
-      console.log('Filtering and sorting logs...');
-      const filteredLogs = await filterAndSortLogs(logs, CONFIG.FILTERED_LOGS_PATH);
-      
-      if (filteredLogs.length === 0) {
-        console.log('No logs remaining after filtering');
-        process.exit(1);
+    const sessionId = 'cli-' + Date.now();
+    const cliConfig = {
+      ...CONFIG,
+      PORT: multiplexerPort,
+      MAX_JOURNEY_TIME_MS: 3 * 60 * 1000,
+      AUTO_FETCH_LOGS: true,
+      USE_ASYNC_ORCHESTRATOR: true,
+      registry,
+      sessionId,
+      getRegistrySessionId: (orderId) => sessionId + ':' + orderId,
+      onOrchestratorReady: (orchestrator, orderId, registrySessionId) => {
+        registry.register(registrySessionId, orchestrator, [orderId]);
+      },
+      onLoanApplicationId: (loanApplicationId, orderId, registrySessionId) => {
+        registry.addLoanApplicationId(registrySessionId, loanApplicationId);
       }
     };
 
-    const result = await runSequentialArt(orderList, dashboardLikeConfig);
+    const result = await runSequentialArt(orderList, cliConfig);
 
     console.log('\n========================================');
     console.log('Sequential ART Complete');

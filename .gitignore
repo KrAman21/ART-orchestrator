@@ -6,3 +6,4 @@ todo
 /.direnv
 # `nix build` output dirctory
 /result
+data/art/*.sock

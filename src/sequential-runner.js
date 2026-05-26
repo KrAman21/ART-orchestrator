@@ -173,9 +173,9 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
   let mocks = null;
   let progressInterval = null;
   const registrySessionId = getRegistrySessionId(config, orderId);
-  const logsFilePath = getOrderScopedFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex);
-  const filteredLogsPath = getOrderScopedFilePath('data/filtered-logs.json', orderId, orderIndex);
-  const finalFilteredLogsPath = getOrderScopedFilePath('data/final-filtered-logs.json', orderId, orderIndex);
+  const logsFilePath = getPerOrderFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex, config);
+  const filteredLogsPath = getPerOrderFilePath(config.FILTERED_LOGS_PATH || 'data/filtered-logs.json', orderId, orderIndex, config);
+  const finalFilteredLogsPath = getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json', orderId, orderIndex, config);
 
   const orderReport = reportGenerator.addOrder({
     orderId,
@@ -559,7 +559,12 @@ async function cleanupOrderTempFiles(orderId, orderIndex, filePaths) {
   }
 }
 
-function getOrderScopedFilePath(basePath, orderId, orderIndex) {
+function getPerOrderFilePath(basePath, orderId, orderIndex, config) {
+  if (!config.onOrchestratorReady) {
+    return basePath;
+  }
+
+
   const extension = extname(basePath);
   const name = basename(basePath, extension);
   const safeOrderId = String(orderId).replace(/[^a-zA-Z0-9_-]/g, '_');
