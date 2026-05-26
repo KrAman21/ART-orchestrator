@@ -27,6 +27,8 @@ const CONFIG = {
   QAPI_LOOKBACK_MINUTES: parseInt(process.env.QAPI_LOOKBACK_MINUTES, 10) || null,
   QAPI_ORDER_LIMIT: parseInt(process.env.QAPI_ORDER_LIMIT, 10) || null,
   MERCHANT_ID: process.env.MERCHANT_ID || process.env.QAPI_MERCHANT_ID || 'flipkart',
+  FILTERED_LOGS_PATH: process.env.FILTERED_LOGS_PATH || 'data/filtered-logs.json',
+  FINAL_FILTERED_LOGS_PATH: process.env.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json',
   ORDER_LIST: process.env.ORDER_LIST 
     ? process.env.ORDER_LIST.split(',').map(s => s.trim()).filter(Boolean)
     : [],
@@ -133,7 +135,7 @@ async function main() {
 
     if (logs.length > 0) {
       console.log('Filtering and sorting logs...');
-      const filteredLogs = await filterAndSortLogs(logs, 'data/filtered-logs.json');
+      const filteredLogs = await filterAndSortLogs(logs, CONFIG.FILTERED_LOGS_PATH);
       
       if (filteredLogs.length === 0) {
         console.log('No logs remaining after filtering');
@@ -141,7 +143,7 @@ async function main() {
       }
 
       console.log('Applying second-level filtering (removing orchestrator-skipped entries)...');
-      const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, 'data/final-filtered-logs.json');
+      const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, CONFIG.FINAL_FILTERED_LOGS_PATH);
       
       if (finalFilteredLogs.length === 0) {
         console.log('No logs remaining after second-level filtering');
@@ -181,7 +183,7 @@ async function main() {
 
     // Create orchestrator
     const OrchestratorClass = CONFIG.USE_ASYNC_ORCHESTRATOR ? AsyncReplayOrchestrator : ReplayOrchestrator;
-    orchestrator = new OrchestratorClass(finalFilteredLogs, {
+    orchestrator = new OrchestratorClass(logsToProcess, {
       timeoutMs: CONFIG.TIMEOUT_MS
     });
 
