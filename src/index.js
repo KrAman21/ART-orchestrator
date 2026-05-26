@@ -18,7 +18,9 @@ const CONFIG = {
   QAPI_LOOKBACK_MINUTES: parseInt(process.env.QAPI_LOOKBACK_MINUTES, 10) || null,
   QAPI_ORDER_LIMIT: parseInt(process.env.QAPI_ORDER_LIMIT, 10) || null,
   MERCHANT_ID: process.env.MERCHANT_ID || process.env.QAPI_MERCHANT_ID || 'flipkart',
-  ORDER_LIST: process.env.ORDER_LIST
+  FILTERED_LOGS_PATH: process.env.FILTERED_LOGS_PATH || 'data/filtered-logs.json',
+  FINAL_FILTERED_LOGS_PATH: process.env.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json',
+  ORDER_LIST: process.env.ORDER_LIST 
     ? process.env.ORDER_LIST.split(',').map(s => s.trim()).filter(Boolean)
     : [],
   FLOW_TYPE: process.env.FLOW_TYPE || 'NTB',
@@ -170,26 +172,17 @@ async function main() {
     const { registry, ready } = startMultiplexerServer(multiplexerPort);
     await ready;
 
-    const dashboardLikeConfig = {
-      MAX_JOURNEY_TIME_MS: 3 * 60 * 1000,
-      REPORT_PATH: CONFIG.REPORT_PATH,
-      AUTO_FETCH_LOGS: true,
-      USE_ASYNC_ORCHESTRATOR: true,
-      PORT: multiplexerPort,
-      TIMEOUT_MS: 10000,
-      LOGS_FILE_PATH: `data/logs-${cliSessionId}.json`,
-      MERCHANT_ID: CONFIG.MERCHANT_ID,
-      SESSION_TOKEN: CONFIG.SESSION_TOKEN,
-      PARALLEL_ORDERS: 10,
-      KEEP_ORDER_TEMP_FILES: CONFIG.KEEP_ORDER_TEMP_FILES,
-      ENABLE_BATCH_PROCESSING: CONFIG.ENABLE_BATCH_PROCESSING,
-      registry,
-      getRegistrySessionId: (orderId) => `${cliSessionId}:${orderId}`,
-      onOrchestratorReady: (orchestratorInstance, orderId, registrySessionId) => {
-        registry.register(registrySessionId, orchestratorInstance, [orderId]);
-      },
-      onLoanApplicationId: (loanApplicationId, orderId, registrySessionId) => {
-        registry.addLoanApplicationId(registrySessionId, loanApplicationId);
+    console.log('Loading logs from file...');
+    const logs = await fetchLogsFromJSONFile(CONFIG.LOGS_FILE_PATH);
+    console.log(`Loaded ${logs.length} logs`);
+
+    if (logs.length > 0) {
+      console.log('Filtering and sorting logs...');
+      const filteredLogs = await filterAndSortLogs(logs, CONFIG.FILTERED_LOGS_PATH);
+      
+      if (filteredLogs.length === 0) {
+        console.log('No logs remaining after filtering');
+        process.exit(1);
       }
     };
 

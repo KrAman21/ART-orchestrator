@@ -170,6 +170,10 @@ export class ReplayOrchestrator {
     return SeedDataManager.extractLenderOrgIds(logs);
   }
 
+  static extractLineDetails(logs) {
+    return SeedDataManager.extractLineDetails(logs);
+  }
+
   getContextKey(entry) {
     const parts = [];
     if (entry.loanApplicationId) {
