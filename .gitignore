@@ -3,3 +3,6 @@ node_modules/
 art-orchestrator.log
 repo_wiki
 todo
+/.direnv
+# `nix build` output dirctory
+/result
