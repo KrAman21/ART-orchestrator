@@ -1,3 +1,5 @@
-{"timestamp":"2026-05-13T10:35:28.492Z","level":"INFO","message":"Dashboard server stopped"}
-{"timestamp":"2026-05-13T10:35:28.492Z","level":"INFO","message":"SSE client disconnected: 1778668241657"}
-{"timestamp":"2026-05-13T10:35:28.492Z","level":"INFO","message":"SSE client disconnected: 1778668359561"}
+{"timestamp":"2026-05-26T13:34:46.375Z","level":"INFO","message":"Prepared multiplexer unix socket path","socketPath":"./data/art/multiplexer.sock"}
+{"timestamp":"2026-05-26T13:34:46.376Z","level":"INFO","message":"ART multiplexer listening on http://localhost:3001"}
+{"timestamp":"2026-05-26T13:34:46.376Z","level":"INFO","message":"ART multiplexer listening on unix socket","socketPath":"./data/art/multiplexer.sock"}
+{"timestamp":"2026-05-26T13:34:46.376Z","level":"INFO","message":"Dashboard server running on http://localhost:3002"}
+{"timestamp":"2026-05-26T13:34:48.397Z","level":"INFO","message":"All servers stopped"}

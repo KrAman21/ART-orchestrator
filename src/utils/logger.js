@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync } from 'fs';
+import { appendFileSync, mkdirSync, writeFileSync, accessSync, constants } from 'fs';
 import { dirname, resolve } from 'path';
 import { AsyncLocalStorage } from 'async_hooks';
 
@@ -13,7 +13,34 @@ const CURRENT_LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase()] ?? LOG_LE
 const LOG_FILE = process.env.LOG_FILE || 'orchestrator-output.log';
 const LOG_TO_FILE = process.env.LOG_TO_FILE !== 'false';
 
-const LOG_FILE_PATH = resolve(process.cwd(), LOG_FILE);
+function canWriteToDir(dirPath) {
+  try {
+    accessSync(dirPath, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getDefaultLogDir() {
+  const cwd = process.cwd();
+  if (canWriteToDir(cwd)) {
+    return cwd;
+  }
+
+  const candidates = [
+    process.env.XDG_STATE_HOME && resolve(process.env.XDG_STATE_HOME, 'art-orchestrator'),
+    process.env.HOME && resolve(process.env.HOME, '.local', 'state', 'art-orchestrator'),
+    process.env.TMPDIR && resolve(process.env.TMPDIR, 'art-orchestrator'),
+    '/tmp/art-orchestrator'
+  ].filter(Boolean);
+
+  return candidates.find(canWriteToDir) || '/tmp/art-orchestrator';
+}
+
+const LOG_FILE_PATH = process.env.LOG_FILE
+  ? resolve(process.cwd(), process.env.LOG_FILE)
+  : resolve(getDefaultLogDir(), LOG_FILE);
 
 const GLOBAL_KEY = '__art_logger_initialized__';
 if (LOG_TO_FILE && !global[GLOBAL_KEY]) {

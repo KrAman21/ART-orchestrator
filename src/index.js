@@ -7,14 +7,23 @@ import { fetchOrderIdsFromQAPI } from './services/http-client.js';
 import { startMultiplexerServer } from './dashboard/multiplexer.js';
 
 const CONFIG = {
-  LAST_MINUTES: process.env.LAST_MINUTES ? parseInt(process.env.LAST_MINUTES, 10) : null,
+  ART_PORT: parseInt(process.env.ART_PORT, 10) || 3002,
+  ART_UNIX_SOCKET_PATH: process.env.ART_UNIX_SOCKET_PATH || null,
+  LOGS_FILE_PATH: process.env.LOGS_FILE_PATH || 'data/logs.json',
+  TIMEOUT_MS: parseInt(process.env.TIMEOUT_MS, 10) || 10000,
+  AUTO_START: process.env.AUTO_START !== 'false',
+  USE_ASYNC_ORCHESTRATOR: process.env.USE_ASYNC_ORCHESTRATOR === 'true',
+  AUTO_FETCH_LOGS: process.env.AUTO_FETCH_LOGS === 'true',
+  AUTO_FETCH_ORDER_IDS: process.env.AUTO_FETCH_ORDER_IDS === 'true',
+  QAPI_LOOKBACK_MINUTES: parseInt(process.env.QAPI_LOOKBACK_MINUTES, 10) || null,
   QAPI_ORDER_LIMIT: parseInt(process.env.QAPI_ORDER_LIMIT, 10) || null,
-  MERCHANT_ID: process.env.MERCHANT_ID || 'flipkart',
-  FLOW_TYPE: process.env.FLOW_TYPE || '',
-  SUB_TYPE: process.env.SUB_TYPE || '',
+  MERCHANT_ID: process.env.MERCHANT_ID || process.env.QAPI_MERCHANT_ID || 'flipkart',
   ORDER_LIST: process.env.ORDER_LIST
     ? process.env.ORDER_LIST.split(',').map(s => s.trim()).filter(Boolean)
     : [],
+  FLOW_TYPE: process.env.FLOW_TYPE || 'NTB',
+  SUB_TYPE: process.env.SUB_TYPE || 'CHECKOUT',
+  LAST_MINUTES: process.env.LAST_MINUTES ? parseInt(process.env.LAST_MINUTES, 10) : null,
   SESSION_TOKEN: process.env.SESSION_TOKEN || '',
   REPORT_PATH: process.env.REPORT_PATH || 'report.json',
   KEEP_ORDER_TEMP_FILES: process.env.KEEP_ORDER_TEMP_FILES === 'true',
@@ -223,14 +232,30 @@ async function askInteractiveConfig() {
   console.log('ART - Automated Regression Testing');
   console.log('========================================\n');
 
-  const orderListInput = await askQuestion('Order IDs (comma-separated)', CONFIG.ORDER_LIST.join(','));
-  const orderList = orderListInput.split(',').map(s => s.trim()).filter(Boolean);
-  if (orderList.length === 0) {
-    throw new Error('At least one order ID is required when LAST_MINUTES is not configured');
+  const defaultMinutes = CONFIG.QAPI_START_DATE ? 10080 : 1440;
+  const minutesBackInput = CONFIG.QAPI_LOOKBACK_MINUTES
+    ? String(CONFIG.QAPI_LOOKBACK_MINUTES)
+    : await askQuestion('How many minutes back should we fetch orders for?', String(defaultMinutes));
+  const minutesBack = parseInt(minutesBackInput, 10);
+  if (isNaN(minutesBack) || minutesBack <= 0) {
+    console.error(`Invalid minutes: "${minutesBackInput}". Must be a positive number.`);
+    process.exit(1);
   }
 
-  const merchantId = await askQuestion('Merchant ID', CONFIG.MERCHANT_ID || 'flipkart');
-  return { merchantId, orderList };
+  const merchantId = process.env.MERCHANT_ID || process.env.QAPI_MERCHANT_ID
+    ? CONFIG.MERCHANT_ID
+    : await askQuestion('Merchant ID', CONFIG.MERCHANT_ID || 'flipkart');
+
+  const orderLimitInput = process.env.QAPI_ORDER_LIMIT
+    ? String(CONFIG.QAPI_ORDER_LIMIT)
+    : await askQuestion('Max orders to process (empty = no limit)', CONFIG.QAPI_ORDER_LIMIT ? String(CONFIG.QAPI_ORDER_LIMIT) : '');
+  const orderLimit = orderLimitInput ? parseInt(orderLimitInput, 10) : null;
+  if (orderLimitInput && (isNaN(orderLimit) || orderLimit <= 0)) {
+    console.error(`Invalid limit: "${orderLimitInput}". Must be a positive number or empty.`);
+    process.exit(1);
+  }
+
+  return { minutesBack, merchantId, orderLimit };
 }
 
 main();
