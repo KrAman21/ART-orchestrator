@@ -2,6 +2,7 @@ import { getEndpointConfig } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
+import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
 import {
   findAllCorrespondingResponseEntries,
   findCorrespondingResponseEntry,
@@ -173,6 +174,7 @@ export class LogProcessor {
         ...(endpointConfig?.headers || {}),
         ...buildAppCoreAuthHeaders(entry, this.validator.entries)
       };
+      await ensureAppCorePreconditions(entry, customHeaders);
       const service = endpointConfig?.service || entry.destination;
 
       const expectedResponses = this.validator.peekNext(100).filter(e => {
@@ -295,6 +297,13 @@ export class LogProcessor {
           }
         }
       } else {
+        if (entry.logTag === 'FlipKart-CreateLoan_REQUEST') {
+          this.logger.info('Adding 1s delay before FlipKart-CreateLoan_REQUEST', {
+            logTag: entry.logTag,
+            delayMs: 1000
+          });
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
         response = await makeRequest(
           this.callbacks.getServiceBaseUrl(service),
           api,

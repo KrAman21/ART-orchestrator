@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './bootstrap-env.js';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -1339,6 +1339,7 @@ export const API_TO_LOGTAG_MAP = {
   '/api/v5.0/setOffer': { logTag: 'LSP-SetOffer_INCOMING', api: '/api/v5.0/setOffer', sourceDestination: 'APP_CORE', headers: {} },
   '/api/v3.3/offer/setOfferRequest': { logTag: 'LSP-SelectOffer_REQUEST', api: '/gateway/v1.0/selectOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/v3.3/offer/setOfferRequest': { logTag: 'LSP-SelectOffer_REQUEST', api: '/gateway/v1.0/selectOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v3.3/offer/setOfferRequest': { logTag: 'LSP-SelectOffer_REQUEST', api: '/gateway/v1.0/selectOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/api/v4.0/generateOffers': { logTag: 'LSP-GenerateOffers_INCOMING', api: '/api/v4.0/generateOffers', sourceDestination: 'APP_CORE', headers: {} },
   '/api/v4.0/fetchOfferResponse': { logTag: 'LSP-FetchOfferResponse_INCOMING', api: '/api/v4.0/fetchOfferResponse', sourceDestination: 'APP_CORE', headers: {} },
   '/api/v3.3/loanAgreementStatus': { logTag: 'LSP-LoanAgreementStatus_INCOMING', api: '/api/v3.3/loanAgreementStatus', sourceDestination: 'APP_CORE', headers: {} },
@@ -1357,6 +1358,7 @@ export const API_TO_LOGTAG_MAP = {
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing) ====================
   '/v4.0/loanStatusResponse':{logTag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST', api: '/v4.0/loanStatusResponse', sourceDestination: 'GATEWAY_LSP', headers: {}},
   '/v4.0/loanStatusRequest':{logTag: 'Lsp-LoanStatusRequest_REQUEST', api: '/v4.0/loanStatusRequest', sourceDestination: 'CORE_GATEWAY', headers: {}},
+  '/gateway/v4.0/loanStatusRequest':{logTag: 'Lsp-LoanStatusRequest_REQUEST', api: '/v4.0/loanStatusRequest', sourceDestination: 'CORE_GATEWAY', headers: {}},
   '/v1.0/getKFS': { logTag: "LSP-GetKFS_REQUEST", api: "/gateway/v1.0/getKFS", sourceDestination: "CORE_GATEWAY", headers: {}},
   "/v1.0/fetchOfferResponse" : {logTag: "FETCH_OFFER_ASYNC_RESPONSE_REQUEST", api: "/v1.0/fetchOfferResponse", sourceDestination: "GATEWAY_LSP", headers: {}},
   '/v1.0/fetchOfferRequest' : {logTag: 'LSP-FetchOfferRequest_REQUEST', api: '/gateway/v1.0/fetchOfferRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },

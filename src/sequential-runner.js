@@ -635,6 +635,19 @@ function hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPoli
   );
 }
 
+function hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy) {
+  if (!optionalRepeatPolicy.skipWhenPriorProcessedLogTags?.length) {
+    return false;
+  }
+
+  return orchestrator.validator.entries.some((entry, index) =>
+    orchestrator.validator.processedIndices.has(index) &&
+    index < currentEntry.index &&
+    optionalRepeatPolicy.skipWhenPriorProcessedLogTags.includes(entry.logTag) &&
+    sharesReplayContext(currentEntry, entry)
+  );
+}
+
 function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
   const optionalRepeatPolicy = getOptionalRepeatPolicy(orchestrator?.config, currentEntry);
 
@@ -661,12 +674,28 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
 
   const branchAdvanced = hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
   const branchAdvancedObserved = hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
+  const priorAlternateProcessed = hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy);
 
-  if (priorReplayOccurrences.length < 1) {
+  if (optionalRepeatPolicy.requirePriorProcessedOccurrence && priorReplayOccurrences.length < 1) {
     return false;
   }
 
-  if (processedSameTagCount < 1 && !branchAdvanced && !branchAdvancedObserved) {
+  if (
+    optionalRepeatPolicy.requirePriorProcessedOccurrence &&
+    processedSameTagCount < 1 &&
+    !branchAdvanced &&
+    !branchAdvancedObserved &&
+    !priorAlternateProcessed
+  ) {
+    return false;
+  }
+
+  if (
+    !optionalRepeatPolicy.requirePriorProcessedOccurrence &&
+    !branchAdvanced &&
+    !branchAdvancedObserved &&
+    !priorAlternateProcessed
+  ) {
     return false;
   }
 
@@ -687,7 +716,9 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
       processedSameTagCount,
       branchAdvanced,
       branchAdvancedObserved,
+      priorAlternateProcessed,
       branchAdvanceLogTags: optionalRepeatPolicy.advanceWhenSeenLogTags,
+      priorProcessedAlternateLogTags: optionalRepeatPolicy.skipWhenPriorProcessedLogTags,
       skippedResponseIndex: responseEntry?.index ?? null,
       optionalAfterSeconds: optionalRepeatPolicy.optionalAfterSeconds,
       phase: 'OPTIONAL_REPEAT_SKIP'

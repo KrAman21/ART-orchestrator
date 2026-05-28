@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './bootstrap-env.js';
 
 import { createInterface } from 'readline';
 import { logger } from './utils/logger.js';

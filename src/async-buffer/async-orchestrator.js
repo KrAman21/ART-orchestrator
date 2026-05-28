@@ -5,6 +5,7 @@ import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { getEndpointConfig } from '../config.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
+import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
 import { isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from '../replay-special-cases.js';
 import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
 
@@ -345,6 +346,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         ...(endpointConfig?.headers || {}),
         ...buildAppCoreAuthHeaders(entry, this.validator.entries)
       };
+      await ensureAppCorePreconditions(entry, customHeaders);
       const service = endpointConfig?.service || entry.destination;
       
       const remappedPayload = remapLoanApplicationIds(entry.payload, this.stateManager);

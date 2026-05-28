@@ -13,9 +13,33 @@ export const REPLAY_SPECIAL_CASES = [
     logTag: 'POLLING API :: LINE_STATUS_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow repeated polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
     advanceWhenSeenLogTags: [
       'CREATE APPLICATION API_REQUEST',
       'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
+    ]
+  },
+  {
+    logTag: 'PROFILE_INGESTION_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow profile ingestion to be skipped when the live branch has already advanced into later fetch-offer steps.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: false,
+    advanceWhenSeenLogTags: [
+      'LSP-FetchOfferRequest_REQUEST',
+      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
+    ]
+  },
+  {
+    logTag: 'ProcessStatus_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow process-status polling to be skipped when the live journey has already completed the loan-processing redirection branch.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: false,
+    skipWhenPriorProcessedLogTags: [
+      'FlipKart-GetRedirectionURL_REQUEST',
+      'FlipKart-GetRedirectionURL_RESPONSE'
     ]
   }
 ];
@@ -32,22 +56,30 @@ export function isThemisKfsSpecialCase(logTag) {
 }
 
 export function getOptionalRepeatPolicy(config, currentEntry) {
-  const optionalTags = config?.OPTIONAL_REPEAT_LOG_TAGS || [];
-  const optionalAfterSeconds = config?.OPTIONAL_REPEAT_AFTER_SECONDS || 5;
-
   if (!currentEntry?.isRequest) {
     return null;
   }
 
-  if (!optionalTags.includes(currentEntry.logTag)) {
+  const builtInSpecialCase = REPLAY_SPECIAL_CASES.find(
+    specialCase => specialCase.logTag === currentEntry.logTag && specialCase.handler === 'maybeSkipOptionalRepeatedEntry'
+  );
+
+  const optionalTags = config?.OPTIONAL_REPEAT_LOG_TAGS || [];
+  const envEnabled = optionalTags.includes(currentEntry.logTag);
+
+  if (!builtInSpecialCase && !envEnabled) {
     return null;
   }
 
   return {
     logTag: currentEntry.logTag,
-    optionalAfterSeconds,
-    advanceWhenSeenLogTags: REPLAY_SPECIAL_CASES.find(
-      specialCase => specialCase.logTag === currentEntry.logTag
-    )?.advanceWhenSeenLogTags || []
+    optionalAfterSeconds:
+      builtInSpecialCase?.optionalAfterSeconds ??
+      config?.OPTIONAL_REPEAT_AFTER_SECONDS ??
+      5,
+    requirePriorProcessedOccurrence:
+      builtInSpecialCase?.requirePriorProcessedOccurrence ?? true,
+    advanceWhenSeenLogTags: builtInSpecialCase?.advanceWhenSeenLogTags || [],
+    skipWhenPriorProcessedLogTags: builtInSpecialCase?.skipWhenPriorProcessedLogTags || []
   };
 }

@@ -1,9 +1,25 @@
-const LOCAL_LOAN_STATUS_OVERRIDES = {
-  flipkart: {
-    userId: 'LSP189a9489d04244afbdfb8f0ecdc654d6',
-    sessionToken: 'LSPf0fecc092c2b4bd4a04c28870e3d5da3'
+function findReplayLoanStatusAuth(candidate) {
+  if (!candidate || typeof candidate !== 'object') {
+    return {};
   }
-};
+
+  const payload = candidate.payload && typeof candidate.payload === 'object'
+    ? candidate.payload
+    : {};
+
+  return {
+    sessionToken:
+      payload.sessionToken ||
+      payload.session_token ||
+      payload.data?.sessionToken ||
+      payload.data?.session_token,
+    userId:
+      payload.userId ||
+      payload.user_id ||
+      payload.data?.userId ||
+      payload.data?.user_id
+  };
+}
 
 export function buildAppCoreAuthHeaders(entry, entries = []) {
   if (!entry || entry.sourceDestination !== 'APP_CORE') {
@@ -33,9 +49,9 @@ export function buildAppCoreAuthHeaders(entry, entries = []) {
       candidate.payload
     );
 
-  const localOverride = LOCAL_LOAN_STATUS_OVERRIDES[merchantId];
-  const sessionToken = localOverride?.sessionToken || matchingResponse?.payload?.sessionToken;
-  const userId = localOverride?.userId || matchingResponse?.payload?.userId;
+  const replayAuth = findReplayLoanStatusAuth(matchingResponse);
+  const sessionToken = replayAuth.sessionToken || process.env.LOAN_STATUS_SESSION_TOKEN;
+  const userId = replayAuth.userId || process.env.LOAN_STATUS_USER_ID;
 
   return {
     ...(merchantId ? { 'x-merchant-id': merchantId } : {}),
