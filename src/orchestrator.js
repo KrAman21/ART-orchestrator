@@ -12,6 +12,12 @@ import { LogProcessor } from './processing/log-processor.js';
 import { RequestForwarder } from './processing/request-forwarder.js';
 import { AsyncTracker } from './async-tracking/async-tracker.js';
 import { WebhookManager } from './webhook/webhook-manager.js';
+import { isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from './replay-special-cases.js';
+import {
+  findAllCorrespondingResponseEntries,
+  findCorrespondingResponseEntry,
+  matchesRequestContext
+} from './services/response-matcher.js';
 
 export class ReplayOrchestrator {
   constructor(logs, config = {}) {
@@ -37,6 +43,7 @@ export class ReplayOrchestrator {
     this.triggeredWebhooks = new Set();
     this.asyncCallTracker = new Map();
     this.pendingPostResponseWebhooks = new Map();
+    this.observedIncomingRequests = [];
 
     this.isRunning = false;
     this.failureReason = null;
@@ -68,6 +75,7 @@ export class ReplayOrchestrator {
     this.triggeredWebhooks.clear();
     this.asyncCallTracker.clear();
     this.pendingPostResponseWebhooks.clear();
+    this.observedIncomingRequests = [];
 
     this.isRunning = false;
 
@@ -318,6 +326,8 @@ export class ReplayOrchestrator {
       throw new Error('Orchestrator not running');
     }
 
+    this.recordObservedIncomingRequest(incoming);
+
     logger.info('ORCH_RECEIVING', {
       source: incoming.source,
       destination: incoming.destination,
@@ -328,11 +338,11 @@ export class ReplayOrchestrator {
       timestamp: new Date().toISOString()
     });
 
-    if (incoming.logTag === 'Themis-Eligibility_REQUEST' && incoming.source === 'GATEWAY' && (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
+    if (isThemisEligibilitySpecialCase(incoming.logTag) && incoming.source === 'GATEWAY' && (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
       return await this.handleThemisEligibilityBatch(incoming);
     }
 
-    if(incoming.logTag === 'Themis-KFS_REQUEST'){
+    if (isThemisKfsSpecialCase(incoming.logTag)) {
       logger.info('Received request for THEMIS-KFS, checking if it should be mocked', {
         source: incoming.source,
         destination: incoming.destination,
@@ -525,6 +535,27 @@ export class ReplayOrchestrator {
     return response;
   }
 
+  recordObservedIncomingRequest(incoming) {
+    if (!incoming?.logTag) {
+      return;
+    }
+
+    this.observedIncomingRequests.push({
+      source: incoming.source,
+      destination: incoming.destination,
+      logTag: incoming.logTag,
+      lenderOrgId: incoming.lenderOrgId || null,
+      loanApplicationId: incoming.loanApplicationId || incoming.payload?.loanApplicationId || incoming.payload?.loan_application_id || null,
+      orderId: incoming.orderId || incoming.headers?.['x-order-id'] || null,
+      requestId: incoming.requestId || null,
+      observedAt: Date.now()
+    });
+
+    if (this.observedIncomingRequests.length > 500) {
+      this.observedIncomingRequests.splice(0, this.observedIncomingRequests.length - 500);
+    }
+  }
+
   async handleDownstreamResponse(incomingResponse) {
     return this.requestForwarder.handleDownstreamResponse(incomingResponse);
   }
@@ -558,62 +589,21 @@ export class ReplayOrchestrator {
   }
 
   findCorrespondingResponse(requestEntry, searchAll = false) {
-    const entriesToSearch = searchAll
-      ? this.validator.entries
-      : this.validator.entries.slice(requestEntry.index + 1);
-
-    for (const entry of entriesToSearch) {
-      if (!entry.isResponse) continue;
-      if (this.matchesRequestContext(requestEntry, entry)) {
-        return entry;
-      }
-    }
-    return null;
+    return findCorrespondingResponseEntry(this.validator.entries, requestEntry, {
+      searchAll,
+      processedIndices: this.validator.processedIndices
+    });
   }
 
   findAllCorrespondingResponses(requestEntry) {
-    const responses = [];
-    for (const entry of this.validator.entries) {
-      if (!entry.isResponse) continue;
-      if (this.matchesRequestContext(requestEntry, entry)) {
-        responses.push(entry);
-      }
-    }
-    return responses;
+    return findAllCorrespondingResponseEntries(this.validator.entries, requestEntry, {
+      searchAll: true,
+      processedIndices: this.validator.processedIndices
+    });
   }
 
   matchesRequestContext(requestEntry, responseEntry) {
-    const requestTag = requestEntry.logTag;
-    const responseTag = responseEntry.logTag;
-
-    if (requestTag !== responseTag) {
-      const requestBase = requestTag.replace(/_REQUEST$/, '').replace(/_INCOMING$/, '');
-      const responseBase = responseTag.replace(/_RESPONSE$/, '').replace(/_OUTGOING$/, '');
-      if (requestBase !== responseBase) {
-        return false;
-      }
-    }
-
-    if (requestEntry.loanApplicationId && responseEntry.loanApplicationId) {
-      if (requestEntry.loanApplicationId !== responseEntry.loanApplicationId) {
-        return false;
-      }
-    }
-
-    if (requestEntry.lenderOrgId && responseEntry.lenderOrgId) {
-      if (requestEntry.lenderOrgId !== responseEntry.lenderOrgId) {
-        return false;
-      }
-    }
-
-    const expectedSource = requestEntry.destination;
-    const expectedDest = requestEntry.source;
-
-    if (responseEntry.source !== expectedSource || responseEntry.destination !== expectedDest) {
-      return false;
-    }
-
-    return true;
+    return matchesRequestContext(requestEntry, responseEntry);
   }
 
   initializeAsyncTracking(parentRequestEntry) {

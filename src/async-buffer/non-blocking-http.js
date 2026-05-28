@@ -10,7 +10,7 @@ export class NonBlockingHttpClient {
     this.failedRequests = [];
   }
   
-  async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null) {
+  async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, loanApplicationId = null) {
     logger.info('Non-blocking HTTP send initiated', {
       requestId,
       logTag,
@@ -39,7 +39,8 @@ export class NonBlockingHttpClient {
       sourceDestination,
       endpoint,
       baseUrl,
-      payload
+      payload,
+      loanApplicationId
     });
     
     requestPromise.then(response => {
@@ -90,17 +91,17 @@ export class NonBlockingHttpClient {
           hasActiveReq: !!activeReq
         });
         this.recordFailure(activeReq, requestId, response, null, apiFailure);
-        this.bufferManager.addResponse(requestId, response, true);
+        this.bufferManager.addResponse(requestId, response, true, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId });
       } else {
         logger.info('Non-blocking request completed successfully', { requestId, status: response.status });
-        this.bufferManager.addResponse(requestId, response, false);
+        this.bufferManager.addResponse(requestId, response, false, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId });
       }
     }).catch(error => {
       const activeReq = this.activeRequests.get(requestId);
       this.activeRequests.delete(requestId);
       logger.error('Non-blocking request exception', { requestId, error: error.message, hasActiveReq: !!activeReq });
       this.recordFailure(activeReq, requestId, { error: true, message: error.message }, error);
-      this.bufferManager.addResponse(requestId, { error: true, message: error.message }, true);
+      this.bufferManager.addResponse(requestId, { error: true, message: error.message }, true, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId });
     });
     
     await new Promise(resolve => setImmediate(resolve));

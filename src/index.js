@@ -29,7 +29,13 @@ const CONFIG = {
   SESSION_TOKEN: process.env.SESSION_TOKEN || '',
   REPORT_PATH: process.env.REPORT_PATH || 'report.json',
   KEEP_ORDER_TEMP_FILES: process.env.KEEP_ORDER_TEMP_FILES === 'true',
-  ENABLE_BATCH_PROCESSING: process.env.ENABLE_BATCH_PROCESSING !== 'false'
+  ENABLE_BATCH_PROCESSING: process.env.ENABLE_BATCH_PROCESSING !== 'false',
+  OPTIONAL_REPEAT_LOG_TAGS: process.env.OPTIONAL_REPEAT_LOG_TAGS
+    ? process.env.OPTIONAL_REPEAT_LOG_TAGS.split(',').map(s => s.trim()).filter(Boolean)
+    : [],
+  OPTIONAL_REPEAT_AFTER_SECONDS: process.env.OPTIONAL_REPEAT_AFTER_SECONDS
+    ? parseInt(process.env.OPTIONAL_REPEAT_AFTER_SECONDS, 10)
+    : 5
 };
 
 function getConfiguredFetchInputs() {
@@ -51,6 +57,21 @@ function getConfiguredFetchInputs() {
 }
 
 async function resolveOrderList() {
+  if (CONFIG.ORDER_LIST.length > 0) {
+    console.log('\n========================================');
+    console.log('Using Explicit ORDER_LIST');
+    console.log('========================================');
+    CONFIG.ORDER_LIST.forEach((orderId, index) => {
+      console.log(`  ${index + 1}. ${orderId} (${CONFIG.MERCHANT_ID})`);
+    });
+    console.log('========================================\n');
+
+    return CONFIG.ORDER_LIST.map((orderId) => ({
+      merchantId: CONFIG.MERCHANT_ID,
+      orderId
+    }));
+  }
+
   const configuredFetchInputs = getConfiguredFetchInputs();
 
   if (configuredFetchInputs) {
@@ -124,13 +145,6 @@ async function resolveOrderList() {
     return orderList;
   }
 
-  if (CONFIG.ORDER_LIST.length > 0) {
-    return CONFIG.ORDER_LIST.map((orderId) => ({
-      merchantId: CONFIG.MERCHANT_ID,
-      orderId
-    }));
-  }
-
   const answers = await askInteractiveConfig();
   return answers.orderList.map((orderId) => ({
     merchantId: answers.merchantId,
@@ -196,9 +210,10 @@ async function main() {
     console.log('\n========================================');
     console.log('Sequential ART Complete');
     console.log(`Overall Success: ${result.success}`);
+    console.log(`ART Report Path: ${CONFIG.REPORT_PATH}`);
+    console.log('ART multiplexer will stay alive until manually stopped.');
     console.log('========================================\n');
-
-    process.exit(result.success ? 0 : 1);
+    await new Promise(() => {});
   } catch (error) {
     console.error('Failed to start:', error.message);
     console.error(error.stack);

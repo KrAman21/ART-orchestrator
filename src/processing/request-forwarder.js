@@ -1,6 +1,7 @@
 import { getEndpointConfig, SKIP_DESTINATIONS } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
+import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
 
 /**
  * RequestForwarder - Handles request forwarding and external response management
@@ -315,7 +316,25 @@ export class RequestForwarder {
       );
 
       // Find the expected response entry (may not be the immediate next entry)
-      const expectedResponse = this.callbacks.findCorrespondingResponse(expectedEntry);
+      let expectedResponse = this.callbacks.findCorrespondingResponse(expectedEntry);
+      
+      // Fallback: positional matching when strict correlation fails (e.g., FetchOfferRequest)
+      if (!expectedResponse) {
+        const baseTag = (tag) => (tag || '').replace(/_REQUEST$/i, '').replace(/_RESPONSE$/i, '');
+        const nextResponse = this.validator.entries.find(e =>
+          e.index > expectedEntry.index &&
+          e.isResponse &&
+          baseTag(e.logTag) === baseTag(expectedEntry.logTag)
+        );
+        if (nextResponse) {
+          this.logger.info('Positional fallback: found next response by logTag', {
+            request: expectedEntry.toString(),
+            response: nextResponse.toString()
+          });
+          expectedResponse = nextResponse;
+        }
+      }
+      
       this.logger.info('Found expected response for request', {
         request: expectedEntry.toString(),
         expectedResponse: expectedResponse ? expectedResponse.toString() : 'null'

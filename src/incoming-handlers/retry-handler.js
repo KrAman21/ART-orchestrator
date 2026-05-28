@@ -1,5 +1,6 @@
 import { isAsyncParallelApi } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
+import { findCorrespondingResponseEntry, matchesRequestContext } from '../services/response-matcher.js';
 
 /**
  * RetryHandler - Handles retry detection for incoming requests
@@ -37,6 +38,26 @@ export class RetryHandler {
     });
 
     const currentEntry = this.validator.getCurrentEntry();
+
+    if (currentEntry && currentEntry.isRequest && this.validator.matchesExpected(currentEntry, incoming)) {
+      this.logger.debug('Incoming request matches current replay entry, not treating as retry', {
+        currentEntryIndex: currentEntry.index,
+        logTag: incoming.logTag
+      });
+      return null;
+    }
+
+    const futureMatch = this.findFutureUnprocessedMatch(incoming);
+    if (futureMatch) {
+      this.logger.info('Incoming request has future unprocessed replay match, not treating as retry', {
+        futureEntryIndex: futureMatch.index,
+        currentEntryIndex: currentEntry?.index,
+        incomingLogTag: incoming.logTag,
+        incomingLenderOrgId: incoming.lenderOrgId,
+        incomingLoanApplicationId: incoming.loanApplicationId
+      });
+      return null;
+    }
 
     // Check if this request matches an already-processed log entry
     // Look for entries that were skipped (external destinations like LENDER)
@@ -177,6 +198,32 @@ export class RetryHandler {
   }
 
   /**
+   * Find a future unprocessed replay request that matches the incoming request.
+   * If one exists, the incoming call belongs to a later replay step and must not
+   * be short-circuited as a retry of an earlier completed request.
+   *
+   * @param {Object} incoming - The incoming request
+   * @returns {Object|null} - Matching future replay entry or null
+   */
+  findFutureUnprocessedMatch(incoming) {
+    const currentEntry = this.validator.getCurrentEntry();
+    const currentPosition = currentEntry ? this.validator.currentIndex : -1;
+
+    for (let i = currentPosition + 1; i < this.validator.entries.length; i++) {
+      if (this.validator.processedIndices.has(i)) continue;
+
+      const entry = this.validator.entries[i];
+      if (!entry || !entry.isRequest || entry.shouldSkip()) continue;
+
+      if (this.validator.matchesExpected(entry, incoming)) {
+        return entry;
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Find the corresponding response entry for a given request entry.
    * 
    * @param {Object} requestEntry - The request entry to find response for
@@ -184,27 +231,10 @@ export class RetryHandler {
    * @returns {Object|null} - The matching response entry or null
    */
   findCorrespondingResponse(requestEntry, searchAll = false) {
-    // Look for response with reversed source_destination and matching request context
-    const direction = `${requestEntry.source}_${requestEntry.destination}`;
-
-    // Search in remaining logs - look ahead further to handle interleaved entries
-    // If searchAll is true, search through all entries including processed ones
-    // This is needed for retry detection where both request and response are processed
-    const entriesToSearch = searchAll
-      ? this.validator.entries
-      : this.validator.peekNext(100);
-
-    for (const entry of entriesToSearch) {
-      if (
-        entry.isResponse &&
-        entry.sourceDestination === direction &&
-        this.matchesRequestContext(requestEntry, entry)
-      ) {
-        return entry;
-      }
-    }
-
-    return null;
+    return findCorrespondingResponseEntry(this.validator.entries, requestEntry, {
+      searchAll,
+      processedIndices: this.validator.processedIndices
+    });
   }
 
   /**
@@ -215,32 +245,6 @@ export class RetryHandler {
    * @returns {boolean} - True if contexts match
    */
   matchesRequestContext(requestEntry, responseEntry) {
-    // Match by log tag pattern - response should correspond to the request
-    // e.g., "XXX_REQUEST" matches "XXX_RESPONSE"
-    const requestTag = requestEntry.logTag.replace(/_REQUEST$/i, '').replace(/REQUEST$/i, '');
-    const responseTag = responseEntry.logTag.replace(/_RESPONSE$/i, '').replace(/RESPONSE$/i, '');
-    
-    if (requestTag !== responseTag) {
-      return false;
-    }
-
-    // Match by loan_application_id if present
-    if (
-      requestEntry.loanApplicationId &&
-      responseEntry.loanApplicationId &&
-      requestEntry.loanApplicationId !== responseEntry.loanApplicationId
-    ) {
-      return false;
-    }
-    // Match by lender_org_id if present
-    if (
-      requestEntry.lenderOrgId &&
-      responseEntry.lenderOrgId &&
-      requestEntry.lenderOrgId !== responseEntry.lenderOrgId
-    ) {
-      return false;
-    }
-
-    return true;
+    return matchesRequestContext(requestEntry, responseEntry);
   }
 }

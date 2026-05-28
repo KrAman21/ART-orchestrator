@@ -5,6 +5,8 @@ import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { getEndpointConfig } from '../config.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
+import { isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from '../replay-special-cases.js';
+import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
 
 function remapLoanApplicationIds(value, stateManager) {
   if (!value || typeof value !== 'object') {
@@ -141,7 +143,17 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return false;
     }
     
-    const buffered = this.bufferManager.getResponse(requestId);
+    let buffered = this.bufferManager.getResponse(requestId);
+    
+    // Fallback: look up by metadata when requestId mismatch occurs
+    if (!buffered) {
+      buffered = this.bufferManager.getResponseByMetadata(
+        currentEntry.logTag,
+        currentEntry.sourceDestination,
+        currentEntry.loanApplicationId
+      );
+    }
+    
     if (!buffered) {
       logger.debug('Response not yet in buffer', {
         requestId,
@@ -356,7 +368,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         null,
         customHeaders,
         entry.index,
-        this.getServiceUnixSocket(service)
+        this.getServiceUnixSocket(service),
+        entry.loanApplicationId
       );
       
       this.validator.advance();
@@ -403,6 +416,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   }
 
   async handleIncomingRequest(incoming) {
+    this.recordObservedIncomingRequest(incoming);
+
     logger.info('ASYNC_ORCH_RECEIVING', {
       source: incoming.source,
       destination: incoming.destination,
@@ -414,7 +429,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     // Handle Themis batch requests before the generic GATEWAY->LENDER shortcut.
     // KFS can be replayed with lender-specific routing even when the log-side request
     // was captured under a different downstream variant.
-    if (incoming.logTag === 'Themis-Eligibility_REQUEST' && 
+    if (isThemisEligibilitySpecialCase(incoming.logTag) && 
         incoming.source === 'GATEWAY' && 
         (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
       logger.info('Handling Themis-Eligibility batch request asynchronously', {
@@ -423,7 +438,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       });
       return await this.handleThemisEligibilityBatchAsync(incoming);
     }
-    if (incoming.logTag === 'Themis-KFS_REQUEST' && 
+    if (isThemisKfsSpecialCase(incoming.logTag) && 
         incoming.source === 'GATEWAY' && 
         (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
       logger.info('Handling Themis-KFS batch request asynchronously', {
@@ -718,11 +733,17 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   }
   
   matchesCurrentEntry(incoming, currentEntry) {
-    if (!currentEntry.isRequest) return false;
-    if (incoming.logTag !== currentEntry.logTag) return false;
     if (incoming.source !== currentEntry.source) return false;
     if (incoming.destination !== currentEntry.destination) return false;
-    return true;
+    
+    // Normalize tags by stripping all directional suffixes for matching
+    const baseTag = (tag) => (tag || '').replace(/_REQUEST$/i, '').replace(/_RESPONSE$/i, '').replace(/_OUTGOING$/i, '').replace(/_INCOMING$/i, '');
+    
+    if (baseTag(incoming.logTag) === baseTag(currentEntry.logTag)) {
+      return true;
+    }
+    
+    return false;
   }
   
   sleep(ms) {

@@ -1360,6 +1360,7 @@ export const API_TO_LOGTAG_MAP = {
   '/v1.0/getKFS': { logTag: "LSP-GetKFS_REQUEST", api: "/gateway/v1.0/getKFS", sourceDestination: "CORE_GATEWAY", headers: {}},
   "/v1.0/fetchOfferResponse" : {logTag: "FETCH_OFFER_ASYNC_RESPONSE_REQUEST", api: "/v1.0/fetchOfferResponse", sourceDestination: "GATEWAY_LSP", headers: {}},
   '/v1.0/fetchOfferRequest' : {logTag: 'LSP-FetchOfferRequest_REQUEST', api: '/gateway/v1.0/fetchOfferRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v1.0/fetchOfferRequest' : {logTag: 'LSP-FetchOfferRequest_REQUEST', api: '/gateway/v1.0/fetchOfferRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/v1.0/eligibility': { logTag: 'LSP-Eligibility_REQUEST', api: '/gateway/v1.0/eligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/eligibility': { logTag: 'LSP-Eligibility_REQUEST', api: '/gateway/v1.0/eligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/selectOffer': { logTag: 'LSP-SelectOffer_OUTGOING', api: '/gateway/v1.0/selectOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
@@ -1380,7 +1381,7 @@ export const API_TO_LOGTAG_MAP = {
   '/gateway/v1.0/createLoanRequestInfo': { logTag: 'LSP-CreateLoanRequestInfo_OUTGOING', api: '/gateway/v1.0/createLoanRequestInfo', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/updateLoanRequestInfo': { logTag: 'LSP-UpdateLoanRequestInfo_OUTGOING', api: '/gateway/v1.0/updateLoanRequestInfo', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/createOffer': { logTag: 'LSP-CreateOffer_OUTGOING', api: '/gateway/v1.0/createOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
-  '/gateway/v1.0/getKFS': { logTag: 'LSP-GetKFS_OUTGOING', api: '/gateway/v1.0/getKFS', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v1.0/getKFS': { logTag: 'LSP-GetKFS_REQUEST', api: '/gateway/v1.0/getKFS', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/hardEligibility': { logTag: 'LSP-HardEligibility_OUTGOING', api: '/gateway/v1.0/hardEligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
   
   // REQUEST variants (used by logs.json)

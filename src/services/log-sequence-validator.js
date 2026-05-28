@@ -1,5 +1,6 @@
 import { logger } from '../utils/logger.js';
 import { isAsyncParallelApi, normalizeSourceDestination } from '../config.js';
+import { canonicalRequestLogTag } from './log-tag-normalizer.js';
 
 /**
  * LogEntry represents a parsed log entry from the trace
@@ -149,7 +150,7 @@ class LogEntry {
    * Check if this log entry is a LENDER->GATEWAY webhook
    */
   isLenderToGwWebhook() {
-    return this.isWebhook() && this.source === 'LENDER' && this.destination === 'GATEWAY';
+    return this.isRequest && this.isWebhook() && this.source === 'LENDER' && this.destination === 'GATEWAY';
   }
 
   toString() {
@@ -334,7 +335,7 @@ export class LogSequenceValidator {
         entry.lenderOrgId === incoming.lenderOrgId &&
         entry.source === incoming.source &&
         entry.destination === incoming.destination &&
-        entry.logTag === incoming.logTag
+        canonicalRequestLogTag(entry.logTag) === canonicalRequestLogTag(incoming.logTag)
       );
 
       // Also check if this lender was already processed (retry scenario)
@@ -343,7 +344,7 @@ export class LogSequenceValidator {
         entry.lenderOrgId === incoming.lenderOrgId &&
         entry.source === incoming.source &&
         entry.destination === incoming.destination &&
-        entry.logTag === incoming.logTag
+        canonicalRequestLogTag(entry.logTag) === canonicalRequestLogTag(incoming.logTag)
       );
 
       if (!hasMatchingLenderLog && !wasAlreadyProcessed) {
@@ -477,11 +478,14 @@ export class LogSequenceValidator {
    * Check if incoming request matches expected log entry
    */
   matchesExpected(expected, incoming) {
+    const expectedLogTag = canonicalRequestLogTag(expected.logTag);
+    const incomingLogTag = canonicalRequestLogTag(incoming.logTag);
+
     // Basic matching on source, destination, and log tag
     if (
       expected.source !== incoming.source ||
       expected.destination !== incoming.destination ||
-      expected.logTag !== incoming.logTag
+      expectedLogTag !== incomingLogTag
     ) {
       return false;
     }
@@ -750,7 +754,7 @@ export class LogSequenceValidator {
     // Look through entries between request and response
     for (let i = requestIndex + 1; i < responseIndex; i++) {
       const entry = this.entries[i];
-      if (!entry || entry.shouldSkip()) continue;
+      if (!entry || entry.shouldSkip() || this.processedIndices.has(entry.index)) continue;
 
       // Check if this is a LENDER->GW webhook
       if (!entry.isLenderToGwWebhook()) continue;
@@ -792,7 +796,7 @@ export class LogSequenceValidator {
 
     for (let i = startIndex; i < endIndex; i++) {
       const entry = this.entries[i];
-      if (!entry || entry.shouldSkip()) continue;
+      if (!entry || entry.shouldSkip() || this.processedIndices.has(entry.index)) continue;
 
       // Stop if we hit another LENDER request or the GW->LSP response
       if (entry.source === 'GW' && entry.destination === 'LENDER') break;

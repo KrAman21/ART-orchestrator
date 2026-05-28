@@ -1,5 +1,6 @@
 import { DeferredPromise } from './deferred-promise.js';
 import { logger } from '../utils/logger.js';
+import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
 
 export class BufferManager {
   constructor(config = {}) {
@@ -59,7 +60,7 @@ export class BufferManager {
     return entry;
   }
   
-  addResponse(requestId, response, isError = false) {
+  addResponse(requestId, response, isError = false, metadata = {}) {
     if (this.responseBuffer.size >= this.config.maxBufferSize) {
       logger.error('Response buffer full, dropping response', { requestId });
       return;
@@ -68,7 +69,8 @@ export class BufferManager {
     this.responseBuffer.set(requestId, {
       response,
       isError,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      metadata
     });
     
     this._signalWorkAvailable();
@@ -83,6 +85,53 @@ export class BufferManager {
       isError,
       response: responsePreview
     });
+  }
+  
+  getResponseByMetadata(logTag, sourceDestination, loanApplicationId = null) {
+    const baseTag = (tag) => (tag || '').replace(/_REQUEST$/i, '').replace(/_RESPONSE$/i, '').replace(/_OUTGOING$/i, '').replace(/_INCOMING$/i, '');
+    
+    const matches = [];
+    for (const [requestId, entry] of this.responseBuffer) {
+      const meta = entry.metadata || {};
+      if (baseTag(meta.logTag) === baseTag(logTag) && meta.sourceDestination === sourceDestination) {
+        matches.push({ requestId, entry });
+      }
+    }
+    
+    if (matches.length === 0) {
+      logger.debug('No response found by metadata', { logTag, sourceDestination, loanApplicationId, bufferSize: this.responseBuffer.size });
+      return null;
+    }
+    
+    // Sort by timestamp (oldest first)
+    matches.sort((a, b) => a.entry.timestamp - b.entry.timestamp);
+    
+    // If loanApplicationId provided, prefer exact match
+    if (loanApplicationId) {
+      const matchingLoanApp = matches.find(m => m.entry.metadata?.loanApplicationId === loanApplicationId);
+      if (matchingLoanApp) {
+        this.responseBuffer.delete(matchingLoanApp.requestId);
+        logger.info('Found buffered response by metadata (loanApplicationId match)', {
+          logTag,
+          sourceDestination,
+          loanApplicationId,
+          matchedRequestId: matchingLoanApp.requestId
+        });
+        return matchingLoanApp.entry;
+      }
+    }
+    
+    // Return oldest matching
+    const oldest = matches[0];
+    this.responseBuffer.delete(oldest.requestId);
+    logger.info('Found buffered response by metadata (oldest match)', {
+      logTag,
+      sourceDestination,
+      loanApplicationId,
+      matchedRequestId: oldest.requestId,
+      totalMatches: matches.length
+    });
+    return oldest.entry;
   }
   
   registerPendingPromise(requestId, entry, timeoutMs = null) {
@@ -159,7 +208,7 @@ export class BufferManager {
   }
   
   _matchesRequest(incoming, expected) {
-    if (incoming.logTag !== expected.logTag) return false;
+    if (canonicalRequestLogTag(incoming.logTag) !== canonicalRequestLogTag(expected.logTag)) return false;
     if (incoming.source !== expected.source) return false;
     if (incoming.destination !== expected.destination) return false;
     

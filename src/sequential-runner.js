@@ -9,6 +9,8 @@ import { ArtReportGenerator } from './services/art-report-generator.js';
 import { logger } from './utils/logger.js';
 import { basename, dirname, extname, join } from 'path';
 import { unlink } from 'fs/promises';
+import { getOptionalRepeatPolicy } from './replay-special-cases.js';
+import { findCorrespondingResponseEntry } from './services/response-matcher.js';
 
 export async function runSequentialArt(orderList, config) {
   const maxJourneyTimeMs = config.MAX_JOURNEY_TIME_MS || 3 * 60 * 1000;
@@ -177,6 +179,11 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
   const filteredLogsPath = getPerOrderFilePath(config.FILTERED_LOGS_PATH || 'data/filtered-logs.json', orderId, orderIndex, config);
   const finalFilteredLogsPath = getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json', orderId, orderIndex, config);
 
+  console.log(`Replay artifacts for ${orderId}:`);
+  console.log(`  Raw logs: ${logsFilePath}`);
+  console.log(`  Filtered logs: ${filteredLogsPath}`);
+  console.log(`  Final filtered logs: ${finalFilteredLogsPath}`);
+
   const orderReport = reportGenerator.addOrder({
     orderId,
     merchantId,
@@ -191,35 +198,45 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       totalOrders,
       phase: 'FETCH_LOGS'
     });
-    
+
     let fetchResult = null;
     const maxFetchAttempts = 5;
     const fetchRetryIntervalMs = 2000;
-    
-    for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
-      const fetcher = new BatchLogFetcher({
-        sessionToken: config.SESSION_TOKEN,
-        outputPath: logsFilePath,
-        delayBetweenRequests: 500,
-        maxRetries: 3
-      });
 
-      fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+    const preCachedLogs = await fetchLogsFromJSONFile(logsFilePath).catch(() => []);
+    if (preCachedLogs.length > 0) {
+      console.log(`  Using pre-cached logs for order ${orderId} (${preCachedLogs.length} entries)`);
+      fetchResult = {
+        success: true,
+        stats: { totalLogs: preCachedLogs.length },
+        allLogs: preCachedLogs
+      };
+    } else {
+      for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
+        const fetcher = new BatchLogFetcher({
+          sessionToken: config.SESSION_TOKEN,
+          outputPath: logsFilePath,
+          delayBetweenRequests: 500,
+          maxRetries: 3
+        });
 
-      if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
-        break;
-      }
+        fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
 
-      logger.warn(`Log fetch attempt ${attempt}/${maxFetchAttempts} failed for order ${orderId}`, {
-        attempt,
-        maxFetchAttempts,
-        totalLogs: fetchResult.stats?.totalLogs || 0,
-        error: fetchResult.error || 'No logs found'
-      });
+        if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
+          break;
+        }
 
-      if (attempt < maxFetchAttempts) {
-        console.log(`  Log fetch attempt ${attempt}/${maxFetchAttempts} returned 0 logs, retrying in 2s...`);
-        await new Promise(resolve => setTimeout(resolve, fetchRetryIntervalMs));
+        logger.warn(`Log fetch attempt ${attempt}/${maxFetchAttempts} failed for order ${orderId}`, {
+          attempt,
+          maxFetchAttempts,
+          totalLogs: fetchResult.stats?.totalLogs || 0,
+          error: fetchResult.error || 'No logs found'
+        });
+
+        if (attempt < maxFetchAttempts) {
+          console.log(`  Log fetch attempt ${attempt}/${maxFetchAttempts} returned 0 logs, retrying in 2s...`);
+          await new Promise(resolve => setTimeout(resolve, fetchRetryIntervalMs));
+        }
       }
     }
 
@@ -571,6 +588,120 @@ function getPerOrderFilePath(basePath, orderId, orderIndex, config) {
   return join(dirname(basePath), `${name}-${orderIndex}-${safeOrderId}${extension}`);
 }
 
+function sharesReplayContext(leftEntry, rightEntry) {
+  if (!leftEntry || !rightEntry) {
+    return false;
+  }
+
+  if (leftEntry.orderId && rightEntry.orderId && leftEntry.orderId !== rightEntry.orderId) {
+    return false;
+  }
+
+  if (leftEntry.loanApplicationId && rightEntry.loanApplicationId && leftEntry.loanApplicationId !== rightEntry.loanApplicationId) {
+    return false;
+  }
+
+  if (leftEntry.lenderOrgId && rightEntry.lenderOrgId && leftEntry.lenderOrgId !== rightEntry.lenderOrgId) {
+    return false;
+  }
+
+  return true;
+}
+
+function hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy) {
+  if (!optionalRepeatPolicy.advanceWhenSeenLogTags?.length) {
+    return false;
+  }
+
+  return orchestrator.validator.entries.some((entry, index) =>
+    orchestrator.validator.processedIndices.has(index) &&
+    index > currentEntry.index &&
+    entry.isRequest &&
+    optionalRepeatPolicy.advanceWhenSeenLogTags.includes(entry.logTag) &&
+    sharesReplayContext(currentEntry, entry)
+  );
+}
+
+function hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy) {
+  if (!optionalRepeatPolicy.advanceWhenSeenLogTags?.length) {
+    return false;
+  }
+
+  const observedRequests = orchestrator.observedIncomingRequests || [];
+
+  return observedRequests.some(entry =>
+    optionalRepeatPolicy.advanceWhenSeenLogTags.includes(entry.logTag) &&
+    sharesReplayContext(currentEntry, entry)
+  );
+}
+
+function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
+  const optionalRepeatPolicy = getOptionalRepeatPolicy(orchestrator?.config, currentEntry);
+
+  if (!optionalRepeatPolicy) {
+    return false;
+  }
+
+  if (stuckDurationMs < optionalRepeatPolicy.optionalAfterSeconds * 1000) {
+    return false;
+  }
+
+  const priorReplayOccurrences = orchestrator.validator.entries.filter((entry) =>
+    entry.isRequest &&
+    entry.index < currentEntry.index &&
+    entry.source === currentEntry.source &&
+    entry.destination === currentEntry.destination &&
+    entry.logTag === currentEntry.logTag &&
+    sharesReplayContext(currentEntry, entry)
+  );
+
+  const processedSameTagCount = priorReplayOccurrences.filter(entry =>
+    orchestrator.validator.processedIndices.has(entry.index)
+  ).length;
+
+  const branchAdvanced = hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
+  const branchAdvancedObserved = hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
+
+  if (priorReplayOccurrences.length < 1) {
+    return false;
+  }
+
+  if (processedSameTagCount < 1 && !branchAdvanced && !branchAdvancedObserved) {
+    return false;
+  }
+
+  const responseEntry = findCorrespondingResponseEntry(orchestrator.validator.entries, currentEntry, {
+    searchAll: false,
+    processedIndices: orchestrator.validator.processedIndices
+  });
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Auto-skipping optional repeated entry after ${optionalRepeatPolicy.optionalAfterSeconds}s - Current: ${currentEntry.logTag}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      priorReplayOccurrenceCount: priorReplayOccurrences.length,
+      processedSameTagCount,
+      branchAdvanced,
+      branchAdvancedObserved,
+      branchAdvanceLogTags: optionalRepeatPolicy.advanceWhenSeenLogTags,
+      skippedResponseIndex: responseEntry?.index ?? null,
+      optionalAfterSeconds: optionalRepeatPolicy.optionalAfterSeconds,
+      phase: 'OPTIONAL_REPEAT_SKIP'
+    }
+  );
+
+  orchestrator.validator.markProcessed(currentEntry);
+  if (responseEntry) {
+    orchestrator.validator.markProcessed(responseEntry);
+  }
+
+  return true;
+}
+
 async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal) {
   const startTime = Date.now();
   let lastLoggedMinute = 0;
@@ -619,8 +750,15 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
     if (currentIndex !== null && currentIndex === stuckEntryIndex) {
       const currentMaxRetrySeconds = getMaxRetrySeconds(currentEntry?.logTag);
       const currentMaxRetryMs = currentMaxRetrySeconds * 1000;
+      const stuckDurationMs = Date.now() - stuckSince;
 
-      if (Date.now() - stuckSince >= currentMaxRetryMs) {
+      if (maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
+        stuckEntryIndex = null;
+        stuckSince = null;
+        continue;
+      }
+
+      if (stuckDurationMs >= currentMaxRetryMs) {
         logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Entry stuck for ${currentMaxRetrySeconds}s, giving up - Stuck at: ${currentEntry?.logTag || 'unknown'}`, {
           orderId,
           orderIndex,

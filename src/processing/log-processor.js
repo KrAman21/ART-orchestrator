@@ -2,6 +2,11 @@ import { getEndpointConfig } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
+import {
+  findAllCorrespondingResponseEntries,
+  findCorrespondingResponseEntry,
+  matchesRequestContext
+} from '../services/response-matcher.js';
 
 function remapLoanApplicationIds(value, stateManager) {
   if (!value || typeof value !== 'object') {
@@ -463,27 +468,10 @@ export class LogProcessor {
    * @returns {Object|null} Response entry or null
    */
   findCorrespondingResponse(requestEntry, searchAll = false) {
-    // Look for response with reversed source_destination and matching request context
-    const direction = `${requestEntry.source}_${requestEntry.destination}`;
-
-    // Search in remaining logs - look ahead further to handle interleaved entries
-    // If searchAll is true, search through all entries including processed ones
-    // This is needed for retry detection where both request and response are processed
-    const entriesToSearch = searchAll
-      ? this.validator.entries
-      : this.validator.peekNext(100);
-
-    for (const entry of entriesToSearch) {
-      if (
-        entry.isResponse &&
-        entry.sourceDestination === direction &&
-        this.matchesRequestContext(requestEntry, entry)
-      ) {
-        return entry;
-      }
-    }
-
-    return null;
+    return findCorrespondingResponseEntry(this.validator.entries, requestEntry, {
+      searchAll,
+      processedIndices: this.validator.processedIndices
+    });
   }
 
   /**
@@ -492,21 +480,10 @@ export class LogProcessor {
    * @returns {Array} Array of matching response entries
    */
   findAllCorrespondingResponses(requestEntry) {
-    const direction = `${requestEntry.source}_${requestEntry.destination}`;
-    const matchingResponses = [];
-
-    // Search through all entries
-    for (const entry of this.validator.entries) {
-      if (
-        entry.isResponse &&
-        entry.sourceDestination === direction &&
-        this.matchesRequestContext(requestEntry, entry)
-      ) {
-        matchingResponses.push(entry);
-      }
-    }
-
-    return matchingResponses;
+    return findAllCorrespondingResponseEntries(this.validator.entries, requestEntry, {
+      searchAll: true,
+      processedIndices: this.validator.processedIndices
+    });
   }
 
   /**
@@ -516,33 +493,7 @@ export class LogProcessor {
    * @returns {boolean} Whether entries match
    */
   matchesRequestContext(requestEntry, responseEntry) {
-    // Match by log tag pattern - response should correspond to the request
-    // e.g., "XXX_REQUEST" matches "XXX_RESPONSE"
-    const requestTag = requestEntry.logTag.replace(/_REQUEST$/i, '').replace(/REQUEST$/i, '');
-    const responseTag = responseEntry.logTag.replace(/_RESPONSE$/i, '').replace(/RESPONSE$/i, '');
-    
-    if (requestTag !== responseTag) {
-      return false;
-    }
-
-    // Match by loan_application_id if present
-    if (
-      requestEntry.loanApplicationId &&
-      responseEntry.loanApplicationId &&
-      requestEntry.loanApplicationId !== responseEntry.loanApplicationId
-    ) {
-      return false;
-    }
-    // Match by lender_org_id if present
-    if (
-      requestEntry.lenderOrgId &&
-      responseEntry.lenderOrgId &&
-      requestEntry.lenderOrgId !== responseEntry.lenderOrgId
-    ) {
-      return false;
-    }
-
-    return true;
+    return matchesRequestContext(requestEntry, responseEntry);
   }
 }
 
