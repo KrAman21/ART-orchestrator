@@ -1,4 +1,4 @@
-import { getEndpointConfig, SKIP_DESTINATIONS } from '../config.js';
+import { getEndpointConfig, REQUEST_TIMEOUT_OVERRIDES, SKIP_DESTINATIONS } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
@@ -365,6 +365,10 @@ export class RequestForwarder {
 
       // Transform masked values in payload before forwarding
       const transformedPayload = transformRequest(incoming.payload, expectedEntry.logTag);
+      const requestTimeoutMs =
+        REQUEST_TIMEOUT_OVERRIDES[expectedEntry.logTag] ||
+        this.config.timeoutMs ||
+        10000;
 
       // Make actual HTTP request to destination
       const serviceResponse = await makeRequest(
@@ -378,7 +382,8 @@ export class RequestForwarder {
         null,
         customHeaders,
         expectedEntry.index,
-        this.callbacks.getServiceUnixSocket(endpointConfig?.service || destination)
+        this.callbacks.getServiceUnixSocket(endpointConfig?.service || destination),
+        requestTimeoutMs
       );
 
       this.logger.info('Response received from service', {

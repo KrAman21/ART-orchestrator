@@ -32,6 +32,16 @@ export const REPLAY_SPECIAL_CASES = [
     ]
   },
   {
+    logTag: 'LSP-FetchOfferRequest_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated fetch-offer requests to be skipped once the same replay branch has already advanced into async fetch-offer handling.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
+    advanceWhenSeenLogTags: [
+      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
+    ]
+  },
+  {
     logTag: 'ProcessStatus_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow process-status polling to be skipped when the live journey has already completed the loan-processing redirection branch.',

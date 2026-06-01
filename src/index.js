@@ -1,13 +1,18 @@
 import './bootstrap-env.js';
+import { uninstallEarlyProcessComposeStop } from './utils/early-process-compose-stop.js';
+import './utils/art-log-output.js';
 
+import { readFileSync } from 'fs';
 import { createInterface } from 'readline';
 import { logger } from './utils/logger.js';
 import { runSequentialArt } from './sequential-runner.js';
 import { fetchOrderIdsFromQAPI } from './services/http-client.js';
 import { startMultiplexerServer } from './dashboard/multiplexer.js';
+import { stopProcessCompose } from './utils/process-compose.js';
+
+uninstallEarlyProcessComposeStop();
 
 const CONFIG = {
-  ART_PORT: parseInt(process.env.ART_PORT, 10) || 3002,
   ART_UNIX_SOCKET_PATH: process.env.ART_UNIX_SOCKET_PATH || null,
   LOGS_FILE_PATH: process.env.LOGS_FILE_PATH || 'data/logs.json',
   TIMEOUT_MS: parseInt(process.env.TIMEOUT_MS, 10) || 10000,
@@ -161,14 +166,20 @@ async function main() {
       error: normalizedError.message,
       stack: normalizedError.stack
     });
+
+    await stopProcessCompose(kind);
   };
 
   process.on('unhandledRejection', reason => {
-    void logUnexpectedProcessError('Unhandled promise rejection', reason);
+    void logUnexpectedProcessError('Unhandled promise rejection', reason).finally(() => {
+      process.exit(1);
+    });
   });
 
   process.on('uncaughtException', error => {
-    void logUnexpectedProcessError('Uncaught exception', error);
+    void logUnexpectedProcessError('Uncaught exception', error).finally(() => {
+      process.exit(1);
+    });
   });
 
   try {
@@ -183,14 +194,22 @@ async function main() {
     console.log(`Total Orders: ${orderList.length}`);
     console.log('========================================\n');
 
-    const multiplexerPort = parseInt(process.env.MULTIPLEXER_PORT || process.env.PORT || '3001', 10);
-    const { registry, ready } = startMultiplexerServer(multiplexerPort);
+    const { registry, ready, unixServer } = startMultiplexerServer();
     await ready;
+
+    if (unixServer) {
+      unixServer.on('error', (error) => {
+        void stopProcessCompose(`ART unix server error: ${error.message}`);
+      });
+
+      unixServer.on('close', () => {
+        void stopProcessCompose('ART unix server closed');
+      });
+    }
 
     const sessionId = 'cli-' + Date.now();
     const cliConfig = {
       ...CONFIG,
-      PORT: multiplexerPort,
       MAX_JOURNEY_TIME_MS: 3 * 60 * 1000,
       AUTO_FETCH_LOGS: true,
       USE_ASYNC_ORCHESTRATOR: true,
@@ -211,12 +230,17 @@ async function main() {
     console.log('Sequential ART Complete');
     console.log(`Overall Success: ${result.success}`);
     console.log(`ART Report Path: ${CONFIG.REPORT_PATH}`);
-    console.log('ART multiplexer will stay alive until manually stopped.');
+    console.log('Stopping process-compose services...');
     console.log('========================================\n');
-    await new Promise(() => {});
+    console.log('ART Report Content Start');
+    console.log(readFileSync(CONFIG.REPORT_PATH, 'utf-8'));
+    console.log('ART Report Content End');
+    await stopProcessCompose('ART_RUN_COMPLETED');
+    process.exit(result.success ? 0 : 1);
   } catch (error) {
     console.error('Failed to start:', error.message);
     console.error(error.stack);
+    await stopProcessCompose(`Failed to start: ${error.message}`);
     process.exit(1);
   }
 }

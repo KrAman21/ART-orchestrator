@@ -3,7 +3,7 @@ import { MOCK_CONFIG, QAPI_CONFIG } from '../config.js';
 import { fetchS3TraceLogs as fetchS3TraceLogsFromClient } from '../log-fetcher/s3-trace-logs-client.js';
 import { unixSocketRequest } from './unix-socket-client.js';
 
-export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null) {
+export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, timeoutMs = 30000) {
   const parts = sourceDestination?.split('_') || [];
   const source = parts[0] || '';
   const dest = parts[1] || '';
@@ -12,7 +12,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     logger.logApiCall(source, dest, endpoint, 'REQUEST', logIndex);
   }
 
-  logger.info('Making HTTP request', {
+  logger.info('Making request', {
     baseUrl,
     endpoint,
     method,
@@ -24,19 +24,6 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     customHeaders,
     unixSocket
   });
-
-  if (baseUrl.includes('8070')) {
-    logger.info('=== LSP CALL INITIATED ===', {
-      baseUrl,
-      endpoint,
-      url: `${baseUrl}${endpoint}`,
-      method,
-      requestId,
-      logTag,
-      headers: customHeaders,
-      timestamp: new Date().toISOString()
-    });
-  }
 
   const url = `${baseUrl}${endpoint}`;
   const headers = {
@@ -78,27 +65,14 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       contentType: headers['Content-Type']
     });
 
-    if (baseUrl.includes('8070')) {
-      logger.info('=== LSP REQUEST DETAILS ===', {
-        url,
-        method,
-        headers: { ...headers },
-        body: body,
-        requestId,
-        logTag,
-        timestamp: new Date().toISOString()
-      });
-    }
-
     let response;
     if (unixSocket) {
-      console.log(`🔌 Using Unix socket for request: ${unixSocket}`);
-      console.log(`🔌 URL: ${url}`);
-      logger.info('Using Unix socket for request', { socket: unixSocket, url });
+      logger.info('Using Unix socket for request', { socket: unixSocket, serviceUrl: url, timeoutMs });
       const socketResponse = await unixSocketRequest(unixSocket, baseUrl, endpoint, {
         method,
         body,
-        headers
+        headers,
+        timeout: timeoutMs
       });
       response = {
         ok: socketResponse.ok,
@@ -111,27 +85,12 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       response = await fetch(url, {
         method,
         headers,
-        body
+        body,
+        signal: AbortSignal.timeout(timeoutMs)
       });
     }
 
     const data = await response.json().catch(() => null);
-
-    // Detailed logging for LSP calls (port 8070)
-    if (baseUrl.includes('8070')) {
-      logger.info('=== LSP CALL RESPONSE ===', {
-        url,
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok,
-        hasData: !!data,
-        dataKeys: data ? Object.keys(data) : [],
-        data: data,
-        error: !response.ok ? (data?.error || 'HTTP error') : null,
-        requestId,
-        timestamp: new Date().toISOString()
-      });
-    }
 
     logger.info('HTTP_RESPONSE_FULL_BODY', {
       requestId,
@@ -258,10 +217,19 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
  */
 export async function checkHealth(serviceConfig) {
   try {
-    const response = await fetch(`${serviceConfig.baseUrl}/health`, {
-      method: 'GET',
-      timeout: 2000
-    });
+    let response;
+    if (serviceConfig.unixSocket) {
+      const socketResponse = await unixSocketRequest(serviceConfig.unixSocket, serviceConfig.baseUrl, '/health', {
+        method: 'GET',
+        timeout: 2000
+      });
+      response = { ok: socketResponse.ok };
+    } else {
+      response = await fetch(`${serviceConfig.baseUrl}/health`, {
+        method: 'GET',
+        timeout: 2000
+      });
+    }
 
     const healthy = response.ok;
     logger.logHealthCheck(serviceConfig.name, healthy);

@@ -1,7 +1,6 @@
 import { fetchLogsFromJSONFile, filterAndSortLogs, filterOrchestratorSkippableLogs } from './services/log-fetcher.js';
 import { ReplayOrchestrator } from './orchestrator.js';
 import { AsyncReplayOrchestrator } from './async-buffer/async-orchestrator.js';
-import { createServer } from './server.js';
 import { createMockController } from './mocks/index.js';
 import { MOCK_CONFIG, SERVICE_MAP, RETRY_CONFIG, RETRY_TIMEOUT_OVERRIDES } from './config.js';
 import { BatchLogFetcher } from './log-fetcher/index.js';
@@ -303,22 +302,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     console.log(`Ready to replay ${finalFilteredLogs.length} unique logs`);
 
     if (MOCK_CONFIG.enabled) {
-      console.log('\nMock mode enabled - starting mock services...');
-      const lspPort = new URL(MOCK_CONFIG.mockLspUrl).port || 4232;
-      const gwPort = new URL(MOCK_CONFIG.mockGwUrl).port || 2344;
-
-      mocks = createMockController({
-        lspPort: parseInt(lspPort, 10),
-        gwPort: parseInt(gwPort, 10),
-        orchestratorUrl: `http://localhost:${config.PORT}`
-      });
-
-      await mocks.start(logs);
-
-      SERVICE_MAP.LSP.baseUrl = MOCK_CONFIG.mockLspUrl;
-      SERVICE_MAP.GW.baseUrl = MOCK_CONFIG.mockGwUrl;
-
-      console.log(`Mock services started`);
+      throw new Error('MOCK_CONFIG.enabled is not supported in unix-socket-only ART mode.');
     }
 
     logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 3: Starting ART replay`, {
@@ -347,14 +331,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         config.onLoanApplicationId?.(laId, orderId, registrySessionId);
       }
     } else {
-      const app = createServer(orchestrator);
-      await new Promise((resolve, reject) => {
-        server = app.listen(config.PORT, () => {
-          console.log(`\nART Server running on port ${config.PORT} for order ${orderId}`);
-          resolve();
-        });
-        server.on('error', reject);
-      });
+      throw new Error('Legacy per-order TCP server mode is no longer supported. Use the unix-socket multiplexer flow.');
     }
 
     logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 4: Running ART replay`, {

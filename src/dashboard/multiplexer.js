@@ -5,7 +5,6 @@ import { getApiMapping } from '../config.js';
 import { setupUnixSocket, configureSocketPermissions } from '../utils/socket-utils.js';
 import SessionOrchestratorRegistry from './session-registry.js';
 
-const MULTIPLEXER_PORT = parseInt(process.env.MULTIPLEXER_PORT || process.env.PORT || '3001', 10);
 const MULTIPLEXER_UNIX_SOCKET = process.env.MULTIPLEXER_UNIX_SOCKET || null;
 
 export function createMultiplexerServer() {
@@ -128,24 +127,11 @@ export function createMultiplexerServer() {
   return { app, registry };
 }
 
-export function startMultiplexerServer(port = MULTIPLEXER_PORT) {
+export function startMultiplexerServer() {
   const { app, registry } = createMultiplexerServer();
-  let server = null;
   let unixServer = null;
 
   const readyPromises = [];
-
-  if (port > 0) {
-    server = createHttpServer(app);
-    readyPromises.push(new Promise((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(port, () => {
-        logger.info(`ART multiplexer listening on http://localhost:${port}`);
-        server.off('error', reject);
-        resolve();
-      });
-    }));
-  }
 
   if (MULTIPLEXER_UNIX_SOCKET) {
     try {
@@ -172,13 +158,16 @@ export function startMultiplexerServer(port = MULTIPLEXER_PORT) {
           error: error.message
         });
       });
-    } catch (error) {
+  } catch (error) {
       logger.error('Failed to prepare multiplexer unix socket', { error: error.message });
     }
   }
 
+  if (!MULTIPLEXER_UNIX_SOCKET) {
+    throw new Error('MULTIPLEXER_UNIX_SOCKET is required. ART no longer supports TCP port listeners.');
+  }
+
   return {
-    server,
     unixServer,
     registry,
     ready: Promise.all(readyPromises).then(() => undefined)

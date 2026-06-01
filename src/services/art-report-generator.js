@@ -257,6 +257,64 @@ export class ArtReportGenerator {
     this.generateReport(overallSuccess);
   }
 
+  buildOrderOutcome(order) {
+    const failurePoint =
+      order.diagnostics?.failureAt ||
+      order.diagnostics?.timeoutAt ||
+      order.diagnostics?.lastProcessedLog ||
+      null;
+
+    return {
+      orderId: order.orderId,
+      status: order.status,
+      failureReason:
+        order.errorMessage ||
+        failurePoint?.message ||
+        failurePoint?.reason ||
+        order.stopReason ||
+        null,
+      logIndex: failurePoint?.logIndex ?? order.currentLogIndex ?? null,
+      logTag: failurePoint?.logTag ?? order.currentLogTag ?? null,
+      ...(order.stopReason ? { stopReason: order.stopReason } : {})
+    };
+  }
+
+  buildRequestDetails(order) {
+    return {
+      orderId: order.orderId,
+      status: order.status,
+      failedAt: {
+        logIndex:
+          order.diagnostics?.failureAt?.logIndex ??
+          order.diagnostics?.timeoutAt?.logIndex ??
+          order.currentLogIndex ??
+          null,
+        logTag:
+          order.diagnostics?.failureAt?.logTag ??
+          order.diagnostics?.timeoutAt?.logTag ??
+          order.currentLogTag ??
+          null,
+        reason:
+          order.errorMessage ||
+          order.diagnostics?.failureAt?.message ||
+          order.diagnostics?.timeoutAt?.reason ||
+          order.stopReason ||
+          null
+      },
+      requests: (order.bufferFailures || []).map((failure) => ({
+        requestId: failure.requestId || null,
+        logTag: failure.logTag || null,
+        sourceDestination: failure.sourceDestination || null,
+        endpoint: failure.endpoint || null,
+        baseUrl: failure.baseUrl || null,
+        httpStatus: failure.httpStatus || null,
+        errorMessage: failure.errorMessage || failure.error || null,
+        requestPayload: failure.requestPayload || null,
+        responseData: failure.responseData || null
+      }))
+    };
+  }
+
   generateReport(overallSuccess) {
     // Finalize any orders that never completed (process terminated mid-run)
     const now = new Date().toISOString();
@@ -273,6 +331,11 @@ export class ArtReportGenerator {
     const ordersWithBufferFailures = this.orders.filter(o => o.bufferFailures && o.bufferFailures.length > 0).length;
     const totalFailedLogs = this.orders.reduce((acc, order) => acc + (order.diagnostics?.failedLogsCount || order.artResults?.failed || 0), 0);
     const totalTimeoutLogs = this.orders.reduce((acc, order) => acc + (order.diagnostics?.timeoutLogsCount || 0), 0);
+
+    const orderOutcomes = this.orders.map((order) => this.buildOrderOutcome(order));
+    const requestDetails = this.orders
+      .filter((order) => (order.bufferFailures || []).length > 0)
+      .map((order) => this.buildRequestDetails(order));
 
     const report = {
       executionId: `art-${Date.now()}`,
@@ -294,30 +357,18 @@ export class ArtReportGenerator {
         totalBufferFailures,
         ordersWithBufferFailures
       },
-      bufferFailuresSummary: {
-        totalFailures: totalBufferFailures,
-        failuresByOrder: this.orders.reduce((acc, order) => {
-          if (order.bufferFailures && order.bufferFailures.length > 0) {
-            acc[order.orderId] = {
-              count: order.bufferFailures.length,
-              failures: order.bufferFailures
-            };
-          }
-          return acc;
-        }, {}),
-        allFailures: this.globalBufferFailures
-      },
-      orders: this.orders
+      orderOutcomes,
+      requestDetails
     };
 
     try {
       const reportPath = resolve(process.cwd(), this.reportPath);
       writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
-      console.log(`\n📊 ART Report generated: ${reportPath}`);
+      console.log(`\nART Report generated: ${reportPath}`);
       
       if (totalBufferFailures > 0) {
-        console.log(`⚠️  Warning: ${totalBufferFailures} buffer request(s) failed during execution`);
-        console.log(`   Check report.json -> bufferFailuresSummary for details`);
+        console.log(`Warning: ${totalBufferFailures} buffer request(s) failed during execution`);
+        console.log('Check report.json -> requestDetails for the failed request payloads');
       }
       
       return report;

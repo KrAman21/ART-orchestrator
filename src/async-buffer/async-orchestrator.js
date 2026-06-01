@@ -3,8 +3,8 @@ import { BufferManager } from './buffer-manager.js';
 import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
-import { getEndpointConfig, normalizeSourceDestination } from '../config.js';
-import { isThemisEligibilitySpecialCase } from '../replay-special-cases.js';
+import { getEndpointConfig, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES } from '../config.js';
+import { isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
 
@@ -313,12 +313,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       await this.triggerExternalRequestAsync(entry);
       return true;
     } else if (entry.isRequest) {
-      // GATEWAY→LENDER calls require extra polling cycles from the Gateway before arriving;
-      // give them a longer timeout (5x default) so we don't time out prematurely.
-      const isGatewayToLender = entry.source === 'GATEWAY' && entry.destination === 'LENDER';
-      const effectiveTimeoutMs = isGatewayToLender
-        ? this.config.timeoutMs * 5
-        : this.config.timeoutMs;
+      const effectiveTimeoutMs = this.getRequestWaitTimeoutMs(entry);
 
       logger.info('Replay thread waiting for incoming request', {
         entry: entry.toString(),
@@ -335,9 +330,16 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         // while the replay thread was waiting — treat this as a handled skip, not a failure
         if (this.validator.processedIndices.has(entry.index)) {
           logger.info('Entry was mocked externally while waiting, advancing past it', {
-            entry: entry.toString()
+            entry: entry.toString(),
+            currentIndex: this.validator.currentIndex
           });
-          this.validator.advance();
+
+          // `markProcessed(entry)` may already have advanced currentIndex past this entry
+          // (for example, when an optional-repeat skip resolves the waiter). Advancing
+          // again here would incorrectly skip the next replay entry.
+          if (this.validator.currentIndex === entry.index) {
+            this.validator.advance();
+          }
           return true;
         }
         const message = `Replay mismatch: timed out waiting for ${entry.toString()}`;
@@ -368,6 +370,17 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     }
     
     return false;
+  }
+
+  getRequestWaitTimeoutMs(entry) {
+    const baseTimeoutMs = this.config.timeoutMs;
+    const perLogTagOverrideMs = RETRY_TIMEOUT_OVERRIDES[entry.logTag]
+      ? RETRY_TIMEOUT_OVERRIDES[entry.logTag] * 1000
+      : 0;
+    const isGatewayToLender = entry.source === 'GATEWAY' && entry.destination === 'LENDER';
+    const gatewayToLenderTimeoutMs = isGatewayToLender ? baseTimeoutMs * 5 : baseTimeoutMs;
+
+    return Math.max(baseTimeoutMs, gatewayToLenderTimeoutMs, perLogTagOverrideMs);
   }
   
   async triggerExternalRequestAsync(entry) {
@@ -472,6 +485,17 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         handler: 'ThemisEligibilityBatchAsync'
       });
       return await this.handleThemisEligibilityBatchAsync(incoming);
+    }
+
+    if (isThemisKfsSpecialCase(incoming.logTag) && incoming.source === 'GATEWAY' &&
+        (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
+      logger.logIncoming(incoming.source, incoming.destination, incoming.api, incoming.payload, {
+        requestId: incoming.requestId,
+        logTag: incoming.logTag,
+        lenderOrgId: incoming.lenderOrgId,
+        handler: 'ThemisKFSBatchAsync'
+      });
+      return await this.handleThemisKFSBatchAsync(incoming);
     }
 
     logger.logIncoming(incoming.source, incoming.destination, incoming.api, incoming.payload, {

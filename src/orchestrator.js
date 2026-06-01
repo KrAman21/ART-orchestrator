@@ -765,7 +765,7 @@ export class ReplayOrchestrator {
     const unprocessedCount = allThemisEntries.filter(e => !this.validator.processedIndices.has(e.index)).length;
     if (unprocessedCount === 0) {
       logger.info('All Themis-Eligibility_REQUEST calls processed, advancing log sequence');
-      this.currentIndex = Math.max(...this.validator.entries
+      this.validator.currentIndex = Math.max(...this.validator.entries
         .filter(e => e.logTag === 'Themis-Eligibility_REQUEST' && e.source === 'GATEWAY')
         .map(e => e.index)) + 1;
     }
@@ -829,7 +829,7 @@ export class ReplayOrchestrator {
     const remainingUnprocessed = kfsRequestEntries.filter(entry => !this.validator.processedIndices.has(entry.index)).length;
     if (remainingUnprocessed === 0) {
       logger.info('All Themis-KFS_REQUEST calls processed, advancing log sequence');
-      this.currentIndex = Math.max(...this.validator.entries
+      this.validator.currentIndex = Math.max(...this.validator.entries
         .filter(e => e.logTag === 'Themis-KFS_REQUEST' && e.source === 'GATEWAY')
         .map(e => e.index)) + 1;
     }

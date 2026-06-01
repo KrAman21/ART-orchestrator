@@ -1456,6 +1456,7 @@ export const API_TO_LOGTAG_MAP = {
   '/base/flipkart/fk/generateToken': { logTag:'GENERATE PARTNER AUTH TOKEN_REQUEST', api: '/base/flipkart/fk/generateToken', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/base/flipkart/fk/loanOffer': { logTag: 'LOAN OFFER API_REQUEST', api: '/base/flipkart/fk/loanOffer', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/base/flipkart/fk/loanStatus': { logTag: 'LOAN STATUS API_REQUEST', api: '/base/flipkart/fk/loanStatus', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/core/api/v2/workflows/ETBStatusCheck': { logTag: 'ETB_STATUS_API_REQUEST', api: '/core/api/v2/workflows/ETBStatusCheck', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/pb-uat-polling': { logTag: 'POLLING API :: LINE_STATUS_REQUEST', api: '/pb-uat-polling', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/profileIngestion': { logTag: 'PROFILE_INGESTION_REQUEST', api: '/profileIngestion', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/cselcdfkapi/1.0.0/credit-decision': { logTag: 'CREDIT_DECISION_REQUEST', api: '/cselcdfkapi/1.0.0/credit-decision', sourceDestination: 'GATEWAY_LENDER', headers: {} },
@@ -1497,7 +1498,6 @@ export function isAsyncParallelApi(sourceDestination, logTag) {
 
 // Orchestrator server configuration
 export const ORCHESTRATOR_CONFIG = {
-  port: parseInt(process.env.PORT, 10) || 3001,
   timeoutMs: parseInt(process.env.TIMEOUT_MS, 10) || 10000,
   autoStart: process.env.AUTO_START !== 'false'
 };
@@ -1512,11 +1512,18 @@ export const RETRY_CONFIG = {
 
 export const RETRY_TIMEOUT_OVERRIDES = {
   FETCH_OFFER_ASYNC_RESPONSE_REQUEST:
-    parseInt(process.env.FETCH_OFFER_ASYNC_RESPONSE_MAX_RETRY_SECONDS, 10) || 30,
+    parseInt(process.env.FETCH_OFFER_ASYNC_RESPONSE_MAX_RETRY_SECONDS, 10) || 90,
   'LSP-FetchOfferResponse_RESPONSE':
     parseInt(process.env.LSP_FETCH_OFFER_RESPONSE_MAX_RETRY_SECONDS, 10) || 30,
   'CHECK ELIGIBILITY STATUS API_REQUEST':
     parseInt(process.env.CHECK_ELIGIBILITY_STATUS_MAX_RETRY_SECONDS, 10) || 30,
+};
+
+export const REQUEST_TIMEOUT_OVERRIDES = {
+  'FlipKart-GetKFS_REQUEST':
+    parseInt(process.env.FLIPKART_GET_KFS_TIMEOUT_MS, 10) || 45000,
+  'LSP-GetKFS_REQUEST':
+    parseInt(process.env.LSP_GET_KFS_TIMEOUT_MS, 10) || 45000,
 };
 
 export const MOCK_CONFIG = {
@@ -1526,11 +1533,6 @@ export const MOCK_CONFIG = {
 };
 
 export const MOCKS_ENABLED = MOCK_CONFIG.enabled;
-
-export const SERVICE_PORTS = {
-  dashboard: 3002,
-  orchestrator: 3001
-};
 
 /**
  * Extract the payload from message based on log_tag type
@@ -1625,7 +1627,7 @@ export function normalizeSourceDestination(sourceDestination, logTag) {
   const normalizedLogTag = (logTag || '').toLowerCase();
   const normalizedSD = sourceDestination.toUpperCase();
 
-  if (normalizedLogTag.startsWith('themis-eligibility')) {
+  if (normalizedLogTag.startsWith('themis-eligibility') || normalizedLogTag.startsWith('themis-kfs')) {
     return 'GATEWAY_THEMIS';
   }
 
