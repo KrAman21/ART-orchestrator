@@ -694,6 +694,7 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LENDER|EarlySalary-MerchantConfirmationOnUWEncrypt_RESPONSE': { type: 'MerchantConfirmationOnUWResponse', headers: {}, encrypted: true },
   'GATEWAY_LENDER|LOAN OFFER API_REQUEST':{endpoint: '/base/flipkart/fk/loanOffer', method: 'POST', service: 'LENDER', headers: {}},
   'GATEWAY_LENDER|LOAN STATUS API_REQUEST':{endpoint: '/base/flipkart/fk/loanStatus', method: 'POST', service: 'LENDER', headers: {}},
+  'GATEWAY_LENDER|OFFER API_REQUEST':{endpoint: '', method: 'POST', service: 'LENDER', headers: {}},
 
   // ============================================================================
   // BIMAPAY LENDER APIs
@@ -1464,6 +1465,7 @@ export const API_TO_LOGTAG_MAP = {
   '/uat/partner_score':{logTag:'FK SCORE API_REQUEST', api: '/uat/partner_score', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/api/v1/leads':{logTag: 'HDB_CREATE_APPLICATION_API_REQUEST', api: '/api/v1/leads', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/api/v1/status-check':{logTag : 'HDB_APPLICATION_STATUS_API :: FETCH_OFFER_REQUEST', api: '/api/v1/status-check', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/api/v1/submit-additional-data':{logTag : 'HDB_CHECK_OFFERS_API_REQUEST', api: '/api/v1/submit-additional-data', sourceDestination: 'GATEWAY_LENDER', headers: {} },
 };
 
 // Destinations that should not be called (external services)
@@ -1624,12 +1626,7 @@ export function normalizeSourceDestination(sourceDestination, logTag) {
   const normalizedSD = sourceDestination.toUpperCase();
 
   if (normalizedLogTag.startsWith('themis-eligibility')) {
-    if (normalizedSD === 'GATEWAY_LSP') {
-      return 'GATEWAY_THEMIS';
-    }
-    if (normalizedSD === 'GATEWAY_LENDER') {
-      return 'GATEWAY_LSP';
-    }
+    return 'GATEWAY_THEMIS';
   }
 
   if (normalizedSD === 'GATEWAY' || normalizedSD === 'GATEWAY_CORE') {

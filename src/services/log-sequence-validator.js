@@ -224,25 +224,19 @@ export class LogSequenceValidator {
    * Get the current log entry we're expecting to process next
    */
   getCurrentEntry() {
-    // Skip entries that should be skipped, are already processed, or are duplicates
+    while (this.currentIndex < this.entries.length && this.processedIndices.has(this.currentIndex)) {
+      this.currentIndex++;
+    }
+
     while (this.currentIndex < this.entries.length) {
       const entry = this.entries[this.currentIndex];
       const shouldSkipEntry = entry.shouldSkip();
-      const isProcessed = this.processedIndices.has(this.currentIndex);
       const isDuplicate = this.checkDuplicate(entry);
-      
-      logger.debug('Checking entry', {
-        position: this.currentIndex,
-        logTag: entry.logTag,
-        isDuplicate: isDuplicate
-      });
-      
-      if (!shouldSkipEntry && !isProcessed && !isDuplicate) {
-        // Return entry without marking as seen
-        // Will be marked in advance() when actually processed
+
+      if (!shouldSkipEntry && !isDuplicate) {
         return entry;
       }
-      
+
       if (shouldSkipEntry) {
         logger.info('Skipping WRAPPER entry', {
           position: this.currentIndex,
@@ -257,13 +251,8 @@ export class LogSequenceValidator {
           logTag: entry.logTag,
           duplicatesSkipped: this.duplicatesSkipped
         });
-      } else {
-        logger.info('Skipping already processed entry', {
-          position: this.currentIndex,
-          originalIndex: entry.index
-        });
       }
-      
+
       this.processedIndices.add(this.currentIndex);
       this.currentIndex++;
     }

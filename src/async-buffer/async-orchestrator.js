@@ -3,11 +3,10 @@ import { BufferManager } from './buffer-manager.js';
 import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
-import { getEndpointConfig } from '../config.js';
+import { getEndpointConfig, normalizeSourceDestination } from '../config.js';
+import { isThemisEligibilitySpecialCase } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
-import { isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from '../replay-special-cases.js';
-import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
 
 function remapLoanApplicationIds(value, stateManager) {
   if (!value || typeof value !== 'object') {
@@ -29,6 +28,29 @@ function remapLoanApplicationIds(value, stateManager) {
   }
 
   return remapped;
+}
+
+function buildSyntheticThemisIneligibleResponse(lenderOrgId) {
+  return {
+    isNTC: true,
+    lowerEligibleLimit: null,
+    upperEligibleLimit: null,
+    lenderKfsDetails: null,
+    lenderDashboardOffer: null,
+    eligibilityExpiry: null,
+    ruleType: 'INTERNAL',
+    isEligible: false,
+    metaData: {
+      ruleVersion: 'ART_SYNTHETIC',
+      trace: [[{
+        name: 'ART replay synthetic fallback',
+        ruleId: 'ART_FALLBACK',
+        result: 'false',
+        errorCode: 'ART_NO_MATCHING_REPLAY_RESPONSE',
+        lenderOrgId
+      }]]
+    }
+  };
 }
 
 export class AsyncReplayOrchestrator extends ReplayOrchestrator {
@@ -114,9 +136,6 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     let didWork = false;
     
     didWork = await this.checkBufferedResponses() || didWork;
-    
-    didWork = await this.checkBufferedIncomingRequests() || didWork;
-    
     didWork = await this.processNextLogEntry() || didWork;
     
     return didWork;
@@ -137,6 +156,58 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       });
       return false;
     }
+
+    // Core replay contract for GATEWAY->LENDER:
+    // once the live _REQUEST has been buffered, matched, and validated, the later
+    // _RESPONSE step must be served from replay logs when sequence reaches it.
+    // It should not depend on a second live lender response arriving in ART.
+    if (
+      requestEntry.source === 'GATEWAY' &&
+      requestEntry.destination === 'LENDER' &&
+      currentEntry.source === 'LENDER' &&
+      currentEntry.destination === 'GATEWAY' &&
+      this.validator.processedIndices.has(requestEntry.index)
+    ) {
+      const responseContextKey = this.getContextKey(currentEntry);
+      const requestContextKey = this.getContextKey(requestEntry);
+      const contextKey = this.pendingExternalRequests.has(responseContextKey)
+        ? responseContextKey
+        : requestContextKey;
+      const pendingExternal = this.pendingExternalRequests.get(contextKey);
+
+      if (pendingExternal) {
+        clearTimeout(pendingExternal.timeoutHandle);
+        this.pendingExternalRequests.delete(contextKey);
+        pendingExternal.resolve({
+          success: true,
+          payload: transformRequest(currentEntry.payload, currentEntry.logTag)
+        });
+      }
+
+      const postResponseWebhooks = this.pendingPostResponseWebhooks?.get(contextKey);
+      if (postResponseWebhooks?.length) {
+        logger.info('Triggering queued post-response webhook(s) for replayed GATEWAY->LENDER response', {
+          contextKey,
+          webhookCount: postResponseWebhooks.length,
+          entry: currentEntry.toString()
+        });
+        await this.triggerWebhooks(postResponseWebhooks);
+        this.pendingPostResponseWebhooks.delete(contextKey);
+      }
+
+      this.validator.advance();
+      this.recordSuccess('gateway_lender_response_replay', currentEntry);
+
+      logger.info('Replayed GATEWAY->LENDER response directly from logs', {
+        requestEntry: requestEntry.toString(),
+        responseEntry: currentEntry.toString(),
+        responseContextKey,
+        requestContextKey,
+        resolvedContextKey: contextKey
+      });
+
+      return true;
+    }
     
     // Use the request's requestId to lookup in buffer
     const requestId = requestEntry.requestId;
@@ -151,7 +222,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       buffered = this.bufferManager.getResponseByMetadata(
         currentEntry.logTag,
         currentEntry.sourceDestination,
-        currentEntry.loanApplicationId
+        currentEntry.loanApplicationId,
+        currentEntry.lenderOrgId
       );
     }
     
@@ -203,87 +275,6 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     return true;
   }
   
-  async checkBufferedIncomingRequests() {
-    const currentEntry = this.validator.getCurrentEntry();
-    
-    if (!currentEntry || !currentEntry.isRequest) {
-      return false;
-    }
-    
-    const buffered = this.bufferManager.findMatchingRequest(currentEntry);
-    if (!buffered) {
-      return false;
-    }
-    
-    logger.info('Found buffered incoming request matching current entry', {
-      entry: currentEntry.toString(),
-      bufferKey: buffered.key
-    });
-    
-    try {
-      const result = await this.processBufferedIncomingRequest(buffered, currentEntry);
-      // Result is immediate - worker thread handles the actual forward
-      // The deferred will be resolved by the worker when forward completes
-      return true;
-    } catch (error) {
-      buffered.deferred.reject(error);
-      throw error;
-    }
-  }
-  
-  async processBufferedIncomingRequest(buffered, expectedEntry) {
-    const incoming = buffered.request;
-    
-    logger.info('Processing buffered incoming request', {
-      entry: expectedEntry.toString(),
-      bufferKey: buffered.key
-    });
-    
-    this.registerReplayLoanApplicationIdMappings(expectedEntry, incoming);
-
-    const comparison = this.comparePayloads(expectedEntry.payload, incoming.payload, incoming.logTag);
-    
-    if (!comparison.match) {
-      throw new Error(`Payload comparison failed: ${JSON.stringify(comparison.differences)}`);
-    }
-    
-    this.validator.advance();
-    this.recordSuccess('buffered_request_validation', expectedEntry);
-    
-    // Spawn async worker to handle the forward - don't block main thread
-    this.spawnForwardWorker(buffered, expectedEntry);
-    
-    // Return immediately - main thread continues to next log entry
-    return { success: true, async: true, message: 'Forward spawned to worker thread' };
-  }
-  
-  spawnForwardWorker(buffered, expectedEntry) {
-    const incoming = buffered.request;
-    const deferred = buffered.deferred;
-    
-    logger.info('Spawning forward worker thread', {
-      entry: expectedEntry.toString(),
-      requestId: incoming.requestId
-    });
-    
-    // Run forward in background - don't block main polling loop
-    this.forwardToDestination(incoming, expectedEntry)
-      .then(response => {
-        logger.info('Forward worker completed successfully', {
-          requestId: incoming.requestId,
-          entry: expectedEntry.toString()
-        });
-        deferred.resolve(response);
-      })
-      .catch(error => {
-        logger.error('Forward worker failed', {
-          requestId: incoming.requestId,
-          error: error.message
-        });
-        deferred.reject(error);
-      });
-  }
-  
   async processNextLogEntry() {
     const entry = this.validator.getCurrentEntry();
     
@@ -322,10 +313,51 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       await this.triggerExternalRequestAsync(entry);
       return true;
     } else if (entry.isRequest) {
-      logger.debug('Waiting for incoming request from service', {
-        entry: entry.toString()
+      // GATEWAY→LENDER calls require extra polling cycles from the Gateway before arriving;
+      // give them a longer timeout (5x default) so we don't time out prematurely.
+      const isGatewayToLender = entry.source === 'GATEWAY' && entry.destination === 'LENDER';
+      const effectiveTimeoutMs = isGatewayToLender
+        ? this.config.timeoutMs * 5
+        : this.config.timeoutMs;
+
+      logger.info('Replay thread waiting for incoming request', {
+        entry: entry.toString(),
+        timeoutMs: effectiveTimeoutMs
       });
-      return false;
+
+      const buffered = await this.bufferManager.waitForMatchingRequest(
+        entry,
+        effectiveTimeoutMs
+      );
+
+      if (!buffered) {
+        // Check if the entry was mocked/processed externally (e.g. via mockExternalRequest)
+        // while the replay thread was waiting — treat this as a handled skip, not a failure
+        if (this.validator.processedIndices.has(entry.index)) {
+          logger.info('Entry was mocked externally while waiting, advancing past it', {
+            entry: entry.toString()
+          });
+          this.validator.advance();
+          return true;
+        }
+        const message = `Replay mismatch: timed out waiting for ${entry.toString()}`;
+        logger.error('Replay request mismatch', {
+          entry: entry.toString(),
+          timeoutMs: effectiveTimeoutMs
+        });
+        this.recordFailure('request_replay_timeout', entry, message);
+        await this.fail(message);
+        return true;
+      }
+
+      try {
+        const response = await super.handleIncomingRequest(buffered.request);
+        this.bufferManager.completeIncomingRequest(buffered.key, response);
+        return true;
+      } catch (error) {
+        this.bufferManager.failIncomingRequest(buffered.key, error);
+        throw error;
+      }
     }
     
     if (entry.isResponse) {
@@ -371,8 +403,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         customHeaders,
         entry.index,
         this.getServiceUnixSocket(service),
-        entry.loanApplicationId
+        entry.loanApplicationId,
+        entry.lenderOrgId
       );
+
+      logger.logOutgoing(entry.source, entry.destination, api, transformedPayload, {
+        requestId: entry.requestId,
+        logTag: entry.logTag,
+        sourceDestination: entry.sourceDestination
+      });
       
       this.validator.advance();
       
@@ -418,7 +457,28 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   }
 
   async handleIncomingRequest(incoming) {
+    if (!this.isRunning) {
+      throw new Error('Orchestrator not running');
+    }
+
     this.recordObservedIncomingRequest(incoming);
+
+    if (isThemisEligibilitySpecialCase(incoming.logTag) && incoming.source === 'GATEWAY' &&
+        (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
+      logger.logIncoming(incoming.source, incoming.destination, incoming.api, incoming.payload, {
+        requestId: incoming.requestId,
+        logTag: incoming.logTag,
+        lenderOrgId: incoming.lenderOrgId,
+        handler: 'ThemisEligibilityBatchAsync'
+      });
+      return await this.handleThemisEligibilityBatchAsync(incoming);
+    }
+
+    logger.logIncoming(incoming.source, incoming.destination, incoming.api, incoming.payload, {
+      requestId: incoming.requestId,
+      logTag: incoming.logTag,
+      handler: 'BufferManager'
+    });
 
     logger.info('ASYNC_ORCH_RECEIVING', {
       source: incoming.source,
@@ -428,35 +488,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       logTag: incoming.logTag
     });
     
-    // Handle Themis batch requests before the generic GATEWAY->LENDER shortcut.
-    // KFS can be replayed with lender-specific routing even when the log-side request
-    // was captured under a different downstream variant.
-    if (isThemisEligibilitySpecialCase(incoming.logTag) && 
-        incoming.source === 'GATEWAY' && 
-        (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
-      logger.info('Handling Themis-Eligibility batch request asynchronously', {
-        lenderOrgId: incoming.lenderOrgId,
-        requestId: incoming.requestId
-      });
-      return await this.handleThemisEligibilityBatchAsync(incoming);
-    }
-    if (isThemisKfsSpecialCase(incoming.logTag) && 
-        incoming.source === 'GATEWAY' && 
-        (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
-      logger.info('Handling Themis-KFS batch request asynchronously', {
-        lenderOrgId: incoming.lenderOrgId,
-        requestId: incoming.requestId
-      });
-      return await this.handleThemisKFSBatchAsync(incoming);
-    }
-
-    const currentEntry = this.validator.getCurrentEntry();
-    
-    if (currentEntry && this.matchesCurrentEntry(incoming, currentEntry)) {
-      return await super.handleIncomingRequest(incoming);
-    }
-
-    // Let retry detection run before the generic GATEWAY->LENDER shortcut.
+    // Let retry detection run before buffering.
     // Some lender callbacks legitimately repeat requests that were already
     // satisfied from replay logs, and those should reuse the cached response.
     const retryResult = this.retryHandler.handleRetryRequest(incoming);
@@ -470,16 +502,31 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return retryResult;
     }
 
-    // Handle other GATEWAY->LENDER requests specially.
-    // Immediately respond with expected payload and mark entries as processed.
-    if (incoming.source === 'GATEWAY' && incoming.destination === 'LENDER') {
-      return await this.handleGatewayLenderRequestImmediate(incoming);
+    const sourceDestination = normalizeSourceDestination(
+      `${incoming.source}_${incoming.destination}`,
+      incoming.logTag
+    );
+    const parts = sourceDestination.split('_');
+    const normalizedIncoming = {
+      ...incoming,
+      source: parts[0],
+      destination: parts[1]
+    };
+
+    // If replay is already complete, ignore late straggler requests gracefully
+    if (this.validator.isComplete()) {
+      logger.warn('Ignoring late straggler request after replay completion', {
+        source: incoming.source,
+        destination: incoming.destination,
+        logTag: incoming.logTag
+      });
+      return { success: true, ignored: true };
     }
-    
-    const buffered = await this.bufferManager.addIncomingRequest(incoming);
+
+    const buffered = await this.bufferManager.addIncomingRequest(normalizedIncoming);
     
     logger.info('Request buffered for async processing', {
-      requestId: incoming.requestId,
+      requestId: normalizedIncoming.requestId,
       bufferKey: buffered.key
     });
     
@@ -538,13 +585,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     }
     
     if (!responseEntry) {
-      logger.error('No matching Themis-Eligibility response found', {
+      logger.warn('No matching Themis-Eligibility response found, returning synthetic ineligible response', {
         lenderOrgId: incoming.lenderOrgId,
         requestId: incoming.requestId
       });
       return {
-        success: false,
-        error: 'No matching response found'
+        success: true,
+        payload: buildSyntheticThemisIneligibleResponse(incoming.lenderOrgId),
+        lenderOrgId: incoming.lenderOrgId,
+        synthetic: true
       };
     }
     
@@ -561,6 +610,20 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     logger.info('Themis-Eligibility batch request validated, returning response', {
       lenderOrgId: incoming.lenderOrgId
     });
+
+    if (requestEntry && requestEntry.loanApplicationId) {
+      const parentContextKey = requestEntry.loanApplicationId;
+      if (this.asyncTracker.asyncCallTracker.has(parentContextKey)) {
+        const isComplete = this.asyncTracker.trackAsyncCompletion(parentContextKey, requestEntry);
+        logger.info('Tracked Themis-Eligibility async completion', {
+          parentContextKey,
+          lenderOrgId: incoming.lenderOrgId,
+          actual: this.asyncTracker.asyncCallTracker.get(parentContextKey)?.actual,
+          expected: this.asyncTracker.asyncCallTracker.get(parentContextKey)?.expected,
+          isComplete
+        });
+      }
+    }
     
     return {
       success: true,
@@ -643,71 +706,6 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     };
   }
   
-  async handleGatewayLenderRequestImmediate(incoming) {
-    logger.info('Handling GATEWAY->LENDER request immediately', {
-      logTag: incoming.logTag
-    });
-    
-    // Find matching request entry by logTag only
-    const requestEntry = this.validator.entries.find(entry =>
-      entry.logTag === incoming.logTag &&
-      entry.source === 'GATEWAY' &&
-      entry.destination === 'LENDER' &&
-      !this.validator.processedIndices.has(entry.index)
-    );
-    
-    if (!requestEntry) {
-      logger.warn('No matching GATEWAY->LENDER request entry found, buffering', {
-        logTag: incoming.logTag
-      });
-      // Fall back to normal buffering
-      const buffered = await this.bufferManager.addIncomingRequest(incoming);
-      return await buffered.deferred.promise;
-    }
-    
-    // Find corresponding response
-    const responseEntry = this.findCorrespondingResponse(requestEntry);
-    if (!responseEntry) {
-      logger.warn('No corresponding response found for GATEWAY->LENDER request', {
-        requestEntry: requestEntry.toString()
-      });
-      return {
-        success: false,
-        error: 'No corresponding response found'
-      };
-    }
-    
-    // Validate payload
-    const comparison = this.comparePayloads(requestEntry.payload, incoming.payload, incoming.logTag);
-    if (!comparison.match) {
-      logger.error('GATEWAY->LENDER payload mismatch', {
-        differences: comparison.differences
-      });
-      return {
-        success: false,
-        error: 'Payload mismatch'
-      };
-    }
-    
-    // Mark both entries as processed
-    this.validator.processedIndices.add(requestEntry.index);
-    this.validator.processedIndices.add(responseEntry.index);
-    this.recordSuccess('gateway_lender_request', requestEntry);
-    this.recordSuccess('gateway_lender_response', responseEntry);
-    
-    logger.info('GATEWAY->LENDER request processed immediately', {
-      requestIndex: requestEntry.index,
-      responseIndex: responseEntry.index,
-      logTag: incoming.logTag
-    });
-    
-    // Return response immediately
-    return {
-      success: true,
-      payload: transformRequest(responseEntry.payload, responseEntry.logTag)
-    };
-  }
-  
   findCorrespondingRequest(responseEntry) {
     const expectedSource = responseEntry.destination;
     const expectedDest = responseEntry.source;
@@ -732,20 +730,6 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       }
     }
     return null;
-  }
-  
-  matchesCurrentEntry(incoming, currentEntry) {
-    if (incoming.source !== currentEntry.source) return false;
-    if (incoming.destination !== currentEntry.destination) return false;
-    
-    // Normalize tags by stripping all directional suffixes for matching
-    const baseTag = (tag) => (tag || '').replace(/_REQUEST$/i, '').replace(/_RESPONSE$/i, '').replace(/_OUTGOING$/i, '').replace(/_INCOMING$/i, '');
-    
-    if (baseTag(incoming.logTag) === baseTag(currentEntry.logTag)) {
-      return true;
-    }
-    
-    return false;
   }
   
   sleep(ms) {

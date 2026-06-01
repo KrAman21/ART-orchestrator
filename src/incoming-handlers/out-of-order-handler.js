@@ -59,7 +59,20 @@ export class OutOfOrderHandler {
         return await this.processAsyncParallelCall(incoming, validation.foundInLookahead);
       }
 
-      // For other external calls, mock immediately (existing behavior)
+      // GATEWAY→LENDER calls: the Gateway will send this to ART's mock-lender endpoint
+      // naturally. ART buffers it and the replay thread's waitForMatchingRequest will
+      // match it and respond with the log response. Do NOT mock — just handle the
+      // out-of-order incoming request and keep the waiter alive for the LENDER call.
+      if (currentEntry.source === 'GATEWAY' && currentEntry.destination === 'LENDER') {
+        this.logger.info('Out-of-order while waiting for GATEWAY→LENDER, processing incoming and keeping waiter alive', {
+          waitingFor: currentEntry.toString(),
+          incoming: `${incoming.source}→${incoming.destination} ${incoming.logTag}`
+        });
+        // Process the out-of-order incoming request directly
+        return this.callbacks.handleIncomingRequest(incoming);
+      }
+
+      // For other orchestrator-initiated external calls (APP→LSP etc.), mock immediately
       this.logger.info('Need to mock external request first', {
         entry: currentEntry.toString()
       });

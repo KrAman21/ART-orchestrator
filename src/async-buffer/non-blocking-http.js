@@ -10,7 +10,7 @@ export class NonBlockingHttpClient {
     this.failedRequests = [];
   }
   
-  async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, loanApplicationId = null) {
+  async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, loanApplicationId = null, lenderOrgId = null) {
     logger.info('Non-blocking HTTP send initiated', {
       requestId,
       logTag,
@@ -40,7 +40,8 @@ export class NonBlockingHttpClient {
       endpoint,
       baseUrl,
       payload,
-      loanApplicationId
+      loanApplicationId,
+      lenderOrgId
     });
     
     requestPromise.then(response => {
@@ -50,6 +51,14 @@ export class NonBlockingHttpClient {
       const responseBodyStr = typeof response.data === 'string' 
         ? response.data 
         : JSON.stringify(response.data);
+      logger.logOutgoing('RESPONSE', baseUrl || 'unknown', endpoint, response.data, {
+        requestId,
+        logTag,
+        sourceDestination,
+        status: response.status,
+        statusText: response.statusText,
+        responseType: 'async-http-response'
+      });
       logger.info('HTTP_RESPONSE_RECEIVED', { 
         requestId, 
         logTag,
@@ -91,17 +100,17 @@ export class NonBlockingHttpClient {
           hasActiveReq: !!activeReq
         });
         this.recordFailure(activeReq, requestId, response, null, apiFailure);
-        this.bufferManager.addResponse(requestId, response, true, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId });
+        this.bufferManager.addResponse(requestId, response, true, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId, lenderOrgId: activeReq?.lenderOrgId });
       } else {
         logger.info('Non-blocking request completed successfully', { requestId, status: response.status });
-        this.bufferManager.addResponse(requestId, response, false, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId });
+        this.bufferManager.addResponse(requestId, response, false, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId, lenderOrgId: activeReq?.lenderOrgId });
       }
     }).catch(error => {
       const activeReq = this.activeRequests.get(requestId);
       this.activeRequests.delete(requestId);
       logger.error('Non-blocking request exception', { requestId, error: error.message, hasActiveReq: !!activeReq });
       this.recordFailure(activeReq, requestId, { error: true, message: error.message }, error);
-      this.bufferManager.addResponse(requestId, { error: true, message: error.message }, true, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId });
+      this.bufferManager.addResponse(requestId, { error: true, message: error.message }, true, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId, lenderOrgId: activeReq?.lenderOrgId });
     });
     
     await new Promise(resolve => setImmediate(resolve));

@@ -38,17 +38,29 @@ function getDefaultLogDir() {
   return candidates.find(canWriteToDir) || '/tmp/art-orchestrator';
 }
 
+const LOG_DIR = getDefaultLogDir();
 const LOG_FILE_PATH = process.env.LOG_FILE
   ? resolve(process.cwd(), process.env.LOG_FILE)
-  : resolve(getDefaultLogDir(), LOG_FILE);
+  : resolve(LOG_DIR, LOG_FILE);
+
+const INCOMING_LOG_FILE = resolve(LOG_DIR, 'art-incoming.log');
+const OUTGOING_LOG_FILE = resolve(LOG_DIR, 'art-outgoing.log');
+
+function initLogFile(filePath) {
+  try {
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, '', { encoding: 'utf-8' });
+  } catch (_) {}
+}
 
 const GLOBAL_KEY = '__art_logger_initialized__';
 if (LOG_TO_FILE && !global[GLOBAL_KEY]) {
   try {
-    mkdirSync(dirname(LOG_FILE_PATH), { recursive: true });
-    writeFileSync(LOG_FILE_PATH, '', { encoding: 'utf-8' });
+    initLogFile(LOG_FILE_PATH);
+    initLogFile(INCOMING_LOG_FILE);
+    initLogFile(OUTGOING_LOG_FILE);
     global[GLOBAL_KEY] = true;
-    console.log(`[LOGGER_INIT] Initialized log file: ${LOG_FILE_PATH}`);
+    console.log(`[LOGGER_INIT] Initialized log files: ${LOG_FILE_PATH}, ${INCOMING_LOG_FILE}, ${OUTGOING_LOG_FILE}`);
   } catch (error) {
     console.error(`[LOGGER_INIT] Failed: ${error.message}`);
   }
@@ -65,12 +77,22 @@ function formatTimestamp() {
   return new Date().toISOString();
 }
 
-function logToFile(logEntry) {
+function logToFile(logEntry, filePath = LOG_FILE_PATH) {
   if (!LOG_TO_FILE) return;
 
   try {
     const line = JSON.stringify(logEntry) + '\n';
-    appendFileSync(LOG_FILE_PATH, line, { encoding: 'utf-8' });
+    appendFileSync(filePath, line, { encoding: 'utf-8' });
+  } catch (_) {}
+}
+
+function logToDirectionFile(direction, logEntry) {
+  if (!LOG_TO_FILE) return;
+  const filePath = direction === 'incoming' ? INCOMING_LOG_FILE : OUTGOING_LOG_FILE;
+  try {
+    const entry = { ...logEntry, _direction: direction, _timestamp: formatTimestamp() };
+    const line = JSON.stringify(entry) + '\n';
+    appendFileSync(filePath, line, { encoding: 'utf-8' });
   } catch (_) {}
 }
 
@@ -168,6 +190,32 @@ export const logger = {
 
   logError: (error, context = {}) => {
     log('ERROR', error.message, { stack: error.stack, ...context });
+  },
+
+  logIncoming: (source, destination, api, payload, meta = {}) => {
+    const entry = {
+      timestamp: formatTimestamp(),
+      direction: 'incoming',
+      source,
+      destination,
+      api,
+      payload,
+      ...meta
+    };
+    logToDirectionFile('incoming', entry);
+  },
+
+  logOutgoing: (source, destination, api, payload, meta = {}) => {
+    const entry = {
+      timestamp: formatTimestamp(),
+      direction: 'outgoing',
+      source,
+      destination,
+      api,
+      payload,
+      ...meta
+    };
+    logToDirectionFile('outgoing', entry);
   }
 };
 

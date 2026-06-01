@@ -483,7 +483,10 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     return {
       success: !completionResult.timedOut && artResults.failed === 0,
       logCount: finalFilteredLogs.length,
-      artResults
+      artResults,
+      error: !completionResult.timedOut && artResults.failed === 0
+        ? null
+        : (apiErrorMessage || stopReason || artResults.failureReason || 'ART replay failed')
     };
 
   } catch (error) {
@@ -724,6 +727,10 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
       phase: 'OPTIONAL_REPEAT_SKIP'
     }
   );
+
+  if (typeof orchestrator.bufferManager?.skipWaiter === 'function') {
+    orchestrator.bufferManager.skipWaiter(currentEntry);
+  }
 
   orchestrator.validator.markProcessed(currentEntry);
   if (responseEntry) {

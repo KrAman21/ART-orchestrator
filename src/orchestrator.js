@@ -100,7 +100,9 @@ export class ReplayOrchestrator {
         findCorrespondingResponse: this.findCorrespondingResponse.bind(this),
         comparePayloads: this.comparePayloads.bind(this),
         fail: this.fail.bind(this),
-        isAsyncParallelCall: this.isAsyncParallelCall.bind(this)
+        isAsyncParallelCall: this.isAsyncParallelCall.bind(this),
+        mockExternalRequest: this.mockExternalRequest.bind(this),
+        handleIncomingRequest: this.handleIncomingRequest.bind(this)
       }
     });
 
@@ -355,6 +357,16 @@ export class ReplayOrchestrator {
     const expectedEntry = this.validator.getCurrentEntry();
 
     if (!expectedEntry) {
+      // If the polling loop has already completed, this is a late straggler arriving
+      // after all logs were processed — ignore it gracefully instead of failing.
+      if (this.validator.isComplete()) {
+        logger.warn('Ignoring late straggler request after replay completion', {
+          source: incoming.source,
+          destination: incoming.destination,
+          logTag: incoming.logTag
+        });
+        return { success: true, ignored: true };
+      }
       return await this.fail('No more entries to process - unexpected request');
     }
 

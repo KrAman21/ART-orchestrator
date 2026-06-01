@@ -259,7 +259,9 @@ export class RequestForwarder {
       });
 
       // Mark entries as processed
-      this.validator.advance(); // request
+      // NOTE: advance() for the request was already called in handleIncomingRequest (orchestrator.js:516)
+      // before forwardToDestination is invoked. Calling it again here would skip the NEXT unrelated
+      // entry in the sequence (e.g., an APP_WRAPPER polling request interleaved between LENDER request/response).
       this.validator.markProcessed(expectedResponse); // response
 
       // Track async completion for count-based handling
@@ -281,6 +283,18 @@ export class RequestForwarder {
       destination,
       api,
       requestId: incoming.requestId
+    });
+    this.logger.logOutgoing(incoming.source, incoming.destination, api, incoming.payload, {
+      requestId: incoming.requestId,
+      logTag: expectedEntry.logTag,
+      sourceDestination: expectedEntry.sourceDestination,
+      logIndex: expectedEntry.index
+    });
+    this.logger.info('Service invoked', {
+      destination,
+      api,
+      requestId: incoming.requestId,
+      logTag: expectedEntry.logTag
     });
 
     // Get endpoint config for custom headers
@@ -366,6 +380,15 @@ export class RequestForwarder {
         expectedEntry.index,
         this.callbacks.getServiceUnixSocket(endpointConfig?.service || destination)
       );
+
+      this.logger.info('Response received from service', {
+        destination,
+        api: endpoint,
+        requestId: incoming.requestId,
+        logTag: expectedEntry.logTag,
+        status: serviceResponse?.status || null,
+        hasError: !!serviceResponse?.error
+      });
 
       const apiFailure = this.checkApiFailure(serviceResponse);
 

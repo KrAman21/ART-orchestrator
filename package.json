@@ -9,6 +9,7 @@
     "dashboard": "node dashboard.js",
     "start:multiplexer": "node src/dashboard/start-multiplexer.js",
     "dev": "node --watch src/index.js",
+    "test": "node --test",
     "test-syntax": "node --check src/index.js && node --check dashboard.js && node --check src/dashboard/multiplexer.js && node --check src/dashboard/art-runner.js && node --check src/services/http-client.js"
   },
   "dependencies": {
