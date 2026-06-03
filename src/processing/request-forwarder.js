@@ -397,10 +397,10 @@ export class RequestForwarder {
 
       const apiFailure = this.checkApiFailure(serviceResponse);
 
-      if (serviceResponse && (serviceResponse.error || serviceResponse.status !== 200)) {
+      if (serviceResponse && (serviceResponse.error || serviceResponse.status !== 200 || apiFailure)) {
         let errorMsg;
         if (apiFailure) {
-          errorMsg = `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`;
+          errorMsg = `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`;
         } else if (serviceResponse.error) {
           errorMsg = `HTTP request failed: ${serviceResponse.message}`;
         } else {
@@ -430,7 +430,7 @@ export class RequestForwarder {
             requestPayload: transformedPayload,
             error: serviceResponse.error || !!apiFailure || true,
             errorMessage: apiFailure 
-              ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`
+              ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`
               : (serviceResponse.message || errorMsg),
             errorCode: apiFailure?.error_code || apiFailure?.code || null,
             errorStack: null,
@@ -755,9 +755,10 @@ export class RequestForwarder {
         data = JSON.parse(data);
       }
       
-      const status = data.status || data.Status || null;
+      const payload = data.payload || data.Payload || null;
+      const status = data.status || data.Status || payload?.status || payload?.Status || null;
       if (status && (status === 'FAILURE' || status === 'FAILED' || status === 'ERROR')) {
-        return data.error || data.Error || { message: 'API returned failure status', status };
+        return data.error || data.Error || payload?.error || payload?.Error || { message: 'API returned failure status', status };
       }
       
       return null;

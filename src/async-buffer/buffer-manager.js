@@ -44,7 +44,7 @@ export class BufferManager {
 
   extractCorrelationIdentifiers(request = {}) {
     return {
-      requestId: request.requestId || request.request_id || null,
+      requestId: request.requestId || request.request_id || request.payload?.requestId || request.payload?.request_id || null,
       traceId: request.traceId || request.trace_id || request.payload?.traceId || request.payload?.trace_id || null,
       sequenceId: request.sequenceId || request.sequence_id || request.headers?.['x-sequence-id'] || null,
       loanApplicationId: request.loanApplicationId || request.loan_application_id || request.payload?.loanApplicationId || request.payload?.loan_application_id || null,

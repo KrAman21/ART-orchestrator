@@ -58,7 +58,7 @@ export function createServer(orchestrator) {
       const api = '/' + req.params.api;
       console.log(`Handling API: ${api}`);
       const payload = req.body;
-      const requestId = req.headers['x-request-id'] || req.body.request_id;
+      const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;
       
 
       // Determine source/destination and logTag from API endpoint mapping

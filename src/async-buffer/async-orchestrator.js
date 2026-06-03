@@ -3,27 +3,30 @@ import { BufferManager } from './buffer-manager.js';
 import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
-import { getEndpointConfig, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES } from '../config.js';
+import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES } from '../config.js';
 import { isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
 
-function remapLoanApplicationIds(value, stateManager) {
+function remapReplayIds(value, stateManager) {
   if (!value || typeof value !== 'object') {
     return value;
   }
 
   if (Array.isArray(value)) {
-    return value.map(item => remapLoanApplicationIds(item, stateManager));
+    return value.map(item => remapReplayIds(item, stateManager));
   }
 
   const remapped = {};
+  const mappedLenderId = getLenderId(value.lender_org_id || value.lenderOrgId);
 
   for (const [key, nestedValue] of Object.entries(value)) {
     if ((key === 'loanApplicationId' || key === 'loan_application_id') && typeof nestedValue === 'string') {
       remapped[key] = stateManager.getMappedLoanApplicationId(nestedValue);
+    } else if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
+      remapped[key] = mappedLenderId;
     } else {
-      remapped[key] = remapLoanApplicationIds(nestedValue, stateManager);
+      remapped[key] = remapReplayIds(nestedValue, stateManager);
     }
   }
 
@@ -32,6 +35,8 @@ function remapLoanApplicationIds(value, stateManager) {
 
 function buildSyntheticThemisIneligibleResponse(lenderOrgId) {
   return {
+    lenderOrgId,
+    lenderOrgId,
     isNTC: true,
     lowerEligibleLimit: null,
     upperEligibleLimit: null,
@@ -394,7 +399,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       await ensureAppCorePreconditions(entry, customHeaders);
       const service = endpointConfig?.service || entry.destination;
       
-      const remappedPayload = remapLoanApplicationIds(entry.payload, this.stateManager);
+      const remappedPayload = remapReplayIds(entry.payload, this.stateManager);
       const transformedPayload = transformRequest(remappedPayload, entry.logTag);
       
       logger.info('ORCH_SENDING_ASYNC', {
@@ -476,6 +481,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     this.recordObservedIncomingRequest(incoming);
 
+    logger.info('ASYNC_ORCH_RECEIVING', {
+      source: incoming.source,
+      destination: incoming.destination,
+      api: incoming.api,
+      requestId: incoming.requestId,
+      logTag: incoming.logTag,
+      lenderOrgId: incoming.lenderOrgId
+    });
+
     if (isThemisEligibilitySpecialCase(incoming.logTag) && incoming.source === 'GATEWAY' &&
         (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
       logger.logIncoming(incoming.source, incoming.destination, incoming.api, incoming.payload, {
@@ -504,13 +518,45 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       handler: 'BufferManager'
     });
 
-    logger.info('ASYNC_ORCH_RECEIVING', {
-      source: incoming.source,
-      destination: incoming.destination,
-      api: incoming.api,
-      requestId: incoming.requestId,
-      logTag: incoming.logTag
-    });
+    const syntheticCompatibilityResponse = this.maybeHandleSyntheticFibeGenerateToken(incoming);
+    if (syntheticCompatibilityResponse) {
+      logger.info('Handled incoming request with synthetic compatibility response', {
+        source: incoming.source,
+        destination: incoming.destination,
+        logTag: incoming.logTag,
+        lenderOrgId: incoming.lenderOrgId,
+        requestId: incoming.requestId
+      });
+      return syntheticCompatibilityResponse;
+    }
+
+    const syntheticCheckoutStatusResponse = this.maybeHandleSyntheticFibeCheckoutStatus(incoming);
+    if (syntheticCheckoutStatusResponse) {
+      logger.info('Handled FIBE checkout status with synthetic compatibility response', {
+        source: incoming.source,
+        destination: incoming.destination,
+        logTag: incoming.logTag,
+        lenderOrgId: incoming.lenderOrgId,
+        requestId: incoming.requestId
+      });
+      return syntheticCheckoutStatusResponse;
+    }
+
+    const loanApplicationDataResponse = await this.maybePassThroughFetchLoanApplicationData(incoming);
+    if (loanApplicationDataResponse) {
+      logger.info('Handled fetchLoanApplicationData with LSP pass-through response', {
+        source: incoming.source,
+        destination: incoming.destination,
+        logTag: incoming.logTag,
+        requestId: incoming.requestId
+      });
+      return loanApplicationDataResponse;
+    }
+
+    const directGatewayLenderResponse = await this.maybeHandleCurrentGatewayLenderRequest(incoming);
+    if (directGatewayLenderResponse) {
+      return directGatewayLenderResponse;
+    }
     
     // Let retry detection run before buffering.
     // Some lender callbacks legitimately repeat requests that were already
@@ -564,6 +610,46 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         error: error.message
       };
     }
+  }
+
+  async maybeHandleCurrentGatewayLenderRequest(incoming) {
+    const sourceDestination = normalizeSourceDestination(
+      `${incoming.source}_${incoming.destination}`,
+      incoming.logTag
+    );
+    const [source, destination] = sourceDestination.split('_');
+
+    if (source !== 'GATEWAY' || destination !== 'LENDER') {
+      return null;
+    }
+
+    const currentEntry = this.validator.getCurrentEntry();
+    if (
+      !currentEntry?.isRequest ||
+      currentEntry.source !== 'GATEWAY' ||
+      currentEntry.destination !== 'LENDER'
+    ) {
+      return null;
+    }
+
+    const normalizedIncoming = {
+      ...incoming,
+      source,
+      destination
+    };
+
+    if (!this.validator.matchesExpected(currentEntry, normalizedIncoming)) {
+      return null;
+    }
+
+    logger.info('Processing current GATEWAY->LENDER request immediately to unblock nested gateway call', {
+      entry: currentEntry.toString(),
+      requestId: incoming.requestId,
+      logTag: incoming.logTag,
+      lenderOrgId: incoming.lenderOrgId
+    });
+
+    return await super.handleIncomingRequest(incoming);
   }
   
   async handleThemisEligibilityBatchAsync(incoming) {
@@ -635,9 +721,9 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       lenderOrgId: incoming.lenderOrgId
     });
 
-    if (requestEntry && requestEntry.loanApplicationId) {
-      const parentContextKey = requestEntry.loanApplicationId;
-      if (this.asyncTracker.asyncCallTracker.has(parentContextKey)) {
+    if (requestEntry) {
+      const parentContextKey = requestEntry.orderId || requestEntry.loanApplicationId;
+      if (parentContextKey && this.asyncTracker.asyncCallTracker.has(parentContextKey)) {
         const isComplete = this.asyncTracker.trackAsyncCompletion(parentContextKey, requestEntry);
         logger.info('Tracked Themis-Eligibility async completion', {
           parentContextKey,

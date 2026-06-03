@@ -1,4 +1,4 @@
-import { getEndpointConfig } from '../config.js';
+import { getEndpointConfig, getLenderId } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
@@ -9,22 +9,25 @@ import {
   matchesRequestContext
 } from '../services/response-matcher.js';
 
-function remapLoanApplicationIds(value, stateManager) {
+function remapReplayIds(value, stateManager) {
   if (!value || typeof value !== 'object') {
     return value;
   }
 
   if (Array.isArray(value)) {
-    return value.map(item => remapLoanApplicationIds(item, stateManager));
+    return value.map(item => remapReplayIds(item, stateManager));
   }
 
   const remapped = {};
+  const mappedLenderId = getLenderId(value.lender_org_id || value.lenderOrgId);
 
   for (const [key, nestedValue] of Object.entries(value)) {
     if ((key === 'loanApplicationId' || key === 'loan_application_id') && typeof nestedValue === 'string') {
       remapped[key] = stateManager.getMappedLoanApplicationId(nestedValue);
+    } else if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
+      remapped[key] = mappedLenderId;
     } else {
-      remapped[key] = remapLoanApplicationIds(nestedValue, stateManager);
+      remapped[key] = remapReplayIds(nestedValue, stateManager);
     }
   }
 
@@ -197,7 +200,7 @@ export class LogProcessor {
       const sourceDestinationForRequest = entry.originalSourceDestination || entry.sourceDestination;
 
       // Transform masked values in payload before sending
-      const remappedPayload = remapLoanApplicationIds(entry.payload, this.stateManager);
+      const remappedPayload = remapReplayIds(entry.payload, this.stateManager);
       const transformedPayload = transformRequest(remappedPayload, entry.logTag);
 
       // Log API call before making request

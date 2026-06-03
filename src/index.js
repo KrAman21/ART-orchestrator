@@ -80,81 +80,82 @@ async function resolveOrderList() {
   const configuredFetchInputs = getConfiguredFetchInputs();
 
   if (configuredFetchInputs) {
-    const answers = configuredFetchInputs;
-    const minutesBack = answers.minutesBack;
-    const logDelayMinutes = 5;
-    const endDate = new Date(Date.now() - logDelayMinutes * 60 * 1000);
-    const startDate = new Date(endDate.getTime() - minutesBack * 60 * 1000);
-    const startDateStr = startDate.toISOString();
-    const endDateStr = endDate.toISOString();
-
-    console.log('\n========================================');
-    console.log('Fetching Order IDs from QAPI');
-    console.log('========================================');
-    console.log(`Merchant: ${answers.merchantId}`);
-    console.log(`Lookback: ${minutesBack} minutes`);
-    console.log(`Log Delay Offset: ${logDelayMinutes} minutes`);
-    console.log(`Date Range: ${startDateStr} to ${endDateStr}`);
-    if (answers.flowType) {
-      console.log(`Flow Type: ${answers.flowType}`);
-    }
-    if (answers.subType) {
-      console.log(`Sub Type: ${answers.subType}`);
-    }
-    if (answers.orderLimit) {
-      console.log(`Limit: ${answers.orderLimit} orders`);
-    }
-    console.log('========================================\n');
-
-    const qapiResult = await fetchOrderIdsFromQAPI(
-      startDateStr,
-      endDateStr,
-      [answers.merchantId],
-      {
-        merchantId: answers.merchantId,
-        flowType: answers.flowType,
-        subType: answers.subType
-      }
-    );
-
-    if (!qapiResult.success) {
-      throw new Error(`Failed to fetch order IDs: ${qapiResult.error}`);
-    }
-
-    if (qapiResult.count === 0) {
-      console.log('No order IDs found from QAPI');
-      return [];
-    }
-
-    let orders = qapiResult.orders;
-    if (answers.orderLimit && orders.length > answers.orderLimit) {
-      orders = orders.slice(0, answers.orderLimit);
-      console.log(`Limited to first ${answers.orderLimit} orders`);
-    }
-
-    const orderList = orders.map((order) => ({
-      merchantId: order.merchantId,
-      orderId: order.orderId
-    }));
-
-    console.log(`Fetched ${orderList.length} orders from QAPI`);
-    console.log('\nSample orders:');
-    orderList.slice(0, 5).forEach((order, index) => {
-      console.log(`  ${index + 1}. ${order.orderId} (${order.merchantId})`);
-    });
-    if (orderList.length > 5) {
-      console.log(`  ... and ${orderList.length - 5} more`);
-    }
-    console.log('');
-
-    return orderList;
+    return fetchOrderListFromQAPI(configuredFetchInputs);
   }
 
   const answers = await askInteractiveConfig();
-  return answers.orderList.map((orderId) => ({
-    merchantId: answers.merchantId,
-    orderId
+  return fetchOrderListFromQAPI(answers);
+}
+
+async function fetchOrderListFromQAPI(answers) {
+  const minutesBack = answers.minutesBack;
+  const logDelayMinutes = 5;
+  const endDate = new Date(Date.now() - logDelayMinutes * 60 * 1000);
+  const startDate = new Date(endDate.getTime() - minutesBack * 60 * 1000);
+  const startDateStr = startDate.toISOString();
+  const endDateStr = endDate.toISOString();
+
+  console.log('\n========================================');
+  console.log('Fetching Order IDs from QAPI');
+  console.log('========================================');
+  console.log(`Merchant: ${answers.merchantId}`);
+  console.log(`Lookback: ${minutesBack} minutes`);
+  console.log(`Log Delay Offset: ${logDelayMinutes} minutes`);
+  console.log(`Date Range: ${startDateStr} to ${endDateStr}`);
+  if (answers.flowType) {
+    console.log(`Flow Type: ${answers.flowType}`);
+  }
+  if (answers.subType) {
+    console.log(`Sub Type: ${answers.subType}`);
+  }
+  if (answers.orderLimit) {
+    console.log(`Limit: ${answers.orderLimit} orders`);
+  }
+  console.log('========================================\n');
+
+  const qapiResult = await fetchOrderIdsFromQAPI(
+    startDateStr,
+    endDateStr,
+    [answers.merchantId],
+    {
+      merchantId: answers.merchantId,
+      flowType: answers.flowType,
+      subType: answers.subType
+    }
+  );
+
+  if (!qapiResult.success) {
+    throw new Error(`Failed to fetch order IDs: ${qapiResult.error}`);
+  }
+
+  const fetchedOrders = Array.isArray(qapiResult.orders) ? qapiResult.orders : [];
+  if (fetchedOrders.length === 0) {
+    console.log('No order IDs found from QAPI');
+    return [];
+  }
+
+  let orders = fetchedOrders;
+  if (answers.orderLimit && orders.length > answers.orderLimit) {
+    orders = orders.slice(0, answers.orderLimit);
+    console.log(`Limited to first ${answers.orderLimit} orders`);
+  }
+
+  const orderList = orders.map((order) => ({
+    merchantId: order.merchantId,
+    orderId: order.orderId
   }));
+
+  console.log(`Fetched ${orderList.length} orders from QAPI`);
+  console.log('\nSample orders:');
+  orderList.slice(0, 5).forEach((order, index) => {
+    console.log(`  ${index + 1}. ${order.orderId} (${order.merchantId})`);
+  });
+  if (orderList.length > 5) {
+    console.log(`  ... and ${orderList.length - 5} more`);
+  }
+  console.log('');
+
+  return orderList;
 }
 
 async function main() {

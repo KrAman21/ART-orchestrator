@@ -2,6 +2,7 @@ import { logger } from '../utils/logger.js';
 import { MOCK_CONFIG, QAPI_CONFIG } from '../config.js';
 import { fetchS3TraceLogs as fetchS3TraceLogsFromClient } from '../log-fetcher/s3-trace-logs-client.js';
 import { unixSocketRequest } from './unix-socket-client.js';
+import crypto from 'crypto';
 
 export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, timeoutMs = 30000) {
   const parts = sourceDestination?.split('_') || [];
@@ -31,6 +32,12 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   };
+
+  // The payload may be transformed after we receive the original request.
+  // Let the HTTP client recalculate body-specific/hop-by-hop headers.
+  for (const headerName of ['content-length', 'Content-Length', 'host', 'Host', 'connection', 'Connection']) {
+    delete headers[headerName];
+  }
 
   if (requestId) {
     headers['x-request-id'] = requestId;
@@ -65,32 +72,35 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       contentType: headers['Content-Type']
     });
 
-    let response;
-    if (unixSocket) {
-      logger.info('Using Unix socket for request', { socket: unixSocket, serviceUrl: url, timeoutMs });
-      const socketResponse = await unixSocketRequest(unixSocket, baseUrl, endpoint, {
+    const sendRequest = async (requestBody) => {
+      if (unixSocket) {
+        logger.info('Using Unix socket for request', { socket: unixSocket, serviceUrl: url, timeoutMs });
+        const socketResponse = await unixSocketRequest(unixSocket, baseUrl, endpoint, {
+          method,
+          body: requestBody,
+          headers,
+          timeout: timeoutMs
+        });
+        return {
+          ok: socketResponse.ok,
+          status: socketResponse.status,
+          statusText: socketResponse.statusText,
+          json: () => Promise.resolve(socketResponse.data),
+          headers: new Map(Object.entries(socketResponse.headers || {}))
+        };
+      }
+
+      return fetch(url, {
         method,
-        body,
         headers,
-        timeout: timeoutMs
-      });
-      response = {
-        ok: socketResponse.ok,
-        status: socketResponse.status,
-        statusText: socketResponse.statusText,
-        json: () => Promise.resolve(socketResponse.data),
-        headers: new Map(Object.entries(socketResponse.headers || {}))
-      };
-    } else {
-      response = await fetch(url, {
-        method,
-        headers,
-        body,
+        body: requestBody,
         signal: AbortSignal.timeout(timeoutMs)
       });
-    }
+    };
 
-    const data = await response.json().catch(() => null);
+    let response = await sendRequest(body);
+
+    let data = await response.json().catch(() => null);
 
     logger.info('HTTP_RESPONSE_FULL_BODY', {
       requestId,
@@ -100,6 +110,46 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       data: data,
       dataString: data ? JSON.stringify(data) : null
     });
+
+    if (
+      sourceDestination === 'APP_CORE' &&
+      method !== 'GET' &&
+      response.status === 400 &&
+      data?.expectedValue === 'String' &&
+      data?.actualValue === 'Object' &&
+      body
+    ) {
+      const requestPayload = {
+        payload: payload ?? {},
+        header: {
+          'X-Merchant-Id': merchantId || payload?.merchantId || payload?.merchant_id || 'flipkart',
+          ...(payload?.clientAuthToken ? { 'X-Client-Auth-Token': payload.clientAuthToken } : {}),
+          ...customHeaders
+        },
+        timeStamp: new Date().toISOString(),
+        requestId: requestId || payload?.requestId || crypto.randomUUID()
+      };
+      const retryBody = JSON.stringify(JSON.stringify(requestPayload));
+      logger.warn('Retrying APP_CORE request as unencrypted JwtPayload text after LSP type mismatch', {
+        requestId,
+        endpoint,
+        logTag,
+        envelopeRequestId: requestPayload.requestId
+      });
+
+      response = await sendRequest(retryBody);
+      data = await response.json().catch(() => null);
+
+      logger.info('HTTP_RESPONSE_FULL_BODY', {
+        requestId,
+        url,
+        status: response.status,
+        statusText: response.statusText,
+        data: data,
+        dataString: data ? JSON.stringify(data) : null,
+        retry: 'APP_CORE_UNENCRYPTED_JWT_TEXT'
+      });
+    }
 
     logger.debug('HTTP response received', {
       status: response.status,

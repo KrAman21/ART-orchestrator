@@ -74,7 +74,7 @@ export class NonBlockingHttpClient {
       });
       
       const apiFailure = this.checkApiFailure(response);
-      const hasFailure = response.error || response.status >= 500;
+      const hasFailure = response.error || response.status >= 500 || !!apiFailure;
       
       logger.info('Non-blocking request result', { 
         requestId, 
@@ -89,7 +89,7 @@ export class NonBlockingHttpClient {
       
       if (hasFailure) {
         const errorMsg = apiFailure 
-          ? `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`
+          ? `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`
           : response.message;
         logger.error('Non-blocking request failed - recording', { 
           requestId, 
@@ -145,7 +145,7 @@ export class NonBlockingHttpClient {
       requestPayload: activeReq.payload,
       error: response.error || !!apiFailure || true,
       errorMessage: apiFailure 
-        ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`
+        ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`
         : (response.message || (exception && exception.message) || 'Unknown error'),
       errorCode: apiFailure?.error_code || apiFailure?.code || null,
       errorStack: exception && exception.stack,
@@ -186,11 +186,12 @@ export class NonBlockingHttpClient {
         }
       }
       
-      const status = data.status || data.Status || null;
+      const payload = data.payload || data.Payload || null;
+      const status = data.status || data.Status || payload?.status || payload?.Status || null;
       logger.debug('Checking API status', { status, dataType: typeof data, hasStatus: !!status });
       
       if (status && (status === 'FAILURE' || status === 'FAILED' || status === 'ERROR')) {
-        const errorInfo = data.error || data.Error || { message: 'API returned failure status', status };
+        const errorInfo = data.error || data.Error || payload?.error || payload?.Error || { message: 'API returned failure status', status };
         logger.info('API failure detected', { status, error: errorInfo });
         return errorInfo;
       }

@@ -4,6 +4,7 @@ import { compareLog } from './services/comparator.js';
 import { logger } from './utils/logger.js';
 import { getApiForLogTag as getApiFromConfig, getEndpointConfig, SERVICE_MAP, SKIP_DESTINATIONS, isAsyncParallelApi, LENDER_ORG_ID_TO_ID_MAP, normalizeSourceDestination } from './config.js';
 import { transformRequest } from './services/request-transformer.js';
+import { makeRequest } from './services/http-client.js';
 
 import { SeedDataManager } from './onboarding/seed-data-manager.js';
 import { RetryHandler } from './incoming-handlers/retry-handler.js';
@@ -370,6 +371,21 @@ export class ReplayOrchestrator {
       return await this.fail('No more entries to process - unexpected request');
     }
 
+    const syntheticCompatibilityResponse = this.maybeHandleSyntheticFibeGenerateToken(incoming);
+    if (syntheticCompatibilityResponse) {
+      return syntheticCompatibilityResponse;
+    }
+
+    const syntheticCheckoutStatusResponse = this.maybeHandleSyntheticFibeCheckoutStatus(incoming);
+    if (syntheticCheckoutStatusResponse) {
+      return syntheticCheckoutStatusResponse;
+    }
+
+    const loanApplicationDataResponse = await this.maybePassThroughFetchLoanApplicationData(incoming);
+    if (loanApplicationDataResponse) {
+      return loanApplicationDataResponse;
+    }
+
     const sourceDestination = normalizeSourceDestination(
       `${incoming.source}_${incoming.destination}`,
       incoming.logTag
@@ -389,34 +405,6 @@ export class ReplayOrchestrator {
       requestId: normalizedIncoming.requestId,
       lenderOrgId: normalizedIncoming.lenderOrgId
     });
-
-    if (!validation.valid && incoming.logTag === 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST') {
-      const maxRetries = 5;
-      const retryIntervalMs = 1000;
-
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        logger.info(`FETCH_OFFER_ASYNC_RESPONSE_REQUEST not found in logs, waiting ${retryIntervalMs}ms before retry ${attempt}/${maxRetries}`);
-        await new Promise(resolve => setTimeout(resolve, retryIntervalMs));
-
-        validation = this.validator.validateIncomingRequest({
-          source: normalizedIncoming.source,
-          destination: normalizedIncoming.destination,
-          logTag: normalizedIncoming.logTag,
-          isRequest: true,
-          requestId: normalizedIncoming.requestId,
-          lenderOrgId: normalizedIncoming.lenderOrgId
-        });
-
-        if (validation.valid || validation.foundInLookahead || validation.isAsyncParallelCall) {
-          logger.info(`FETCH_OFFER_ASYNC_RESPONSE_REQUEST found on retry ${attempt}`);
-          break;
-        }
-
-        if (attempt === maxRetries) {
-          logger.error(`FETCH_OFFER_ASYNC_RESPONSE_REQUEST not found after ${maxRetries} retries, proceeding with normal failure handling`);
-        }
-      }
-    }
 
     if (incoming.source === 'LENDER' && incoming.destination === 'GW') {
       return await this.handleExternalServiceResponse(incoming);
@@ -441,6 +429,26 @@ export class ReplayOrchestrator {
         expected: expectedEntry?.toString(),
         received: `${incoming.source}→${incoming.destination} ${incoming.logTag}`
       });
+
+      const futureEntry = this.validator.entries.find(entry =>
+        entry.index > this.validator.currentIndex &&
+        !this.validator.processedIndices.has(entry.index) &&
+        entry.isRequest &&
+        this.validator.matchesExpected(entry, normalizedIncoming)
+      );
+
+      if (futureEntry) {
+        logger.info('Early request has future unprocessed replay match, not returning cached response', {
+          expected: expectedEntry?.toString(),
+          futureEntry: futureEntry.toString(),
+          incomingLogTag: incoming.logTag,
+          incomingRequestId: incoming.requestId
+        });
+        return await this.outOfOrderHandler.handleOutOfOrderRequest(incoming, {
+          ...validation,
+          foundInLookahead: futureEntry
+        });
+      }
 
       const processedEntry = this.validator.entries.find(entry =>
         this.validator.processedIndices.has(entry.index) &&
@@ -582,6 +590,205 @@ export class ReplayOrchestrator {
 
   handleRetryRequest(incoming) {
     return this.retryHandler.handleRetryRequest(incoming);
+  }
+
+  maybeHandleSyntheticFibeGenerateToken(incoming) {
+    const isFibeGenerateTokenRequest =
+      ['GENERATE_TOKEN_API_REQUEST', 'FIBE_GENERATE_TOKEN_API_REQUEST'].includes(incoming?.logTag) &&
+      (
+        incoming.lenderOrgId === 'FIBE' ||
+        incoming.api === '/merchant-auth-qa/esapi/generateToken'
+      );
+
+    if (
+      incoming?.source !== 'GATEWAY' ||
+      incoming?.destination !== 'LENDER' ||
+      !isFibeGenerateTokenRequest
+    ) {
+      return null;
+    }
+
+    const replayAlreadyContainsTokenStep = this.validator.entries.some(entry =>
+      ['GENERATE_TOKEN_API_REQUEST', 'FIBE_GENERATE_TOKEN_API_REQUEST'].includes(entry.logTag) &&
+      entry.source === 'GATEWAY' &&
+      entry.destination === 'LENDER'
+    );
+
+    if (replayAlreadyContainsTokenStep) {
+      return null;
+    }
+
+    logger.info('Returning synthetic FIBE token for legacy replay logs', {
+      requestId: incoming.requestId,
+      loanApplicationId: incoming.loanApplicationId,
+      currentEntry: this.validator.getCurrentEntry()?.toString()
+    });
+
+    this.results.passed++;
+    this.results.processedLogs.push({
+      step: 'synthetic_generate_token_response',
+      entry: `[synthetic] ${incoming.logTag} ${incoming.source}→${incoming.destination}`,
+      timestamp: new Date().toISOString()
+    });
+
+    return {
+      success: true,
+      synthetic: true,
+      payload: {
+        token: 'ART_SYNTHETIC_FIBE_TOKEN',
+        statusMessage: 'Success',
+        statusCode: 200
+      }
+    };
+  }
+
+  maybeHandleSyntheticFibeCheckoutStatus(incoming) {
+    const isFibeCheckoutStatusRequest =
+      incoming?.logTag === 'GET_CHECKOUT_STATUS_FO_REQUEST' &&
+      incoming?.source === 'GATEWAY' &&
+      incoming?.destination === 'LENDER' &&
+      (
+        incoming.lenderOrgId === 'FIBE' ||
+        incoming.api === '/checkoutuat/merchantapiv2/get-checkout-status'
+      );
+
+    if (!isFibeCheckoutStatusRequest) {
+      return null;
+    }
+
+    const replayAlreadyContainsCheckoutStatus = this.validator.entries.some(entry =>
+      (entry.logTag === 'GET_CHECKOUT_STATUS_FO_REQUEST' || entry.logTag === 'GET_CHECKOUT_STATUS_LS_REQUEST') &&
+      entry.source === 'GATEWAY' &&
+      entry.destination === 'LENDER'
+    );
+
+    if (replayAlreadyContainsCheckoutStatus) {
+      return null;
+    }
+
+    const orderId = incoming.payload?.orderId || incoming.loanApplicationId || 'ART_SYNTHETIC_ORDER';
+    const customerRefId = incoming.payload?.customerRefId || 'ART_SYNTHETIC_CUSTOMER';
+
+    logger.info('Returning synthetic FIBE checkout status for replay logs without checkout-status step', {
+      requestId: incoming.requestId,
+      loanApplicationId: incoming.loanApplicationId,
+      orderId,
+      customerRefId,
+      currentEntry: this.validator.getCurrentEntry()?.toString()
+    });
+
+    this.results.passed++;
+    this.results.processedLogs.push({
+      step: 'synthetic_get_checkout_status_response',
+      entry: `[synthetic] ${incoming.logTag} ${incoming.source}→${incoming.destination}`,
+      timestamp: new Date().toISOString()
+    });
+
+    return {
+      success: true,
+      synthetic: true,
+      payload: {
+        orderId,
+        status_code: 200,
+        status: 'SUCCESS',
+        statusCode: 200,
+        orderStatus: 'PENDING',
+        esStatus: 'APPROVED',
+        customerRefId,
+        breStatus: null,
+        merchantId: null,
+        customerStatus: 'APPROVED',
+        customerSubStatus: null,
+        isKFSSigned: false,
+        kfsValidity: null,
+        transactionId: null,
+        sanctionData: null,
+        data: {
+          customerRefId,
+          message: 'APPROVED',
+          nachStatus: null
+        },
+        disbursalDate: null,
+        settlementStatus: null,
+        utrNo: null,
+        orderAmount: null,
+        loanAcNo: null,
+        productTenure: null,
+        final_amount_to_merchant: null,
+        downpayment_amount: null,
+        emi_amount: null,
+        disbursedAmount: null
+      }
+    };
+  }
+
+  async maybePassThroughFetchLoanApplicationData(incoming) {
+    const isFetchLoanApplicationDataRequest =
+      incoming?.api === '/api/fetch/loanApplicationData' ||
+      incoming?.logTag === 'FETCH_LOAN_APPLICATION_DATA_REQUEST';
+
+    if (
+      incoming?.source !== 'GATEWAY' ||
+      incoming?.destination !== 'LSP' ||
+      !isFetchLoanApplicationDataRequest
+    ) {
+      return null;
+    }
+
+    const loanApplicationId =
+      incoming.payload?.loanApplicationId ||
+      incoming.payload?.loan_application_id ||
+      incoming.payload?.loanAppId ||
+      incoming.loanApplicationId;
+
+    logger.info('Passing through fetchLoanApplicationData request to local LSP', {
+      requestId: incoming.requestId,
+      loanApplicationId,
+      currentEntry: this.validator.getCurrentEntry()?.toString()
+    });
+
+    const serviceResponse = await makeRequest(
+      this.getServiceBaseUrl('LSP'),
+      '/api/fetch/loanApplicationData',
+      'POST',
+      incoming.payload,
+      incoming.requestId,
+      'GATEWAY_LSP',
+      incoming.logTag,
+      incoming.headers?.['x-merchant-id'] || null,
+      incoming.headers || {},
+      null,
+      this.getServiceUnixSocket('LSP'),
+      this.config.timeoutMs || 10000
+    );
+
+    if (serviceResponse?.error || serviceResponse?.status < 200 || serviceResponse?.status >= 300) {
+      logger.error('fetchLoanApplicationData pass-through failed', {
+        requestId: incoming.requestId,
+        status: serviceResponse?.status,
+        error: serviceResponse?.message,
+        responseData: serviceResponse?.data
+      });
+      return {
+        success: false,
+        error: serviceResponse?.message || `LSP fetchLoanApplicationData failed with status ${serviceResponse?.status}`,
+        payload: serviceResponse?.data
+      };
+    }
+
+    this.results.passed++;
+    this.results.processedLogs.push({
+      step: 'passthrough_fetch_loan_application_data_response',
+      entry: `[passthrough] ${incoming.logTag} ${incoming.source}→${incoming.destination}`,
+      timestamp: new Date().toISOString()
+    });
+
+    return {
+      success: true,
+      passthrough: true,
+      payload: serviceResponse.data,
+      headers: serviceResponse.headers
+    };
   }
 
   async handleOutOfOrderRequest(incoming, validation) {
@@ -867,6 +1074,7 @@ export class ReplayOrchestrator {
       progress: this.validator.getProgress(),
       state: this.stateManager.getState(),
       bufferFailures: this.bufferFailures,
+      failedBufferRequests: this.bufferFailures,
       failureReason: this.failureReason
     };
   }

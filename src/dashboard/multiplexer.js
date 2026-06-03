@@ -89,7 +89,7 @@ export function createMultiplexerServer() {
     const source = parts[0];
     const destination = parts[1];
     const logTag = mapping.logTag;
-    const requestId = req.headers['x-request-id'] || req.body.request_id;
+    const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;
 
     try {
       const result = await orchestrator.handleIncomingRequest({

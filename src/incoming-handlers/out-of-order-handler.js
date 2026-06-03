@@ -52,6 +52,14 @@ export class OutOfOrderHandler {
 
     const currentEntry = validation.expectedEntry;
 
+    if (validation.foundInLookahead?.isRequest &&
+        validation.foundInLookahead.isExternalDestination() &&
+        validation.foundInLookahead.source === incoming.source &&
+        validation.foundInLookahead.destination === incoming.destination &&
+        validation.foundInLookahead.logTag === incoming.logTag) {
+      return await this.processFutureExternalCall(incoming, validation.foundInLookahead);
+    }
+
     // Check if current expected is a request we need to trigger ourselves
     if (currentEntry?.isRequest && currentEntry.isExternalDestination()) {
       // For async/parallel calls, process immediately by finding matching log entry
@@ -103,6 +111,31 @@ export class OutOfOrderHandler {
    */
   isAsyncParallelCall(entry) {
     return isAsyncParallelApi(entry?.sourceDestination, entry?.logTag);
+  }
+
+  /**
+   * Process a live external call that arrived before earlier replay entries.
+   * This commonly happens with lender polling while ART is still waiting for an
+   * async callback in the recorded sequence.
+   * @param {Object} incoming - The incoming request
+   * @param {Object} expectedEntry - The matching future log entry
+   * @returns {Promise} Result of forwarding/mocking the matched entry
+   */
+  async processFutureExternalCall(incoming, expectedEntry) {
+    this.logger.info('Processing future external request from lookahead', {
+      incoming: `${incoming.source}→${incoming.destination} ${incoming.logTag}`,
+      matchedEntry: expectedEntry.toString()
+    });
+
+    const comparison = this.callbacks.comparePayloads(expectedEntry.payload, incoming.payload, incoming.logTag);
+    if (!comparison.match) {
+      return await this.callbacks.fail('Payload comparison failed', comparison.differences);
+    }
+
+    this.validator.markProcessed(expectedEntry);
+    this.callbacks.recordSuccess('request_validation', expectedEntry);
+
+    return await this.callbacks.forwardToDestination(incoming, expectedEntry);
   }
 
   /**
