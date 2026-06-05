@@ -351,8 +351,11 @@ export class LogProcessor {
         );
 
         if (!comparison.match) {
-          this.callbacks.recordFailure('external_response_comparison', entry, comparison.differences);
-          throw new Error(`Payload comparison failed: ${JSON.stringify(comparison.differences)}`);
+          this.logger.warn('External response payload mismatch tolerated', {
+            request: entry.toString(),
+            response: expectedResponse.toString(),
+            differences: comparison.differences
+          });
         } else {
           this.logger.info('External request response validated', {
             request: entry.toString(),

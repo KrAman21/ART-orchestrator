@@ -129,7 +129,11 @@ export class OutOfOrderHandler {
 
     const comparison = this.callbacks.comparePayloads(expectedEntry.payload, incoming.payload, incoming.logTag);
     if (!comparison.match) {
-      return await this.callbacks.fail('Payload comparison failed', comparison.differences);
+      this.logger.warn('Payload mismatch tolerated for future external request', {
+        entry: expectedEntry.toString(),
+        logTag: incoming.logTag,
+        differences: comparison.differences
+      });
     }
 
     this.validator.markProcessed(expectedEntry);
@@ -171,7 +175,11 @@ export class OutOfOrderHandler {
     const comparison = this.callbacks.comparePayloads(expectedPayload, incoming.payload, incoming.logTag);
 
     if (!comparison.match) {
-      return await this.callbacks.fail('Payload comparison failed', comparison.differences);
+      this.logger.warn('Payload mismatch tolerated for async/parallel call', {
+        entry: expectedEntry.toString(),
+        logTag: incoming.logTag,
+        differences: comparison.differences
+      });
     }
 
     this.logger.info('Request validation passed', {

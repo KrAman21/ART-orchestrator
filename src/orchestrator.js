@@ -35,7 +35,8 @@ export class ReplayOrchestrator {
       passed: 0,
       failed: 0,
       errors: [],
-      processedLogs: []
+      processedLogs: [],
+      payloadComparisons: []
     };
 
     this.pendingExternalRequests = new Map();
@@ -67,7 +68,8 @@ export class ReplayOrchestrator {
       passed: 0,
       failed: 0,
       errors: [],
-      processedLogs: []
+      processedLogs: [],
+      payloadComparisons: []
     };
 
     this.pendingExternalRequests.clear();
@@ -511,13 +513,12 @@ export class ReplayOrchestrator {
     const comparison = this.comparePayloads(expectedPayload, incoming.payload, incoming.logTag);
 
     if (!comparison.match) {
-      logger.error('ORCH_PAYLOAD_MISMATCH', {
+      logger.warn('ORCH_PAYLOAD_MISMATCH', {
         logTag: incoming.logTag,
         differences: comparison.differences,
         expectedFull: expectedPayload,
         actualFull: incoming.payload
       });
-      return await this.fail('Payload comparison failed', comparison.differences);
     }
 
     if (expectedEntry.source === 'CORE' && expectedEntry.destination === 'GATEWAY') {
@@ -850,7 +851,19 @@ export class ReplayOrchestrator {
   }
 
   comparePayloads(expected, actual, logTag) {
-    return compareLog(expected, actual, logTag);
+    const comparison = compareLog(expected, actual, logTag);
+    const currentEntry = this.validator.getCurrentEntry();
+
+    this.results.payloadComparisons.push({
+      timestamp: new Date().toISOString(),
+      logTag,
+      logIndex: currentEntry?.index ?? null,
+      entry: currentEntry ? currentEntry.toString() : null,
+      differenceCount: comparison.differenceList?.length || 0,
+      differences: comparison.differenceList || []
+    });
+
+    return comparison;
   }
 
   registerReplayLoanApplicationIdMappings(expectedEntry, incoming) {

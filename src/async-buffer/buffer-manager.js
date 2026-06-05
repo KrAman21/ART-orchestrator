@@ -9,6 +9,7 @@ export class BufferManager {
     this.pendingPromises = new Map();
     this.requestWaiters = new Set();
     this.sequenceCounter = 0;
+    this.lastMatchTimeout = null;
     
     this.config = {
       maxBufferSize: 1000,
@@ -181,6 +182,17 @@ export class BufferManager {
           state: entry.state,
           requestId: entry.request.requestId || null
         }));
+
+        this.lastMatchTimeout = {
+          timestamp: new Date().toISOString(),
+          expected: expectedEntry.toString(),
+          expectedLogTag: expectedEntry.logTag,
+          expectedSource: expectedEntry.source,
+          expectedDestination: expectedEntry.destination,
+          timeoutMs,
+          bufferedRequests,
+          bufferSize: this.incomingRequests.size
+        };
         
         logger.error('Timeout waiting for matching request', {
           expected: expectedEntry.toString(),
@@ -196,6 +208,19 @@ export class BufferManager {
 
       this.requestWaiters.add(waiter);
     });
+  }
+
+  getLastMatchTimeout() {
+    return this.lastMatchTimeout;
+  }
+
+  getPendingRequestWaiters() {
+    return Array.from(this.requestWaiters).map((waiter) => ({
+      expected: waiter.expectedEntry?.toString?.() || null,
+      logTag: waiter.expectedEntry?.logTag || null,
+      source: waiter.expectedEntry?.source || null,
+      destination: waiter.expectedEntry?.destination || null
+    }));
   }
 
   completeIncomingRequest(key, response) {

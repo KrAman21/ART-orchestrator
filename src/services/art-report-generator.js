@@ -36,7 +36,8 @@ export class ArtReportGenerator {
       artResults: {
         passed: 0,
         failed: 0,
-        total: 0
+        total: 0,
+        payloadComparisons: []
       },
       timeline: [],
       bufferFailures: [],
@@ -197,7 +198,8 @@ export class ArtReportGenerator {
     order.artResults = {
       passed: result.artResults?.passed || 0,
       failed: result.artResults?.failed || 0,
-      total: result.artResults?.processedLogs?.length || 0
+      total: result.artResults?.processedLogs?.length || 0,
+      payloadComparisons: result.artResults?.payloadComparisons || []
     };
 
     const failedLogs = (result.artResults?.errors || []).map(error => ({
@@ -315,6 +317,24 @@ export class ArtReportGenerator {
     };
   }
 
+  buildPayloadComparisons(order) {
+    const mismatchedComparisons = (order.artResults?.payloadComparisons || [])
+      .filter((comparison) => (comparison.differenceCount || 0) > 0);
+
+    return {
+      orderId: order.orderId,
+      status: order.status,
+      comparisons: mismatchedComparisons.map((comparison) => ({
+        timestamp: comparison.timestamp || null,
+        logTag: comparison.logTag || null,
+        logIndex: comparison.logIndex ?? null,
+        entry: comparison.entry || null,
+        differenceCount: comparison.differenceCount || 0,
+        differences: comparison.differences || []
+      }))
+    };
+  }
+
   generateReport(overallSuccess) {
     // Finalize any orders that never completed (process terminated mid-run)
     const now = new Date().toISOString();
@@ -331,11 +351,19 @@ export class ArtReportGenerator {
     const ordersWithBufferFailures = this.orders.filter(o => o.bufferFailures && o.bufferFailures.length > 0).length;
     const totalFailedLogs = this.orders.reduce((acc, order) => acc + (order.diagnostics?.failedLogsCount || order.artResults?.failed || 0), 0);
     const totalTimeoutLogs = this.orders.reduce((acc, order) => acc + (order.diagnostics?.timeoutLogsCount || 0), 0);
+    const totalPayloadComparisons = this.orders.reduce((acc, order) => acc + (order.artResults?.payloadComparisons?.length || 0), 0);
+    const totalPayloadMismatches = this.orders.reduce(
+      (acc, order) => acc + (order.artResults?.payloadComparisons?.filter((comparison) => (comparison.differenceCount || 0) > 0).length || 0),
+      0
+    );
 
     const orderOutcomes = this.orders.map((order) => this.buildOrderOutcome(order));
     const requestDetails = this.orders
       .filter((order) => (order.bufferFailures || []).length > 0)
       .map((order) => this.buildRequestDetails(order));
+    const payloadComparisons = this.orders
+      .map((order) => this.buildPayloadComparisons(order))
+      .filter((order) => order.comparisons.length > 0);
 
     const report = {
       executionId: `art-${Date.now()}`,
@@ -355,10 +383,13 @@ export class ArtReportGenerator {
         totalFailedLogs,
         totalTimeoutLogs,
         totalBufferFailures,
-        ordersWithBufferFailures
+        ordersWithBufferFailures,
+        totalPayloadComparisons,
+        totalPayloadMismatches
       },
       orderOutcomes,
-      requestDetails
+      requestDetails,
+      payloadComparisons
     };
 
     try {

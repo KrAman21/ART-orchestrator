@@ -9,6 +9,7 @@ const ENABLED = process.env.ART_SANITIZE_LOGS !== 'false' && (
 const ECHO_STDOUT = process.env.ART_ECHO_STDOUT === 'true';
 const REPORT_START = 'ART Report Content Start';
 const REPORT_END = 'ART Report Content End';
+const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
 
 const USER_PREFIXES = [
   'Sequential ART Runner',
@@ -31,12 +32,26 @@ const USER_PREFIXES = [
   'Overall Success:',
   'ART Report Path:',
   'ART Report generated:',
+  'ART REPORT SUMMARY',
   'Stopping process-compose services',
   'No order IDs found from QAPI',
   'Failed to start:',
   'Unhandled promise rejection',
   'Uncaught exception',
   'Warning:'
+];
+
+const USER_MARKERS = [
+  '🧾',
+  '🟢',
+  '🔴',
+  '✅',
+  '❌',
+  '🟡',
+  '📄',
+  '📊',
+  '🔎',
+  '⚠️'
 ];
 
 let reportMode = false;
@@ -102,25 +117,29 @@ function unwrapLogMessage(line) {
 function sanitizeLine(rawLine) {
   const line = unwrapLogMessage(rawLine.trimEnd());
   if (line === null) return [];
+  const visibleLine = line.replace(ANSI_PATTERN, '');
 
-  if (line === REPORT_START) {
+  if (visibleLine === REPORT_START) {
     reportMode = true;
-    return [line];
+    return [visibleLine];
   }
 
   if (reportMode) {
-    if (line === REPORT_END) reportMode = false;
-    return [line];
+    if (visibleLine === REPORT_END) reportMode = false;
+    return [visibleLine];
   }
 
-  if (!line || line === '========================================') return [];
+  if (!visibleLine || visibleLine === '========================================') return [];
 
-  if (line.startsWith('ART_PROGRESS: ')) {
-    return [line.slice('ART_PROGRESS: '.length)];
+  if (visibleLine.startsWith('ART_PROGRESS: ')) {
+    return [visibleLine.replace(/^ART_PROGRESS: /, '')];
   }
 
-  if (USER_PREFIXES.some((prefix) => line.startsWith(prefix))) {
-    return [line];
+  if (
+    USER_PREFIXES.some((prefix) => visibleLine.startsWith(prefix)) ||
+    USER_MARKERS.some((marker) => visibleLine.startsWith(marker))
+  ) {
+    return [visibleLine];
   }
 
   return [];

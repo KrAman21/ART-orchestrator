@@ -45,6 +45,7 @@ export const LSP_API_CONFIG = {
 export const QAPI_CONFIG = {
   baseUrl: process.env.QAPI_BASE_URL || 'https://dashboard.credit.juspay.in',
   token: process.env.QAPI_TOKEN || '',
+  authorization: process.env.QAPI_AUTHORIZATION || process.env.QAPI_TOKEN || '',
   merchantId: process.env.MERCHANT_ID || 'flipkart'
 };
 

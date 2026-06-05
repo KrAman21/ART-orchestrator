@@ -373,7 +373,7 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = nu
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-Web-LoginToken': QAPI_CONFIG.token,
+        'Authorization': QAPI_CONFIG.authorization,
         'Consumer-Credit-Dashboard': 'Consumer-Credit-Dashboard',
         'Referer': 'https://dashboard.credit.juspay.in/'
       },

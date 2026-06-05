@@ -410,10 +410,19 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
 
     if (completionResult.timedOut) {
       const currentEntry = orchestrator.validator?.getCurrentEntry();
+      const lastMatchTimeout = orchestrator.bufferManager?.getLastMatchTimeout?.() || null;
+      const pendingWaiters = orchestrator.bufferManager?.getPendingRequestWaiters?.() || [];
+      const primaryPendingWaiter = pendingWaiters[0] || null;
+      const timeoutReason = lastMatchTimeout?.expected
+        ? `Timed out waiting for matching request ${lastMatchTimeout.expected}`
+        : primaryPendingWaiter?.expected
+          ? `Timed out while waiting on pending request ${primaryPendingWaiter.expected}`
+        : `Timeout after ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes`;
+
       reportGenerator.markOrderStuck(orderId, {
         logTag: currentEntry?.logTag || 'unknown',
         logIndex: currentEntry?.index || 0,
-        reason: `Timeout after ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes`
+        reason: timeoutReason
       });
 
       printBufferDebugInfo(orchestrator, orderId);
@@ -432,7 +441,11 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       : completionResult.failed
         ? `API Failure: ${apiErrorMessage || completionResult.error || 'Unknown API error'}`
         : completionResult.timedOut
-          ? `Timeout: Max journey time of ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes exceeded`
+          ? `Timeout: ${orchestrator.bufferManager?.getLastMatchTimeout?.()?.expected
+            ? `Timed out waiting for matching request ${orchestrator.bufferManager.getLastMatchTimeout().expected}`
+            : orchestrator.bufferManager?.getPendingRequestWaiters?.()?.[0]?.expected
+              ? `Timed out while waiting on pending request ${orchestrator.bufferManager.getPendingRequestWaiters()[0].expected}`
+            : `Max journey time of ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes exceeded`}`
           : (artResults.failed > 0 ? `${artResults.failed} assertions failed` : 'Completed successfully');
 
     reportGenerator.finalizeOrder(orderId, {

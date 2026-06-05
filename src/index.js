@@ -43,6 +43,69 @@ const CONFIG = {
     : 5
 };
 
+const COLOR = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  green: '\x1b[32m',
+  red: '\x1b[31m',
+  yellow: '\x1b[33m',
+  cyan: '\x1b[36m',
+  gray: '\x1b[90m'
+};
+
+function colorize(color, text) {
+  if (process.env.NO_COLOR) return text;
+  return `${color}${text}${COLOR.reset}`;
+}
+
+function getOrderMarker(status) {
+  if (status === 'COMPLETED') return { emoji: '✅', color: COLOR.green };
+  if (status === 'STOPPED' || status === 'TIMEOUT' || status === 'STUCK') return { emoji: '🟡', color: COLOR.yellow };
+  return { emoji: '❌', color: COLOR.red };
+}
+
+function printReportSummary(reportPath) {
+  try {
+    const report = JSON.parse(readFileSync(reportPath, 'utf-8'));
+    const summary = report.summary || {};
+    const success = report.overallStatus === 'SUCCESS';
+    const statusColor = success ? COLOR.green : COLOR.red;
+    const statusEmoji = success ? '🟢' : '🔴';
+
+    console.log('');
+    console.log(colorize(COLOR.bold + COLOR.cyan, '🧾 ART REPORT SUMMARY 🧾'));
+    console.log(colorize(statusColor, `${statusEmoji} Overall Status: ${report.overallStatus || 'UNKNOWN'}`));
+    console.log(colorize(COLOR.cyan, `📄 Report Path: ${reportPath}`));
+    console.log(
+      colorize(
+        COLOR.bold,
+        `📊 Orders: ${summary.totalOrders ?? 0} total | ${summary.completed ?? 0} passed | ${summary.failed ?? 0} failed | ${summary.stuck ?? 0} stuck | ${summary.timeout ?? 0} timeout`
+      )
+    );
+
+    const orderedOutcomes = [...(report.orderOutcomes || [])].sort((left, right) => {
+      const leftCompleted = left.status === 'COMPLETED';
+      const rightCompleted = right.status === 'COMPLETED';
+      if (leftCompleted === rightCompleted) return 0;
+      return leftCompleted ? 1 : -1;
+    });
+
+    for (const order of orderedOutcomes) {
+      const marker = getOrderMarker(order.status);
+      const line = `${marker.emoji} ${order.status}: ${order.orderId} | ${order.logTag || 'unknown-log'} | ${order.failureReason || 'Completed successfully'}`;
+      console.log(colorize(marker.color, line));
+    }
+
+    if ((report.requestDetails || []).length > 0) {
+      console.log(colorize(COLOR.yellow, `🔎 Request details available for ${report.requestDetails.length} order(s) in report.json`));
+    }
+    console.log(colorize(COLOR.bold + COLOR.cyan, '🧾 ART REPORT SUMMARY END 🧾'));
+    console.log('');
+  } catch (error) {
+    console.warn(colorize(COLOR.yellow, `⚠️ Could not print formatted ART report summary: ${error.message}`));
+  }
+}
+
 function getConfiguredFetchInputs() {
   if (process.env.LAST_MINUTES === undefined || process.env.LAST_MINUTES === '') {
     return null;
@@ -233,6 +296,7 @@ async function main() {
     console.log(`ART Report Path: ${CONFIG.REPORT_PATH}`);
     console.log('Stopping process-compose services...');
     console.log('========================================\n');
+    printReportSummary(CONFIG.REPORT_PATH);
     console.log('ART Report Content Start');
     console.log(readFileSync(CONFIG.REPORT_PATH, 'utf-8'));
     console.log('ART Report Content End');
