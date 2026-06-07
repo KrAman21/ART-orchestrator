@@ -187,6 +187,14 @@ export class ReplayOrchestrator {
     return SeedDataManager.extractLineDetails(logs);
   }
 
+  static extractCustomerSeedData(logs) {
+    return SeedDataManager.extractCustomerSeedData(logs);
+  }
+
+  static extractLineSeedData(logs) {
+    return SeedDataManager.extractLineSeedData(logs);
+  }
+
   getContextKey(entry) {
     const parts = [];
     if (entry.loanApplicationId) {
@@ -201,8 +209,8 @@ export class ReplayOrchestrator {
     return parts.join(':') || entry.requestId || `${entry.index}`;
   }
 
-  async onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails) {
-    return this.seedDataManager.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails);
+  async onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData) {
+    return this.seedDataManager.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData);
   }
 
   async clearLspData(merchantId, orderId) {
@@ -224,10 +232,12 @@ export class ReplayOrchestrator {
     const { merchantId, orderId } = ReplayOrchestrator.extractMerchantId(this.logs);
     const lenderOrgIdToIdMap = ReplayOrchestrator.extractLenderOrgIds(this.logs);
     const lineDetails = ReplayOrchestrator.extractLineDetails(this.logs);
+    const customerSeedData = ReplayOrchestrator.extractCustomerSeedData(this.logs);
+    const lineSeedData = ReplayOrchestrator.extractLineSeedData(this.logs);
 
     await this.clearLspData(merchantId, orderId);
     // Set Onboarding data for the merchant to ensure LSP is ready for the replay session
-    await this.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails);
+    await this.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData);
 
     logger.info('Replay orchestrator started', {
       totalLogs: this.logs.length,

@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 
 const IGNORE_KEYS_FILE = 'ignore_keys.json';
+
 function normalizeKey(key) {
   return key.toLowerCase().replace(/[_-]/g, '');
 }
@@ -24,6 +25,7 @@ function shouldIgnore(path, ignore) {
   for (const segment of segments) {
     const keyName = segment.replace(/\[.*$/, '');
     const normalizedKeyName = normalizeKey(keyName);
+    if (normalizedKeyName.includes('time')) return true;
     if (normalizedKeyName.endsWith('id')) return true;
     if (normalizedKeyName.endsWith('expiryat')) return true;
   }
@@ -45,8 +47,66 @@ function isPlainObject(val) {
 function isMaskedValue(value) {
   if (typeof value !== 'string') return false;
   if (value === 'MASKED') return true;
+  if (value.startsWith('XX')) return true;
   if (/^[X*]+$/.test(value)) return true;
   return (value.match(/[X*]/g) || []).length >= 3;
+}
+
+function getNumericStringType(value) {
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (!/^[+-]?\d+(\.\d+)?$/.test(trimmed)) {
+    return null;
+  }
+
+  if (trimmed.includes('.')) {
+    return 'DOUBLE';
+  }
+
+  try {
+    const asBigInt = BigInt(trimmed);
+    const intMin = BigInt(-2147483648);
+    const intMax = BigInt(2147483647);
+    return asBigInt >= intMin && asBigInt <= intMax ? 'INTEGER' : 'LONG';
+  } catch {
+    return null;
+  }
+}
+
+function getValueType(value) {
+  if (value === null || value === undefined) return 'NULL';
+  if (Array.isArray(value)) return 'ARRAY';
+  if (typeof value === 'string') return getNumericStringType(value) || 'STRING';
+  if (typeof value === 'boolean') return 'BOOLEAN';
+  if (typeof value === 'number') {
+    if (Number.isInteger(value)) {
+      return value >= -2147483648 && value <= 2147483647 ? 'INTEGER' : 'LONG';
+    }
+    return 'DOUBLE';
+  }
+  if (typeof value === 'object') return 'OBJECT';
+  return 'STRING';
+}
+
+function isNumericType(type) {
+  return ['INTEGER', 'LONG', 'FLOAT', 'DOUBLE', 'DECIMAL'].includes(type);
+}
+
+function isDecimalLikeType(type) {
+  return ['FLOAT', 'DOUBLE', 'DECIMAL'].includes(type);
+}
+
+function makeDiff(path, expected, actual, reason, extra = {}) {
+  return {
+    path,
+    expected,
+    actual,
+    reason,
+    ...extra
+  };
 }
 
 function sortKey(item) {
@@ -81,7 +141,7 @@ function compareLenderOrgIds(expectedIds, actualIds, path) {
     reasonParts.push(`extra in actual: ${JSON.stringify(extraInActual)}`);
   }
 
-  return [[path, expectedList, actualList, reasonParts.join('; ')]];
+  return [makeDiff(path, expectedList, actualList, reasonParts.join('; '))];
 }
 
 function getLenderEligibilityKey(item) {
@@ -105,11 +165,11 @@ function compareArrayObjectsByKey(expectedItems, actualItems, path, ignore, logT
   for (const key of allKeys) {
     const childPath = `${path}[${key}]`;
     if (!actualMap.has(key)) {
-      diffs.push([childPath, expectedMap.get(key), '<missing>', 'element missing in actual']);
+      diffs.push(makeDiff(childPath, expectedMap.get(key), '<missing>', 'element missing in actual'));
       continue;
     }
     if (!expectedMap.has(key)) {
-      diffs.push([childPath, '<missing>', actualMap.get(key), 'extra element in actual']);
+      diffs.push(makeDiff(childPath, '<missing>', actualMap.get(key), 'extra element in actual'));
       continue;
     }
 
@@ -131,18 +191,44 @@ function compareValues(valA, valB, path, ignore, logTag) {
   }
 
   if ((valA === null || valA === undefined) && (valB !== null && valB !== undefined)) {
-    diffs.push([path, valA, valB, 'expected missing, actual present']);
+    diffs.push(makeDiff(path, valA, valB, 'expected missing, actual present'));
     return diffs;
   }
   if ((valA !== null && valA !== undefined) && (valB === null || valB === undefined)) {
-    diffs.push([path, valA, valB, 'expected present, actual missing']);
+    diffs.push(makeDiff(path, valA, valB, 'expected present, actual missing'));
     return diffs;
   }
 
-  const typeA = Array.isArray(valA) ? 'array' : typeof valA;
-  const typeB = Array.isArray(valB) ? 'array' : typeof valB;
+  if (isMaskedValue(valA) || isMaskedValue(valB)) {
+    return diffs;
+  }
+
+  const typeA = getValueType(valA);
+  const typeB = getValueType(valB);
+
+  if (isNumericType(typeA) && isNumericType(typeB)) {
+    const isDecimalLikeA = isDecimalLikeType(typeA);
+    const isDecimalLikeB = isDecimalLikeType(typeB);
+
+    if (isDecimalLikeA !== isDecimalLikeB) {
+      diffs.push(
+        makeDiff(path, valA, valB, 'type mismatch', {
+          expectedType: typeA,
+          actualType: typeB
+        })
+      );
+    }
+
+    return diffs;
+  }
+
   if (typeA !== typeB) {
-    diffs.push([path, valA, valB, `type mismatch: expected ${typeA}, actual ${typeB}`]);
+    diffs.push(
+      makeDiff(path, valA, valB, 'type mismatch', {
+        expectedType: typeA,
+        actualType: typeB
+      })
+    );
     return diffs;
   }
 
@@ -177,9 +263,9 @@ function compareValues(valA, valB, path, ignore, logTag) {
       if (i < sortedA.length && i < sortedB.length) {
         diffs.push(...compareValues(sortedA[i], sortedB[i], childPath, ignore, logTag));
       } else if (i < sortedA.length) {
-        diffs.push([childPath, sortedA[i], '<missing>', 'element missing in actual']);
+        diffs.push(makeDiff(childPath, sortedA[i], '<missing>', 'element missing in actual'));
       } else {
-        diffs.push([childPath, '<missing>', sortedB[i], 'extra element in actual']);
+        diffs.push(makeDiff(childPath, '<missing>', sortedB[i], 'extra element in actual'));
       }
     }
     return diffs;
@@ -191,24 +277,24 @@ function compareValues(valA, valB, path, ignore, logTag) {
     
     for (const k of keysA) {
       const childPath = path ? `${path}.${k}` : k;
-      if (!valB.hasOwnProperty(k)) {
+      if (!Object.prototype.hasOwnProperty.call(valB, k)) {
         if (!shouldIgnore(childPath, ignore)) {
-          diffs.push([childPath, valA[k], '<missing>', 'key missing in actual']);
+          diffs.push(makeDiff(childPath, valA[k], '<missing>', 'key missing in actual'));
         }
       }
     }
     
     for (const k of keysB) {
       const childPath = path ? `${path}.${k}` : k;
-      if (!valA.hasOwnProperty(k)) {
+      if (!Object.prototype.hasOwnProperty.call(valA, k)) {
         if (!shouldIgnore(childPath, ignore)) {
-          diffs.push([childPath, '<missing>', valB[k], 'extra key in actual']);
+          diffs.push(makeDiff(childPath, '<missing>', valB[k], 'extra key in actual'));
         }
       }
     }
     
     for (const k of keysA) {
-      if (valB.hasOwnProperty(k)) {
+      if (Object.prototype.hasOwnProperty.call(valB, k)) {
         const childPath = path ? `${path}.${k}` : k;
         diffs.push(...compareValues(valA[k], valB[k], childPath, ignore, logTag));
       }
@@ -216,12 +302,8 @@ function compareValues(valA, valB, path, ignore, logTag) {
     return diffs;
   }
 
-  if (isMaskedValue(valA) || isMaskedValue(valB)) {
-    return diffs;
-  }
-
   if (valA !== valB) {
-    diffs.push([path, valA, valB, 'value mismatch']);
+    diffs.push(makeDiff(path, valA, valB, 'value mismatch'));
   }
 
   return diffs;
@@ -244,6 +326,14 @@ export function compareLog(expectedLog, actualResponse, logTag = '') {
   let expected = expectedLog;
   let actual = actualResponse;
 
+  if (typeof expected === 'string') {
+    try {
+      expected = JSON.parse(expected);
+    } catch {
+      // Not valid JSON, keep as string
+    }
+  }
+
   if (typeof actual === 'string') {
     try {
       actual = JSON.parse(actual);
@@ -256,15 +346,11 @@ export function compareLog(expectedLog, actualResponse, logTag = '') {
 
   const differences = {};
   const differenceList = [];
-  for (const [path, expVal, actVal, reason] of diffArray) {
-    const key = path || 'root';
-    differences[key] = { expected: expVal, actual: actVal, reason };
-    differenceList.push({
-      path: key,
-      expected: expVal,
-      actual: actVal,
-      reason
-    });
+  for (const diff of diffArray) {
+    const key = diff.path || 'root';
+    const normalizedDiff = { ...diff, path: key };
+    differences[key] = normalizedDiff;
+    differenceList.push(normalizedDiff);
   }
 
   return {
