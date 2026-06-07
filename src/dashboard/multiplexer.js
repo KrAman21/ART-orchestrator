@@ -45,7 +45,7 @@ export function createMultiplexerServer() {
 
     if (!mapping) {
       logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
-      return res.json({ success: true, ignored: true, message: 'Webhook ignored' });
+      return res.json('Webhook ignored');
     }
 
     const payload = req.body;

@@ -52,6 +52,16 @@ function isMaskedValue(value) {
   return (value.match(/[X*]/g) || []).length >= 3;
 }
 
+function isBlankString(value) {
+  return typeof value === 'string' && value.trim() === '';
+}
+
+function isBlankEquivalentString(value) {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().toUpperCase();
+  return normalized === '' || normalized === 'NA' || normalized === 'N/A';
+}
+
 function getNumericStringType(value) {
   if (typeof value !== 'string') return null;
 
@@ -201,6 +211,22 @@ function compareValues(valA, valB, path, ignore, logTag) {
 
   if (isMaskedValue(valA) || isMaskedValue(valB)) {
     return diffs;
+  }
+
+  if (isBlankEquivalentString(valA) && isBlankEquivalentString(valB)) {
+    return diffs;
+  }
+
+  if (isBlankString(valA) || isBlankString(valB)) {
+    const nonBlank = isBlankString(valA) ? valB : valA;
+    if (
+      nonBlank === null ||
+      nonBlank === undefined ||
+      (typeof nonBlank === 'string' &&
+        (isBlankEquivalentString(nonBlank) || getNumericStringType(nonBlank)))
+    ) {
+      return diffs;
+    }
   }
 
   const typeA = getValueType(valA);

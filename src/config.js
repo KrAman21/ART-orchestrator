@@ -1097,8 +1097,8 @@ export const API_TO_ENDPOINT_MAP = {
 
   /// MIHURU LENDER APIs
 
-  'GTAEWAY_LENDER|GENERATE PARTNER AUTH TOKEN_REQUEST': {endpoint: 'assistmodule/v2/login/apiuser', method: 'POST', service: 'LENDER', headers: {}},
-  'CHECK ELIGIBILITY STATUS API_REQUEST':{endpoint: '/base/flipkart/fk/checkEligibilityStatus', method: 'POST', service: 'LENDER', headers: {}},
+  'GATEWAY_LENDER|GENERATE PARTNER AUTH TOKEN_REQUEST': {endpoint: 'assistmodule/v2/login/apiuser', method: 'POST', service: 'LENDER', headers: {}},
+  'GATEWAY_LENDER|CHECK ELIGIBILITY STATUS API_REQUEST': { endpoint: '/base/flipkart/fk/checkEligibilityStatus', method: 'POST', service: 'LENDER', headers: {} },
 
   
   // ==================== LENDER_GATEWAY (Lender to Gateway - Callbacks/Webhooks) ====================
@@ -1370,6 +1370,8 @@ export const API_TO_LOGTAG_MAP = {
   "/v1.0/fetchOfferResponse" : {logTag: "FETCH_OFFER_ASYNC_RESPONSE_REQUEST", api: "/v1.0/fetchOfferResponse", sourceDestination: "GATEWAY_LSP", headers: {}},
   '/v1.0/fetchOfferRequest' : {logTag: 'LSP-FetchOfferRequest_REQUEST', api: '/gateway/v1.0/fetchOfferRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/fetchOfferRequest' : {logTag: 'LSP-FetchOfferRequest_REQUEST', api: '/gateway/v1.0/fetchOfferRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/v1.0/fetchOfferSync' : {logTag: 'LSP-FetchOfferSync_REQUEST', api: '/gateway/v1.0/fetchOfferSync', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v1.0/fetchOfferSync' : {logTag: 'LSP-FetchOfferSync_REQUEST', api: '/gateway/v1.0/fetchOfferSync', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/v1.0/getFlowLink': { logTag: 'GetLenderFlows-LSP-GetFlowLink_REQUEST', api: '/gateway/v1.0/getFlowLink', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/getFlowLink': { logTag: 'GetLenderFlows-LSP-GetFlowLink_REQUEST', api: '/gateway/v1.0/getFlowLink', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/v1.0/eligibility': { logTag: 'LSP-Eligibility_REQUEST', api: '/gateway/v1.0/eligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
@@ -1452,6 +1454,7 @@ export const API_TO_LOGTAG_MAP = {
   
   // ==================== LENDER_GATEWAY (Lender to Gateway - Callbacks/Webhooks) ====================
   '/gateway/webhook': { logTag: 'WEBHOOK Request', api: '/gateway/webhook', sourceDestination: 'LENDER_GATEWAY', headers: {} },
+  '/gateway/v1.0/triggerActionRequired': { logTag: 'LSP-TriggerActionRequired_REQUEST', api: '/gateway/v1.0/triggerActionRequired', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/v1/themis/gateway/response': { logTag: 'Themis-Eligibility Response', api: '/v1/themis/gateway/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
   '/v1/themis/grantLoan/response': { logTag: 'Themis-GrantLoan Response', api: '/v1/themis/grantLoan/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
   '/v1/themis/disbursement/response': { logTag: 'Themis-Disbursement Response', api: '/v1/themis/disbursement/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
@@ -1459,6 +1462,8 @@ export const API_TO_LOGTAG_MAP = {
   '/v1/themis/kyc/response': { logTag: 'Themis-KYC Response', api: '/v1/themis/kyc/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
   '/v1/themis/repayment/response': { logTag: 'Themis-Repayment Response', api: '/v1/themis/repayment/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
   '/v1/themis/offers/response': { logTag: 'ThemisGenerateOffersResponse Response', api: '/v1/themis/offers/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
+  '/uat/parent_opp_eligibilty_check': { logTag: 'WEBHOOK Request', api: '/uat/parent_opp_eligibilty_check', sourceDestination: 'LENDER_GATEWAY', headers: {} },
+  '/uat/fetch_offer': { logTag: 'WEBHOOK Request', api: '/uat/fetch_offer', sourceDestination: 'LENDER_GATEWAY', headers: {} },
 
   '/base/flipkart/fk/checkEligibilityStatus': { logTag: 'CHECK ELIGIBILITY STATUS API_REQUEST', api: '/base/flipkart/fk/checkEligibilityStatus', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/api/v1/authenticate-token': {logTag: 'HDB_TOKEN_API_REQUEST', api: '/api/v1/authenticate-token', sourceDestination: 'GATEWAY_LENDER', headers: {} },

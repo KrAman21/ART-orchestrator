@@ -32,6 +32,54 @@ export const REPLAY_SPECIAL_CASES = [
     ]
   },
   {
+    logTag: 'LSP-FetchOfferRequest_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow duplicate fetch-offer requests to be skipped once replay has already moved into the post-fetch branch for the same context.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
+    advanceWhenSeenLogTags: [
+      'POLLING API :: LINE_STATUS_REQUEST',
+      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+      'CALCULATE_EMI_REQUEST',
+      'PROFILE_INGESTION_REQUEST'
+    ]
+  },
+  {
+    logTag: 'LSP-GetKFS_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow duplicate KFS gateway requests to be skipped once replay has already advanced into the post-KFS branch for the same context.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
+    advanceWhenSeenLogTags: [
+      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+      'LSP-FetchOfferRequest_REQUEST',
+      'FlipKart-GetKFS_RESPONSE'
+    ]
+  },
+  {
+    logTag: 'CHECK ELIGIBILITY STATUS API_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated hard-eligibility status polls to be skipped when replay has already advanced into the corresponding status response branch.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
+    advanceWhenSeenLogTags: [
+      'FlipKart-HardEligibilityStatus_REQUEST',
+      'FlipKart-HardEligibilityStatus_RESPONSE'
+    ]
+  },
+  {
+    logTag: 'HARD_ELIGIBILITY_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated hard-eligibility lender calls to be skipped when replay already advanced into profile-ingestion or fetch-offer steps for the same context.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
+    advanceWhenSeenLogTags: [
+      'PROFILE_INGESTION_REQUEST',
+      'LSP-FetchOfferRequest_REQUEST',
+      'FlipKart-HardEligibility_RESPONSE'
+    ]
+  },
+  {
     logTag: 'ProcessStatus_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow process-status polling to be skipped when the live journey has already completed the loan-processing redirection branch.',

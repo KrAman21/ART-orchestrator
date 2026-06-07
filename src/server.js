@@ -66,7 +66,7 @@ export function createServer(orchestrator) {
       if (!mapping) {
         // Unknown API endpoint - likely a webhook/callback, ignore gracefully
         logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
-        return res.json({ success: true, ignored: true, message: 'Webhook ignored' });
+        return res.json('Webhook ignored');
       }
 
       // Source/destination always from mapping

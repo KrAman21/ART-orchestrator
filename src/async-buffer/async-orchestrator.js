@@ -8,6 +8,32 @@ import { isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from '../repla
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
 
+function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
+  if (!entry || entry.sourceDestination !== 'APP_WRAPPER') {
+    return endpointConfig?.endpoint || null;
+  }
+
+  const merchantId = entry.message?.merchant_id;
+  const merchantSpecificEndpoints = {
+    flipkart: {
+      'FlipKart-FetchStatus_REQUEST': '/flipkart/fetch/status',
+      'FlipKart-OrderStatus_REQUEST': '/flipkart/order/status',
+      'FlipKart-Refund_REQUEST': '/flipkart/refund',
+      'FlipKart-GetKFS_REQUEST': '/flipkart/getKFS'
+    },
+    flipkartSM: {
+      'FlipKart-FetchStatus_REQUEST': '/flipkartSM/fetch/status',
+      'FlipKart-OrderStatus_REQUEST': '/flipkartSM/order/status',
+      'FlipKart-Refund_REQUEST': '/flipkartSM/refund'
+    },
+    flipkart2w: {
+      'FlipKart-GetKFS_REQUEST': '/flipkart2w/getKFS'
+    }
+  };
+
+  return merchantSpecificEndpoints[merchantId]?.[entry.logTag] || endpointConfig?.endpoint || null;
+}
+
 function remapReplayIds(value, stateManager) {
   if (!value || typeof value !== 'object') {
     return value;
@@ -89,9 +115,18 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     
     const { merchantId, orderId } = AsyncReplayOrchestrator.extractMerchantId(this.logs);
     const lenderOrgIdToIdMap = AsyncReplayOrchestrator.extractLenderOrgIds(this.logs);
-    
+    const lineDetails = AsyncReplayOrchestrator.extractLineDetails(this.logs);
+    const customerSeedData = AsyncReplayOrchestrator.extractCustomerSeedData(this.logs);
+    const lineSeedData = AsyncReplayOrchestrator.extractLineSeedData(this.logs);
+
     await this.clearLspData(merchantId, orderId);
-    await this.onboardSeedData(merchantId, lenderOrgIdToIdMap);
+    await this.onboardSeedData(
+      merchantId,
+      lenderOrgIdToIdMap,
+      lineDetails,
+      customerSeedData,
+      lineSeedData
+    );
     
     logger.info('Async replay orchestrator started', {
       totalLogs: this.logs.length,
@@ -393,8 +428,9 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   
   async triggerExternalRequestAsync(entry) {
     try {
-      const api = this.getApiForLogTag(entry.logTag);
       const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
+      const resolvedEndpoint = resolveWrapperEndpointForMerchant(entry, endpointConfig);
+      const api = resolvedEndpoint || this.getApiForLogTag(entry.logTag);
       const customHeaders = {
         ...(endpointConfig?.headers || {}),
         ...buildAppCoreAuthHeaders(entry, this.validator.entries)
@@ -652,7 +688,14 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       lenderOrgId: incoming.lenderOrgId
     });
 
-    return await super.handleIncomingRequest(incoming);
+    const response = await super.handleIncomingRequest(incoming);
+
+    // The replay loop may already be blocked on waitForMatchingRequest for this
+    // exact entry. Since we handled it synchronously here, release that waiter
+    // so ART does not time out on a request that was already processed.
+    this.bufferManager?.skipWaiter?.(currentEntry);
+
+    return response;
   }
   
   async handleThemisEligibilityBatchAsync(incoming) {

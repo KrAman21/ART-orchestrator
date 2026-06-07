@@ -58,6 +58,13 @@ export async function runSequentialArt(orderList, config) {
   console.log(`========================================\n`);
 
   reportGenerator.startExecution();
+
+  // Start all S3 fetches concurrently in the background — returns a Map of Promises.
+  // Workers await only their own order's promise, so replay and fetching overlap.
+  console.log(`\n[PREFETCH] Starting background log fetch for all ${orderList.length} orders...`);
+  const prefetchPromises = startPrefetchPromises(orderList, config);
+  console.log(`[PREFETCH] Workers starting — fetching and replaying will run concurrently.\n`);
+
   const results = new Array(orderList.length);
   let nextOrderIndex = 0;
 
@@ -86,7 +93,8 @@ export async function runSequentialArt(orderList, config) {
         absoluteIndex + 1,
         orderList.length,
         maxJourneyTimeMs,
-        reportGenerator
+        reportGenerator,
+        await (prefetchPromises?.get(orderId) ?? Promise.resolve(null))
       );
 
       const result = {
@@ -168,15 +176,114 @@ export async function runSequentialArt(orderList, config) {
   return { success: failed === 0, results: finalizedResults };
 }
 
-async function processSingleOrder(merchantId, orderId, config, orderIndex, totalOrders, maxJourneyTimeMs, reportGenerator) {
+/**
+ * Fetches logs from S3 and runs the full filter pipeline for a single order.
+ * Returns the final filtered logs array, or throws on failure.
+ */
+async function fetchAndFilterOrderLogs(merchantId, orderId, config, logsFilePath, filteredLogsPath, finalFilteredLogsPath) {
+  const maxFetchAttempts = 5;
+  const fetchRetryIntervalMs = 2000;
+  let fetchResult = null;
+
+  const preCachedLogs = await fetchLogsFromJSONFile(logsFilePath).catch(() => []);
+  if (preCachedLogs.length > 0) {
+    fetchResult = {
+      success: true,
+      stats: { totalLogs: preCachedLogs.length },
+      allLogs: preCachedLogs
+    };
+  } else {
+    for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
+      const fetcher = new BatchLogFetcher({
+        sessionToken: config.SESSION_TOKEN,
+        outputPath: logsFilePath,
+        delayBetweenRequests: 500,
+        maxRetries: 3
+      });
+
+      fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+
+      if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
+        break;
+      }
+
+      logger.warn(`[PREFETCH] Fetch attempt ${attempt}/${maxFetchAttempts} failed for order ${orderId}`, {
+        attempt,
+        maxFetchAttempts,
+        totalLogs: fetchResult.stats?.totalLogs || 0,
+        error: fetchResult.error || 'No logs found'
+      });
+
+      if (attempt < maxFetchAttempts) {
+        await sleep(fetchRetryIntervalMs);
+      }
+    }
+  }
+
+  if (!fetchResult?.success || fetchResult.stats.totalLogs === 0) {
+    throw new Error(`No logs found after ${maxFetchAttempts} attempts`);
+  }
+
+  const logs = await fetchLogsFromJSONFile(logsFilePath);
+  if (logs.length === 0) throw new Error('No logs to process after fetch');
+
+  const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
+  if (filteredLogs.length === 0) throw new Error('No logs remaining after filterAndSortLogs');
+
+  const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
+  if (finalFilteredLogs.length === 0) throw new Error('No logs remaining after filterOrchestratorSkippableLogs');
+
+  return finalFilteredLogs;
+}
+
+/**
+ * Prefetch pipeline: fetches and filters S3 logs for ALL orders concurrently.
+ * Returns a Map<orderId, { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath }>
+ * (or { error, logsFilePath, ... } on failure).
+ * Workers consume pre-fetched data and skip the S3 wait entirely.
+ */
+function startPrefetchPromises(orderList, config) {
+  // Returns Map<orderId, Promise<{finalFilteredLogs,...}|{error,...}>> immediately.
+  // All fetches fire concurrently in the background. Each worker awaits its own.
+  const promises = new Map();
+
+  for (const { merchantId, orderId } of orderList) {
+    // idx matches position in orderList, same as what processSingleOrder uses
+    const orderIndex = orderList.findIndex(o => o.orderId === orderId) + 1;
+    const logsFilePath          = getPerOrderFilePath(config.LOGS_FILE_PATH             || 'data/logs.json',              orderId, orderIndex, config);
+    const filteredLogsPath      = getPerOrderFilePath(config.FILTERED_LOGS_PATH         || 'data/filtered-logs.json',      orderId, orderIndex, config);
+    const finalFilteredLogsPath = getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH   || 'data/final-filtered-logs.json', orderId, orderIndex, config);
+
+    const p = fetchAndFilterOrderLogs(
+      merchantId, orderId, config,
+      logsFilePath, filteredLogsPath, finalFilteredLogsPath
+    ).then(
+      finalFilteredLogs => {
+        console.log(`[PREFETCH] ✓ ${orderId}: ${finalFilteredLogs.length} logs ready`);
+        return { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
+      },
+      error => {
+        console.log(`[PREFETCH] ✗ ${orderId}: ${error.message}`);
+        logger.warn(`[PREFETCH] Failed for order ${orderId}`, { orderId, error: error.message });
+        return { error: error.message, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
+      }
+    );
+
+    promises.set(orderId, p);
+  }
+
+  return promises;
+}
+
+async function processSingleOrder(merchantId, orderId, config, orderIndex, totalOrders, maxJourneyTimeMs, reportGenerator, prefetchedData = null) {
   let server = null;
   let orchestrator = null;
   let mocks = null;
   let progressInterval = null;
   const registrySessionId = getRegistrySessionId(config, orderId);
-  const logsFilePath = getPerOrderFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex, config);
-  const filteredLogsPath = getPerOrderFilePath(config.FILTERED_LOGS_PATH || 'data/filtered-logs.json', orderId, orderIndex, config);
-  const finalFilteredLogsPath = getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json', orderId, orderIndex, config);
+  const logsFilePath = prefetchedData?.logsFilePath ?? getPerOrderFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex, config);
+  const filteredLogsPath = prefetchedData?.filteredLogsPath ?? getPerOrderFilePath(config.FILTERED_LOGS_PATH || 'data/filtered-logs.json', orderId, orderIndex, config);
+  const finalFilteredLogsPath = prefetchedData?.finalFilteredLogsPath ?? getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json', orderId, orderIndex, config);
 
   console.log(`Replay artifacts for ${orderId}:`);
   console.log(`  Raw logs: ${logsFilePath}`);
@@ -191,111 +298,132 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
   });
 
   try {
-    logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 1: Fetching logs`, {
-      orderId,
-      orderIndex,
-      totalOrders,
-      phase: 'FETCH_LOGS'
-    });
+    let finalFilteredLogs;
 
-    let fetchResult = null;
-    const maxFetchAttempts = 5;
-    const fetchRetryIntervalMs = 2000;
-
-    const preCachedLogs = await fetchLogsFromJSONFile(logsFilePath).catch(() => []);
-    if (preCachedLogs.length > 0) {
-      console.log(`  Using pre-cached logs for order ${orderId} (${preCachedLogs.length} entries)`);
-      fetchResult = {
-        success: true,
-        stats: { totalLogs: preCachedLogs.length },
-        allLogs: preCachedLogs
-      };
+    if (prefetchedData?.finalFilteredLogs) {
+      finalFilteredLogs = prefetchedData.finalFilteredLogs;
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Using pre-fetched logs`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        logCount: finalFilteredLogs.length,
+        phase: 'PREFETCH_HIT'
+      });
+      console.log(`[PREFETCH] Using ${finalFilteredLogs.length} pre-fetched logs for order ${orderId}`);
     } else {
-      for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
-        const fetcher = new BatchLogFetcher({
-          sessionToken: config.SESSION_TOKEN,
-          outputPath: logsFilePath,
-          delayBetweenRequests: 500,
-          maxRetries: 3
+      if (prefetchedData?.error) {
+        logger.warn(`[PREFETCH] Pre-fetch failed for order ${orderId}, falling back to inline fetch`, {
+          orderId,
+          error: prefetchedData.error
         });
+      }
 
-        fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 1: Fetching logs`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        phase: 'FETCH_LOGS'
+      });
 
-        if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
-          break;
-        }
+      let fetchResult = null;
+      const maxFetchAttempts = 5;
+      const fetchRetryIntervalMs = 2000;
 
-        logger.warn(`Log fetch attempt ${attempt}/${maxFetchAttempts} failed for order ${orderId}`, {
-          attempt,
-          maxFetchAttempts,
-          totalLogs: fetchResult.stats?.totalLogs || 0,
-          error: fetchResult.error || 'No logs found'
-        });
+      const preCachedLogs = await fetchLogsFromJSONFile(logsFilePath).catch(() => []);
+      if (preCachedLogs.length > 0) {
+        console.log(`  Using pre-cached logs for order ${orderId} (${preCachedLogs.length} entries)`);
+        fetchResult = {
+          success: true,
+          stats: { totalLogs: preCachedLogs.length },
+          allLogs: preCachedLogs
+        };
+      } else {
+        for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
+          const fetcher = new BatchLogFetcher({
+            sessionToken: config.SESSION_TOKEN,
+            outputPath: logsFilePath,
+            delayBetweenRequests: 500,
+            maxRetries: 3
+          });
 
-        if (attempt < maxFetchAttempts) {
-          console.log(`  Log fetch attempt ${attempt}/${maxFetchAttempts} returned 0 logs, retrying in 2s...`);
-          await new Promise(resolve => setTimeout(resolve, fetchRetryIntervalMs));
+          fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+
+          if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
+            break;
+          }
+
+          logger.warn(`Log fetch attempt ${attempt}/${maxFetchAttempts} failed for order ${orderId}`, {
+            attempt,
+            maxFetchAttempts,
+            totalLogs: fetchResult.stats?.totalLogs || 0,
+            error: fetchResult.error || 'No logs found'
+          });
+
+          if (attempt < maxFetchAttempts) {
+            console.log(`  Log fetch attempt ${attempt}/${maxFetchAttempts} returned 0 logs, retrying in 2s...`);
+            await new Promise(resolve => setTimeout(resolve, fetchRetryIntervalMs));
+          }
         }
       }
-    }
 
-    if (!fetchResult.success || fetchResult.stats.totalLogs === 0) {
-      const error = `No logs found after ${maxFetchAttempts} attempts`;
-      console.log(`  Failed to fetch logs for order ${orderId} after ${maxFetchAttempts} attempts, skipping.`);
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: error,
-        logsProcessed: 0
+      if (!fetchResult.success || fetchResult.stats.totalLogs === 0) {
+        const error = `No logs found after ${maxFetchAttempts} attempts`;
+        console.log(`  Failed to fetch logs for order ${orderId} after ${maxFetchAttempts} attempts, skipping.`);
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: error,
+          logsProcessed: 0
+        });
+        return {
+          success: false,
+          logCount: 0,
+          error
+        };
+      }
+
+      console.log(`Fetched ${fetchResult.stats.totalLogs} logs for order ${orderId} (attempt ${fetchResult.stats.totalLogs > 0 ? 'succeeded' : 'exhausted'})`);
+
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 2: Loading and filtering logs`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        phase: 'FILTER_LOGS'
       });
-      return {
-        success: false,
-        logCount: 0,
-        error
-      };
-    }
 
-    console.log(`Fetched ${fetchResult.stats.totalLogs} logs for order ${orderId} (attempt ${fetchResult.stats.totalLogs > 0 ? 'succeeded' : 'exhausted'})`);
+      const logs = await fetchLogsFromJSONFile(logsFilePath);
 
-    logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 2: Loading and filtering logs`, {
-      orderId,
-      orderIndex,
-      totalOrders,
-      phase: 'FILTER_LOGS'
-    });
-    
-    const logs = await fetchLogsFromJSONFile(logsFilePath);
+      if (logs.length === 0) {
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: 'No logs to process',
+          logsProcessed: 0
+        });
+        return { success: false, logCount: 0, error: 'No logs to process' };
+      }
 
-    if (logs.length === 0) {
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: 'No logs to process',
-        logsProcessed: 0
-      });
-      return { success: false, logCount: 0, error: 'No logs to process' };
-    }
+      console.log(`Loaded ${logs.length} logs`);
 
-    console.log(`Loaded ${logs.length} logs`);
+      const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
 
-    const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
-    
-    if (filteredLogs.length === 0) {
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: 'No logs after filtering',
-        logsProcessed: 0
-      });
-      return { success: false, logCount: 0, error: 'No logs after filtering' };
-    }
+      if (filteredLogs.length === 0) {
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: 'No logs after filtering',
+          logsProcessed: 0
+        });
+        return { success: false, logCount: 0, error: 'No logs after filtering' };
+      }
 
-    const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
-    
-    if (finalFilteredLogs.length === 0) {
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: 'No logs after second filtering',
-        logsProcessed: 0
-      });
-      return { success: false, logCount: 0, error: 'No logs after second filtering' };
+      finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
+
+      if (finalFilteredLogs.length === 0) {
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: 'No logs after second filtering',
+          logsProcessed: 0
+        });
+        return { success: false, logCount: 0, error: 'No logs after second filtering' };
+      }
     }
 
     orderReport.logsTotal = finalFilteredLogs.length;
