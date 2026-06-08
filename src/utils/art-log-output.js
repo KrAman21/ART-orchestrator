@@ -33,6 +33,7 @@ const USER_PREFIXES = [
   'ART Report Path:',
   'ART Report generated:',
   'ART HTML Report generated:',
+  'ART Report Server listening',
   'HTML Report: http://',
   'ART REPORT SUMMARY',
   'Stopping process-compose services',

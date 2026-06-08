@@ -10,6 +10,7 @@ import { runSequentialArt } from './sequential-runner.js';
 import { fetchOrderIdsFromQAPI } from './services/http-client.js';
 import { startMultiplexerServer } from './dashboard/multiplexer.js';
 import { stopProcessCompose } from './utils/process-compose.js';
+import { startReportServer } from './report-server.js';
 
 uninstallEarlyProcessComposeStop();
 
@@ -235,6 +236,10 @@ async function fetchOrderListFromQAPI(answers) {
 }
 
 async function main() {
+  // Start the HTTP report server immediately so the URL is reachable
+  // even while the ART run is in progress.
+  startReportServer();
+
   const logUnexpectedProcessError = async (kind, error) => {
     const normalizedError = error instanceof Error ? error : new Error(String(error));
 
