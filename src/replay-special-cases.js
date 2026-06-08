@@ -100,6 +100,22 @@ export const REPLAY_SPECIAL_CASES = [
     ]
   },
   {
+    logTag: 'LenderLineStatus_REQUEST',
+    handler: 'triggerGatewayCall',
+    description:
+      'LenderLineStatus_REQUEST (CORE→GATEWAY) is no longer initiated by LSP in the new code path for standard checkout flows. ' +
+      'ART triggers the call to /gateway/v1.0/lineStatus itself after a short wait, ' +
+      'unless the preceding logs indicate a Refund or FetchLineStatus journey (in which case LSP will make the call as before).',
+    triggerAfterSeconds: 2,
+    endpoint: '/gateway/v1.0/lineStatus',
+    // If any of these logTags appear in the preceding processed entries for this
+    // order, LSP will invoke LenderLineStatus itself — do NOT trigger from ART.
+    skipIfPrecedingLogTags: [
+      'FlipKart-Refund',
+      'FlipKart-LineOnboarding-FetchLineStatus_REQUEST'
+    ]
+  },
+  {
     logTag: 'GENERATE PARTNER AUTH TOKEN_REQUEST',
     handler: 'skipAfterTimeoutFallback',
     description: 'If the gateway does not send the GENERATE PARTNER AUTH TOKEN call to ART within 4s, skip the req/resp pair — the auth token is likely already cached. If the request does arrive within 4s it is served normally from prod logs.',

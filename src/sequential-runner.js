@@ -10,6 +10,7 @@ import { basename, dirname, extname, join } from 'path';
 import { unlink } from 'fs/promises';
 import { getOptionalRepeatPolicy, REPLAY_SPECIAL_CASES } from './replay-special-cases.js';
 import { findCorrespondingResponseEntry } from './services/response-matcher.js';
+import { makeRequest } from './services/http-client.js';
 
 export async function runSequentialArt(orderList, config) {
   const maxJourneyTimeMs = config.MAX_JOURNEY_TIME_MS || 3 * 60 * 1000;
@@ -915,6 +916,107 @@ function hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPo
 }
 
 /**
+ * For CORE→GATEWAY entries with `triggerGatewayCall` in REPLAY_SPECIAL_CASES:
+ * LSP no longer invokes this endpoint in new code for standard checkout flows.
+ * After `triggerAfterSeconds`, ART calls the gateway itself using the payload
+ * from the recorded production log entry, then marks req+resp as processed.
+ *
+ * Skipped entirely if any of `skipIfPrecedingLogTags` appear in already-processed
+ * entries — meaning LSP will make the call itself in that branch.
+ */
+async function maybeTriggerLenderLineStatusGatewayCall(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
+  if (!currentEntry?.isRequest) return false;
+  if (currentEntry.source !== 'CORE' || currentEntry.destination !== 'GATEWAY') return false;
+
+  const specialCase = REPLAY_SPECIAL_CASES.find(
+    sc => sc.logTag === currentEntry.logTag && sc.handler === 'triggerGatewayCall'
+  );
+  if (!specialCase) return false;
+
+  const triggerAfterMs = (specialCase.triggerAfterSeconds ?? 2) * 1000;
+  if (stuckDurationMs < triggerAfterMs) return false;
+
+  // If preceding logs indicate a branch where LSP will invoke this itself, skip
+  const skipTags = specialCase.skipIfPrecedingLogTags || [];
+  if (skipTags.length > 0) {
+    const processedEntries = orchestrator.validator.entries.filter(e =>
+      orchestrator.validator.processedIndices.has(e.index) && e.index < currentEntry.index
+    );
+    const hasPrecedingTag = processedEntries.some(e => skipTags.some(t => e.logTag?.includes(t)));
+    if (hasPrecedingTag) {
+      logger.info('maybeTriggerLenderLineStatusGatewayCall: skipping trigger — preceding logTag found', {
+        orderId, currentLogTag: currentEntry.logTag, skipTags
+      });
+      return false;
+    }
+  }
+
+  const endpoint = specialCase.endpoint;
+  const payload = currentEntry.payload || {};
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Triggering ${currentEntry.logTag} to gateway (LSP no longer initiates this call) - endpoint: ${endpoint}`,
+    {
+      orderId, orderIndex, totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      triggerAfterSeconds: specialCase.triggerAfterSeconds,
+      endpoint,
+      phase: 'TRIGGER_GATEWAY_CALL'
+    }
+  );
+
+  try {
+    const serviceResponse = await makeRequest(
+      orchestrator.getServiceBaseUrl('GW'),
+      endpoint,
+      'POST',
+      payload,
+      currentEntry.requestId,
+      'CORE_GATEWAY',
+      currentEntry.logTag,
+      currentEntry.merchantId || null,
+      { 'x-merchant-id': currentEntry.merchantId || 'flipkart', 'x-request-id': currentEntry.requestId || '' },
+      null,
+      orchestrator.getServiceUnixSocket('GW'),
+      10000
+    );
+
+    if (serviceResponse?.error || (serviceResponse?.status && serviceResponse.status >= 400)) {
+      logger.error('maybeTriggerLenderLineStatusGatewayCall: gateway returned error', {
+        orderId, status: serviceResponse?.status, error: serviceResponse?.message
+      });
+      // Don't block replay on gateway error — still advance past this entry
+    } else {
+      logger.info('maybeTriggerLenderLineStatusGatewayCall: gateway call succeeded', {
+        orderId, status: serviceResponse?.status, logTag: currentEntry.logTag
+      });
+    }
+  } catch (err) {
+    logger.error('maybeTriggerLenderLineStatusGatewayCall: request threw', {
+      orderId, error: err?.message
+    });
+    // Still advance to avoid blocking replay
+  }
+
+  const responseEntry = findCorrespondingResponseEntry(
+    orchestrator.validator.entries,
+    currentEntry,
+    { searchAll: false, processedIndices: orchestrator.validator.processedIndices }
+  );
+
+  if (typeof orchestrator.bufferManager?.skipWaiter === 'function') {
+    orchestrator.bufferManager.skipWaiter(currentEntry);
+  }
+  orchestrator.validator.markProcessed(currentEntry);
+  if (responseEntry) {
+    orchestrator.validator.markProcessed(responseEntry);
+  }
+
+  return true;
+}
+
+/**
  * For GATEWAY→LENDER entries that have `skipAfterTimeoutFallback` in REPLAY_SPECIAL_CASES:
  * if the gateway does not make the call within N seconds (default 4s), skip both
  * the request and its corresponding response and let replay continue.
@@ -1106,6 +1208,12 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
       const currentMaxRetrySeconds = getMaxRetrySeconds(currentEntry?.logTag);
       const currentMaxRetryMs = currentMaxRetrySeconds * 1000;
       const stuckDurationMs = Date.now() - stuckSince;
+
+      if (await maybeTriggerLenderLineStatusGatewayCall(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
+        stuckEntryIndex = null;
+        stuckSince = null;
+        continue;
+      }
 
       if (maybeSkipGatewayLenderAuthFallback(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
         stuckEntryIndex = null;
