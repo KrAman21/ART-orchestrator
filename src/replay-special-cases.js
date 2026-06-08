@@ -98,6 +98,12 @@ export const REPLAY_SPECIAL_CASES = [
       'FlipKart-GetRedirectionURL_REQUEST',
       'FlipKart-GetRedirectionURL_RESPONSE'
     ]
+  },
+  {
+    logTag: 'GENERATE PARTNER AUTH TOKEN_REQUEST',
+    handler: 'skipAfterTimeoutFallback',
+    description: 'If the gateway does not send the GENERATE PARTNER AUTH TOKEN call to ART within 4s, skip the req/resp pair — the auth token is likely already cached. If the request does arrive within 4s it is served normally from prod logs.',
+    optionalAfterSeconds: 4
   }
 ];
 

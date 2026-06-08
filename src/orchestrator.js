@@ -912,6 +912,7 @@ export class ReplayOrchestrator {
   async maybePassThroughFetchLoanApplicationData(incoming) {
     const isFetchLoanApplicationDataRequest =
       incoming?.api === '/api/fetch/loanApplicationData' ||
+      incoming?.logTag === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' ||
       incoming?.logTag === 'FETCH_LOAN_APPLICATION_DATA_REQUEST';
 
     if (
@@ -969,6 +970,30 @@ export class ReplayOrchestrator {
       entry: `[passthrough] ${incoming.logTag} ${incoming.source}→${incoming.destination}`,
       timestamp: new Date().toISOString()
     });
+
+    // Advance the validator past this GATEWAY→LSP entry and its paired response
+    // so the sequential-runner can continue to serve the next GATEWAY→LENDER
+    // call (e.g. GET_REDIRECTION_URL_SO) that is buffered and waiting.
+    const passthroughEntry = this.validator.getCurrentEntry();
+    if (
+      passthroughEntry &&
+      (passthroughEntry.logTag === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' ||
+        passthroughEntry.logTag === 'FETCH_LOAN_APPLICATION_DATA_REQUEST')
+    ) {
+      const passthroughResponseEntry = this.findCorrespondingResponse(passthroughEntry);
+      if (typeof this.bufferManager?.skipWaiter === 'function') {
+        this.bufferManager.skipWaiter(passthroughEntry);
+      }
+      this.validator.markProcessed(passthroughEntry);
+      if (passthroughResponseEntry) {
+        this.validator.markProcessed(passthroughResponseEntry);
+      }
+      logger.info('Advanced validator past FECTH_LOAN_APPLICATION_DATA_API passthrough entries', {
+        requestEntryIndex: passthroughEntry.index,
+        responseEntryIndex: passthroughResponseEntry?.index ?? null,
+        loanApplicationId
+      });
+    }
 
     return {
       success: true,

@@ -1420,7 +1420,7 @@ export const API_TO_LOGTAG_MAP = {
   '/gateway/v1.0/createOffer-request': { logTag: 'LSP-CreateOffer_REQUEST', api: '/gateway/v1.0/createOffer', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/getKFS-request': { logTag: 'LSP-GetKFS_REQUEST', api: '/gateway/v1.0/getKFS', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/hardEligibility-request': { logTag: 'LSP-HardEligibility_REQUEST', api: '/gateway/v1.0/hardEligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
-  '/api/fetch/loanApplicationData': { logTag: 'FETCH_LOAN_APPLICATION_DATA_REQUEST', api: '/api/fetch/loanApplicationData', sourceDestination: 'GATEWAY_LSP', headers: {} },
+  '/api/fetch/loanApplicationData': { logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST', api: '/api/fetch/loanApplicationData', sourceDestination: 'GATEWAY_LSP', headers: {} },
   
   // ==================== GATEWAY_CORE (Gateway to Core - Responses/Callbacks) ====================
   '/v1/themis/eligibility/callback': { logTag: 'LSP-Eligibility_INCOMING', api: '/v1/themis/eligibility/callback', sourceDestination: 'GATEWAY_CORE', headers: {} },

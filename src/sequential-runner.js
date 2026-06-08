@@ -8,7 +8,7 @@ import { ArtReportGenerator } from './services/art-report-generator.js';
 import { logger } from './utils/logger.js';
 import { basename, dirname, extname, join } from 'path';
 import { unlink } from 'fs/promises';
-import { getOptionalRepeatPolicy } from './replay-special-cases.js';
+import { getOptionalRepeatPolicy, REPLAY_SPECIAL_CASES } from './replay-special-cases.js';
 import { findCorrespondingResponseEntry } from './services/response-matcher.js';
 
 export async function runSequentialArt(orderList, config) {
@@ -914,6 +914,59 @@ function hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPo
   );
 }
 
+/**
+ * For GATEWAY→LENDER entries that have `skipAfterTimeoutFallback` in REPLAY_SPECIAL_CASES:
+ * if the gateway does not make the call within N seconds (default 4s), skip both
+ * the request and its corresponding response and let replay continue.
+ *
+ * If the request DOES arrive before the timeout the bufferManager will match it
+ * and respond with the prod-log response — this function will never fire.
+ */
+function maybeSkipGatewayLenderAuthFallback(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
+  if (!currentEntry?.isRequest) return false;
+  if (currentEntry.source !== 'GATEWAY' || currentEntry.destination !== 'LENDER') return false;
+
+  const specialCase = REPLAY_SPECIAL_CASES.find(
+    sc => sc.logTag === currentEntry.logTag && sc.handler === 'skipAfterTimeoutFallback'
+  );
+  if (!specialCase) return false;
+
+  const optionalAfterMs = (specialCase.optionalAfterSeconds ?? 4) * 1000;
+  if (stuckDurationMs < optionalAfterMs) return false;
+
+  const responseEntry = findCorrespondingResponseEntry(
+    orchestrator.validator.entries,
+    currentEntry,
+    { searchAll: false, processedIndices: orchestrator.validator.processedIndices }
+  );
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Skipping optional GATEWAY→LENDER auth entry after ${specialCase.optionalAfterSeconds}s (token likely cached) - logTag: ${currentEntry.logTag}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      skippedResponseIndex: responseEntry?.index ?? null,
+      optionalAfterSeconds: specialCase.optionalAfterSeconds,
+      phase: 'GATEWAY_LENDER_AUTH_SKIP'
+    }
+  );
+
+  // Unblock the async-orchestrator's waitForMatchingRequest before marking processed
+  if (typeof orchestrator.bufferManager?.skipWaiter === 'function') {
+    orchestrator.bufferManager.skipWaiter(currentEntry);
+  }
+
+  orchestrator.validator.markProcessed(currentEntry);
+  if (responseEntry) {
+    orchestrator.validator.markProcessed(responseEntry);
+  }
+
+  return true;
+}
+
 function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
   const optionalRepeatPolicy = getOptionalRepeatPolicy(orchestrator?.config, currentEntry);
 
@@ -1053,6 +1106,12 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
       const currentMaxRetrySeconds = getMaxRetrySeconds(currentEntry?.logTag);
       const currentMaxRetryMs = currentMaxRetrySeconds * 1000;
       const stuckDurationMs = Date.now() - stuckSince;
+
+      if (maybeSkipGatewayLenderAuthFallback(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
+        stuckEntryIndex = null;
+        stuckSince = null;
+        continue;
+      }
 
       if (maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
         stuckEntryIndex = null;
