@@ -315,6 +315,9 @@ async function main() {
     console.log('Stopping process-compose services...');
     console.log('========================================\n');
     printReportSummary(CONFIG.REPORT_PATH);
+    console.log('ART Report Content Start');
+    console.log(readFileSync(CONFIG.REPORT_PATH, 'utf-8'));
+    console.log('ART Report Content End');
     await stopProcessCompose('ART_RUN_COMPLETED');
     process.exit(result.success ? 0 : 1);
   } catch (error) {
