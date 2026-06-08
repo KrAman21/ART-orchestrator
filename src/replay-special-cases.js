@@ -34,14 +34,23 @@ export const REPLAY_SPECIAL_CASES = [
   {
     logTag: 'LSP-FetchOfferRequest_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
-    description: 'Allow duplicate fetch-offer requests to be skipped once replay has already moved into the post-fetch branch for the same context.',
+    description: 'Allow duplicate fetch-offer requests to be skipped once replay has already moved into the post-fetch branch for the same context, or when redirection already returned NOT_REQUIRED for that journey.',
     optionalAfterSeconds: 5,
     requirePriorProcessedOccurrence: true,
+    allowObservedBranchAdvance: false,
+    requireBranchAdvance: true,
     advanceWhenSeenLogTags: [
       'POLLING API :: LINE_STATUS_REQUEST',
       'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
       'CALCULATE_EMI_REQUEST',
       'PROFILE_INGESTION_REQUEST'
+    ],
+    skipWhenPriorProcessedEntries: [
+      {
+        logTag: 'FlipKart-GetRedirectionURL_RESPONSE',
+        payloadPath: 'status',
+        equals: 'NOT_REQUIRED'
+      }
     ]
   },
   {
@@ -127,7 +136,12 @@ export function getOptionalRepeatPolicy(config, currentEntry) {
       5,
     requirePriorProcessedOccurrence:
       builtInSpecialCase?.requirePriorProcessedOccurrence ?? true,
+    allowObservedBranchAdvance:
+      builtInSpecialCase?.allowObservedBranchAdvance ?? true,
+    requireBranchAdvance:
+      builtInSpecialCase?.requireBranchAdvance ?? false,
     advanceWhenSeenLogTags: builtInSpecialCase?.advanceWhenSeenLogTags || [],
-    skipWhenPriorProcessedLogTags: builtInSpecialCase?.skipWhenPriorProcessedLogTags || []
+    skipWhenPriorProcessedLogTags: builtInSpecialCase?.skipWhenPriorProcessedLogTags || [],
+    skipWhenPriorProcessedEntries: builtInSpecialCase?.skipWhenPriorProcessedEntries || []
   };
 }

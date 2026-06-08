@@ -429,6 +429,42 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     orderReport.logsTotal = finalFilteredLogs.length;
     console.log(`Ready to replay ${finalFilteredLogs.length} unique logs`);
 
+    const replayLenderOrgIds = getReplayLenderOrgIds(finalFilteredLogs);
+    const skippedLenderOrgIds = (config.SKIP_LENDER_ORG_IDS || []).filter(lenderOrgId =>
+      replayLenderOrgIds.includes(lenderOrgId)
+    );
+
+    if (skippedLenderOrgIds.length > 0) {
+      const skipReason = `Skipped by config: replay contains lenderOrgId(s) ${skippedLenderOrgIds.join(', ')}`;
+      logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - ${skipReason}`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        replayLenderOrgIds,
+        skippedLenderOrgIds,
+        phase: 'ORDER_SKIPPED'
+      });
+
+      reportGenerator.finalizeOrder(orderId, {
+        success: true,
+        skipped: true,
+        stopReason: skipReason,
+        logsProcessed: 0,
+        artResults: {
+          passed: 0,
+          failed: 0,
+          processedLogs: [],
+          payloadComparisons: []
+        }
+      });
+
+      return {
+        success: true,
+        skipped: true,
+        logCount: 0
+      };
+    }
+
     if (MOCK_CONFIG.enabled) {
       throw new Error('MOCK_CONFIG.enabled is not supported in unix-socket-only ART mode.');
     }
@@ -447,7 +483,9 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       orderId,
       orderIndex,
       totalOrders,
-      reportGenerator
+      reportGenerator,
+      registrySessionId,
+      onLoanApplicationId: config.onLoanApplicationId
     });
 
     if (config.onOrchestratorReady) {
@@ -729,6 +767,51 @@ function sharesReplayContext(leftEntry, rightEntry) {
   return true;
 }
 
+function collectLenderOrgIds(value, acc = new Set()) {
+  if (value === null || value === undefined) {
+    return acc;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectLenderOrgIds(item, acc);
+    }
+    return acc;
+  }
+
+  if (typeof value !== 'object') {
+    return acc;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if ((key === 'lenderOrgId' || key === 'lender_org_id') && typeof nestedValue === 'string' && nestedValue.trim()) {
+      acc.add(nestedValue.trim());
+    }
+    collectLenderOrgIds(nestedValue, acc);
+  }
+
+  return acc;
+}
+
+function getReplayLenderOrgIds(finalFilteredLogs) {
+  const lenderOrgIds = new Set();
+
+  for (const rawLog of finalFilteredLogs || []) {
+    const message = rawLog?.message || {};
+    if (message.log_tag !== 'LSP-FetchOfferRequest_REQUEST') {
+      continue;
+    }
+
+    collectLenderOrgIds(message.trace_request, lenderOrgIds);
+
+    if (typeof message.lender_org_id === 'string' && message.lender_org_id.trim()) {
+      lenderOrgIds.add(message.lender_org_id.trim());
+    }
+  }
+
+  return [...lenderOrgIds];
+}
+
 function hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy) {
   if (!optionalRepeatPolicy.advanceWhenSeenLogTags?.length) {
     return false;
@@ -744,6 +827,10 @@ function hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPol
 }
 
 function hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy) {
+  if (optionalRepeatPolicy.allowObservedBranchAdvance === false) {
+    return false;
+  }
+
   if (!optionalRepeatPolicy.advanceWhenSeenLogTags?.length) {
     return false;
   }
@@ -756,15 +843,73 @@ function hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPoli
   );
 }
 
-function hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy) {
-  if (!optionalRepeatPolicy.skipWhenPriorProcessedLogTags?.length) {
+function getPayloadValueAtPath(payload, payloadPath) {
+  if (!payload || !payloadPath) {
+    return undefined;
+  }
+
+  return payloadPath.split('.').reduce((current, segment) => {
+    if (current === null || current === undefined) {
+      return undefined;
+    }
+
+    return current[segment];
+  }, payload);
+}
+
+function matchesPriorProcessedEntryCondition(entry, condition) {
+  if (!condition || entry?.logTag !== condition.logTag) {
     return false;
+  }
+
+  if (!condition.payloadPath) {
+    return true;
+  }
+
+  return getPayloadValueAtPath(entry.payload, condition.payloadPath) === condition.equals;
+}
+
+function matchesObservedProcessedResponseCondition(entry, condition) {
+  if (!condition || entry?.logTag !== condition.logTag) {
+    return false;
+  }
+
+  if (!condition.payloadPath) {
+    return true;
+  }
+
+  return getPayloadValueAtPath(entry.payload, condition.payloadPath) === condition.equals;
+}
+
+function hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy) {
+  const hasTagBasedRules = optionalRepeatPolicy.skipWhenPriorProcessedLogTags?.length;
+  const hasConditionalRules = optionalRepeatPolicy.skipWhenPriorProcessedEntries?.length;
+
+  if (!hasTagBasedRules && !hasConditionalRules) {
+    return false;
+  }
+
+  const observedProcessedResponses = orchestrator.observedProcessedResponses || [];
+  const matchingObservedResponse = observedProcessedResponses.some(entry =>
+    optionalRepeatPolicy.skipWhenPriorProcessedEntries.some(condition =>
+      matchesObservedProcessedResponseCondition(entry, condition)
+    ) &&
+    sharesReplayContext(currentEntry, entry)
+  );
+
+  if (matchingObservedResponse) {
+    return true;
   }
 
   return orchestrator.validator.entries.some((entry, index) =>
     orchestrator.validator.processedIndices.has(index) &&
     index < currentEntry.index &&
-    optionalRepeatPolicy.skipWhenPriorProcessedLogTags.includes(entry.logTag) &&
+    (
+      optionalRepeatPolicy.skipWhenPriorProcessedLogTags.includes(entry.logTag) ||
+      optionalRepeatPolicy.skipWhenPriorProcessedEntries.some(condition =>
+        matchesPriorProcessedEntryCondition(entry, condition)
+      )
+    ) &&
     sharesReplayContext(currentEntry, entry)
   );
 }
@@ -796,26 +941,27 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
   const branchAdvanced = hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
   const branchAdvancedObserved = hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
   const priorAlternateProcessed = hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy);
+  const hasAnyAdvanceSignal = branchAdvanced || branchAdvancedObserved || priorAlternateProcessed;
 
   if (optionalRepeatPolicy.requirePriorProcessedOccurrence && priorReplayOccurrences.length < 1) {
+    return false;
+  }
+
+  if (optionalRepeatPolicy.requireBranchAdvance && !hasAnyAdvanceSignal) {
     return false;
   }
 
   if (
     optionalRepeatPolicy.requirePriorProcessedOccurrence &&
     processedSameTagCount < 1 &&
-    !branchAdvanced &&
-    !branchAdvancedObserved &&
-    !priorAlternateProcessed
+    !hasAnyAdvanceSignal
   ) {
     return false;
   }
 
   if (
     !optionalRepeatPolicy.requirePriorProcessedOccurrence &&
-    !branchAdvanced &&
-    !branchAdvancedObserved &&
-    !priorAlternateProcessed
+    !hasAnyAdvanceSignal
   ) {
     return false;
   }

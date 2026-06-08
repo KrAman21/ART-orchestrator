@@ -1,5 +1,6 @@
 import { writeFileSync } from 'fs';
 import { resolve } from 'path';
+import { generateHtmlReport } from './art-html-report-generator.js';
 
 export class ArtReportGenerator {
   constructor(config = {}) {
@@ -179,7 +180,7 @@ export class ArtReportGenerator {
     order.duration = new Date(order.endTime) - new Date(order.startTime);
 
     if (result.success) {
-      order.status = 'COMPLETED';
+      order.status = result.skipped ? 'SKIPPED' : 'COMPLETED';
     } else if (order.status === 'ERROR') {
       order.status = 'ERROR';
     } else if (result.stopReason === 'Stopped by user') {
@@ -376,6 +377,7 @@ export class ArtReportGenerator {
       summary: {
         totalOrders: this.orders.length,
         completed: this.orders.filter(o => o.status === 'COMPLETED').length,
+        skipped: this.orders.filter(o => o.status === 'SKIPPED').length,
         failed: this.orders.filter(o => o.status === 'FAILED' || o.status === 'ERROR').length,
         stuck: this.orders.filter(o => o.status === 'STUCK').length,
         timeout: this.orders.filter(o => o.status === 'TIMEOUT').length,
@@ -394,8 +396,18 @@ export class ArtReportGenerator {
 
     try {
       const reportPath = resolve(process.cwd(), this.reportPath);
+
+      // Generate HTML first so the path can be embedded in the JSON
+      try {
+        const htmlPath = generateHtmlReport(report, reportPath);
+        report.htmlReportPath = htmlPath;
+        console.log(`ART HTML Report generated: ${htmlPath}`);
+      } catch (htmlError) {
+        console.warn(`Warning: Could not generate HTML report: ${htmlError.message}`);
+      }
+
       writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
-      console.log(`\nART Report generated: ${reportPath}`);
+      console.log(`ART Report generated: ${reportPath}`);
       
       if (totalBufferFailures > 0) {
         console.log(`Warning: ${totalBufferFailures} buffer request(s) failed during execution`);

@@ -2,12 +2,14 @@ import { makeRequest as blockingMakeRequest } from '../services/http-client.js';
 import { logger } from '../utils/logger.js';
 
 export class NonBlockingHttpClient {
-  constructor(bufferManager, reportGenerator = null, orderId = null) {
+  constructor(bufferManager, reportGenerator = null, orderId = null, options = {}) {
     this.bufferManager = bufferManager;
     this.reportGenerator = reportGenerator;
     this.orderId = orderId;
     this.activeRequests = new Map();
     this.failedRequests = [];
+    this.shouldTreatApiFailureAsExpected =
+      options.shouldTreatApiFailureAsExpected || (() => false);
   }
   
   async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, loanApplicationId = null, lenderOrgId = null) {
@@ -40,6 +42,7 @@ export class NonBlockingHttpClient {
       endpoint,
       baseUrl,
       payload,
+      logIndex,
       loanApplicationId,
       lenderOrgId
     });
@@ -74,7 +77,9 @@ export class NonBlockingHttpClient {
       });
       
       const apiFailure = this.checkApiFailure(response);
-      const hasFailure = response.error || response.status >= 500 || !!apiFailure;
+      const expectedApiFailure =
+        !!apiFailure && this.shouldTreatApiFailureAsExpected(activeReq, response, apiFailure);
+      const hasFailure = response.error || response.status >= 500 || (!!apiFailure && !expectedApiFailure);
       
       logger.info('Non-blocking request result', { 
         requestId, 
@@ -82,6 +87,7 @@ export class NonBlockingHttpClient {
         hasError: response.error,
         apiFailure: !!apiFailure,
         apiFailureDetails: apiFailure,
+        expectedApiFailure,
         responseDataType: typeof response.data,
         willRecordFailure: hasFailure,
         hasActiveReq: !!activeReq

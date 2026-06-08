@@ -3,6 +3,7 @@ import { uninstallEarlyProcessComposeStop } from './utils/early-process-compose-
 import './utils/art-log-output.js';
 
 import { readFileSync } from 'fs';
+import { hostname } from 'os';
 import { createInterface } from 'readline';
 import { logger } from './utils/logger.js';
 import { runSequentialArt } from './sequential-runner.js';
@@ -35,6 +36,9 @@ const CONFIG = {
   REPORT_PATH: process.env.REPORT_PATH || 'report.json',
   KEEP_ORDER_TEMP_FILES: process.env.KEEP_ORDER_TEMP_FILES === 'true',
   ENABLE_BATCH_PROCESSING: process.env.ENABLE_BATCH_PROCESSING !== 'false',
+  SKIP_LENDER_ORG_IDS: process.env.SKIP_LENDER_ORG_IDS
+    ? process.env.SKIP_LENDER_ORG_IDS.split(',').map(s => s.trim()).filter(Boolean)
+    : [],
   OPTIONAL_REPEAT_LOG_TAGS: process.env.OPTIONAL_REPEAT_LOG_TAGS
     ? process.env.OPTIONAL_REPEAT_LOG_TAGS.split(',').map(s => s.trim()).filter(Boolean)
     : [],
@@ -60,6 +64,7 @@ function colorize(color, text) {
 
 function getOrderMarker(status) {
   if (status === 'COMPLETED') return { emoji: '✅', color: COLOR.green };
+  if (status === 'SKIPPED') return { emoji: '⏭️', color: COLOR.cyan };
   if (status === 'STOPPED' || status === 'TIMEOUT' || status === 'STUCK') return { emoji: '🟡', color: COLOR.yellow };
   return { emoji: '❌', color: COLOR.red };
 }
@@ -73,15 +78,23 @@ function printReportSummary(reportPath) {
     const statusEmoji = success ? '🟢' : '🔴';
 
     console.log('');
+    const htmlReportPath = report.htmlReportPath || reportPath.replace(/\.json$/, '.html');
+    const reportServerPort = process.env.ART_REPORT_SERVER_PORT || '7788';
+    const reportServerHost = process.env.ART_REPORT_SERVER_HOST || hostname();
+    const htmlReportUrl = `http://${reportServerHost}:${reportServerPort}/${htmlReportPath.split('/').pop()}`;
     console.log(colorize(COLOR.bold + COLOR.cyan, '🧾 ART REPORT SUMMARY 🧾'));
     console.log(colorize(statusColor, `${statusEmoji} Overall Status: ${report.overallStatus || 'UNKNOWN'}`));
     console.log(colorize(COLOR.cyan, `📄 Report Path: ${reportPath}`));
+    console.log(colorize(COLOR.cyan, `🌐 HTML Report: ${htmlReportUrl}`));
     console.log(
       colorize(
         COLOR.bold,
         `📊 Orders: ${summary.totalOrders ?? 0} total | ${summary.completed ?? 0} passed | ${summary.failed ?? 0} failed | ${summary.stuck ?? 0} stuck | ${summary.timeout ?? 0} timeout`
       )
     );
+    if ((summary.skipped ?? 0) > 0) {
+      console.log(colorize(COLOR.cyan, `⏭️ Skipped: ${summary.skipped}`));
+    }
 
     const orderedOutcomes = [...(report.orderOutcomes || [])].sort((left, right) => {
       const leftCompleted = left.status === 'COMPLETED';
@@ -297,9 +310,6 @@ async function main() {
     console.log('Stopping process-compose services...');
     console.log('========================================\n');
     printReportSummary(CONFIG.REPORT_PATH);
-    console.log('ART Report Content Start');
-    console.log(readFileSync(CONFIG.REPORT_PATH, 'utf-8'));
-    console.log('ART Report Content End');
     await stopProcessCompose('ART_RUN_COMPLETED');
     process.exit(result.success ? 0 : 1);
   } catch (error) {

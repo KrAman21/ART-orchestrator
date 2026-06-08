@@ -95,7 +95,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.httpClient = new NonBlockingHttpClient(
       this.bufferManager,
       config.reportGenerator,
-      config.orderId
+      config.orderId,
+      {
+        shouldTreatApiFailureAsExpected: this.shouldTreatApiFailureAsExpected.bind(this)
+      }
     );
     
     this.isPolling = false;
@@ -307,6 +310,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         differences: comparison.differences
       });
     }
+
+    this.recordObservedProcessedResponse(currentEntry, buffered.response.data);
     
     this.validator.advance();
     this.recordSuccess('buffered_response_validation', currentEntry);
@@ -485,6 +490,68 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       this.recordFailure('async_external_request_trigger', entry, error.message);
       await this.fail('Failed to trigger async external request for ' + entry.logTag + ': ' + error.message);
     }
+  }
+
+  shouldTreatApiFailureAsExpected(activeReq, response, apiFailure) {
+    if (!activeReq?.logIndex) {
+      return false;
+    }
+
+    const requestEntry = this.validator.entries.find(entry => entry.index === activeReq.logIndex);
+    if (!requestEntry) {
+      return false;
+    }
+
+    const expectedResponse = this.findCorrespondingResponse(requestEntry, true);
+    if (!expectedResponse?.payload) {
+      return false;
+    }
+
+    const expectedPayload = expectedResponse.payload;
+    const expectedStatus = expectedPayload.status || expectedPayload.Status || null;
+    const expectedError =
+      expectedPayload.error?.error_message ||
+      expectedPayload.error?.message ||
+      expectedPayload.errorMessage ||
+      expectedPayload.message ||
+      null;
+    const expectedErrorCode =
+      expectedPayload.error?.error_code ||
+      expectedPayload.error?.code ||
+      expectedPayload.errorCode ||
+      null;
+
+    const actualError =
+      apiFailure?.error_message ||
+      apiFailure?.message ||
+      apiFailure?.description ||
+      null;
+    const actualErrorCode =
+      apiFailure?.error_code ||
+      apiFailure?.code ||
+      null;
+
+    const matchesExpectedFailure =
+      expectedStatus === 'FAILURE' &&
+      (
+        (expectedError && actualError && expectedError === actualError) ||
+        (expectedErrorCode && actualErrorCode && expectedErrorCode === actualErrorCode)
+      );
+
+    if (matchesExpectedFailure) {
+      logger.info('Treating API failure as expected replay response', {
+        requestId: activeReq.requestId || null,
+        logTag: activeReq.logTag,
+        logIndex: activeReq.logIndex,
+        expectedResponse: expectedResponse.toString(),
+        expectedError,
+        expectedErrorCode,
+        actualError,
+        actualErrorCode
+      });
+    }
+
+    return matchesExpectedFailure;
   }
   
   async replayGatewayLenderPair(entry) {
@@ -813,6 +880,20 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     const responseEntry = kfsResponseEntries.find(entry => !this.validator.processedIndices.has(entry.index)) || kfsResponseEntries[0] || null;
 
     if (!requestEntry || !responseEntry) {
+      const synthesizedPayload = this.buildSyntheticThemisKfsPayload(incoming);
+      if (synthesizedPayload) {
+        logger.warn('Synthesizing Themis-KFS response from recorded FlipKart-GetKFS response', {
+          lenderOrgId: incoming.lenderOrgId,
+          requestId: incoming.requestId
+        });
+        return {
+          success: true,
+          payload: synthesizedPayload,
+          lenderOrgId: incoming.lenderOrgId,
+          synthesized: true
+        };
+      }
+
       logger.error('No matching Themis-KFS response found', {
         lenderOrgId: incoming.lenderOrgId,
         requestId: incoming.requestId,
@@ -859,6 +940,36 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       success: true,
       payload: transformRequest(responseEntry.payload, responseEntry.logTag),
       lenderOrgId: incoming.lenderOrgId
+    };
+  }
+
+  buildSyntheticThemisKfsPayload(incoming) {
+    const matchingAppRequest = this.validator.entries.find(entry =>
+      entry.logTag === 'FlipKart-GetKFS_REQUEST' &&
+      entry.payload?.lender_code === incoming.lenderOrgId &&
+      entry.index <= this.validator.currentIndex
+    );
+
+    if (!matchingAppRequest) {
+      return null;
+    }
+
+    const matchingAppResponse = this.validator.entries.find(entry =>
+      entry.logTag === 'FlipKart-GetKFS_RESPONSE' &&
+      entry.index > matchingAppRequest.index &&
+      entry.payload?.status === 'SUCCESS' &&
+      Array.isArray(entry.payload?.documents) &&
+      entry.payload.documents.length > 0
+    );
+
+    if (!matchingAppResponse) {
+      return null;
+    }
+
+    return {
+      kfsStatements: matchingAppResponse.payload.documents
+        .filter(document => Array.isArray(document?.value))
+        .map(document => ({ value: document.value }))
     };
   }
   

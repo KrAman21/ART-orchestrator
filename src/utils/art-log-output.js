@@ -32,6 +32,8 @@ const USER_PREFIXES = [
   'Overall Success:',
   'ART Report Path:',
   'ART Report generated:',
+  'ART HTML Report generated:',
+  'HTML Report: http://',
   'ART REPORT SUMMARY',
   'Stopping process-compose services',
   'No order IDs found from QAPI',
@@ -51,7 +53,8 @@ const USER_MARKERS = [
   '📄',
   '📊',
   '🔎',
-  '⚠️'
+  '⚠️',
+  '🌐'
 ];
 
 let reportMode = false;

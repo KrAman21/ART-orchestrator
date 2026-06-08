@@ -46,6 +46,8 @@ export class ReplayOrchestrator {
     this.asyncCallTracker = new Map();
     this.pendingPostResponseWebhooks = new Map();
     this.observedIncomingRequests = [];
+    this.observedProcessedResponses = [];
+    this.syntheticRejectedFibeLoanApplications = new Set();
 
     this.isRunning = false;
     this.failureReason = null;
@@ -79,6 +81,8 @@ export class ReplayOrchestrator {
     this.asyncCallTracker.clear();
     this.pendingPostResponseWebhooks.clear();
     this.observedIncomingRequests = [];
+    this.observedProcessedResponses = [];
+    this.syntheticRejectedFibeLoanApplications.clear();
 
     this.isRunning = false;
 
@@ -505,6 +509,8 @@ export class ReplayOrchestrator {
       incoming = buffered.data;
     }
 
+    incoming = this.maybeNormalizeRejectedFibeFetchOfferCallback(incoming, expectedEntry);
+
     this.registerReplayLoanApplicationIdMappings(expectedEntry, incoming);
 
     logger.logApiCall(incoming.source, incoming.destination, incoming.api, 'REQUEST', expectedEntry.index);
@@ -584,6 +590,31 @@ export class ReplayOrchestrator {
 
     if (this.observedIncomingRequests.length > 500) {
       this.observedIncomingRequests.splice(0, this.observedIncomingRequests.length - 500);
+    }
+  }
+
+  recordObservedProcessedResponse(expectedEntry, actualPayload) {
+    if (!expectedEntry?.logTag) {
+      return;
+    }
+
+    this.observedProcessedResponses.push({
+      source: expectedEntry.source,
+      destination: expectedEntry.destination,
+      logTag: expectedEntry.logTag,
+      lenderOrgId: expectedEntry.lenderOrgId || actualPayload?.lenderOrgId || actualPayload?.lender_org_id || null,
+      loanApplicationId:
+        expectedEntry.loanApplicationId ||
+        actualPayload?.loanApplicationId ||
+        actualPayload?.loan_application_id ||
+        null,
+      orderId: expectedEntry.orderId || actualPayload?.orderId || actualPayload?.order_id || null,
+      payload: actualPayload || null,
+      observedAt: Date.now()
+    });
+
+    if (this.observedProcessedResponses.length > 500) {
+      this.observedProcessedResponses.splice(0, this.observedProcessedResponses.length - 500);
     }
   }
 
@@ -679,12 +710,121 @@ export class ReplayOrchestrator {
 
     const orderId = incoming.payload?.orderId || incoming.loanApplicationId || 'ART_SYNTHETIC_ORDER';
     const customerRefId = incoming.payload?.customerRefId || 'ART_SYNTHETIC_CUSTOMER';
+    const replayLoanApplicationIds = new Set([
+      incoming.loanApplicationId,
+      incoming.payload?.orderId
+    ].filter(Boolean));
+
+    for (const [originalLoanApplicationId, localLoanApplicationId] of this.stateManager.loanApplicationIdMappings.entries()) {
+      if (replayLoanApplicationIds.has(localLoanApplicationId)) {
+        replayLoanApplicationIds.add(originalLoanApplicationId);
+      }
+    }
+
+    const matchesReplayLoanApplication = entry =>
+      replayLoanApplicationIds.has(entry.loanApplicationId) ||
+      replayLoanApplicationIds.has(entry.payload?.loanApplicationId) ||
+      replayLoanApplicationIds.has(entry.payload?.orderId);
+
+    const profileIngestionResponse = this.validator.entries.find(entry =>
+      entry.logTag === 'PROFILE_INGESTION_RESPONSE' &&
+      matchesReplayLoanApplication(entry) &&
+      entry.payload &&
+      typeof entry.payload === 'object'
+    )?.payload;
+    const rejectedFetchOfferCallback = this.validator.entries.find(entry =>
+      entry.logTag === 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST' &&
+      matchesReplayLoanApplication(entry) &&
+      entry.payload?.loanApplicationStatus === 'REJECTED'
+    )?.payload;
+
+    const replayShowsRejectedBranch =
+      profileIngestionResponse?.leadStatus === 'ORDER_REJECTED' ||
+      rejectedFetchOfferCallback?.response?.error === 'LENDER_REJECTED_BASED_ON_PROFILE' ||
+      rejectedFetchOfferCallback?.eligibility?.errorCode === 'LENDER_REJECTED_BASED_ON_PROFILE';
+
+    if (replayShowsRejectedBranch) {
+      for (const loanApplicationId of replayLoanApplicationIds) {
+        this.syntheticRejectedFibeLoanApplications.add(loanApplicationId);
+      }
+    }
+
+    const syntheticPayload = replayShowsRejectedBranch
+      ? {
+          orderId,
+          status_code: 200,
+          status: 'SUCCESS',
+          statusCode: 200,
+          orderStatus: 'CANCELLED',
+          esStatus: 'ORDER_REJECTED',
+          customerRefId,
+          breStatus: profileIngestionResponse?.breStatus || null,
+          merchantId: null,
+          customerStatus: 'REJECTED',
+          customerSubStatus: profileIngestionResponse?.leadStatus || 'ORDER_REJECTED',
+          isKFSSigned: false,
+          kfsValidity: null,
+          transactionId: null,
+          sanctionData: null,
+          data: {
+            customerRefId,
+            message: profileIngestionResponse?.leadStatus || 'ORDER_REJECTED',
+            nachStatus: null
+          },
+          disbursalDate: null,
+          settlementStatus: null,
+          utrNo: null,
+          orderAmount: null,
+          loanAcNo: null,
+          productTenure: null,
+          final_amount_to_merchant: null,
+          downpayment_amount: null,
+          emi_amount: null,
+          disbursedAmount: null
+        }
+      : {
+          orderId,
+          status_code: 200,
+          status: 'SUCCESS',
+          statusCode: 200,
+          orderStatus: 'PENDING',
+          esStatus: 'APPROVED',
+          customerRefId,
+          breStatus: null,
+          merchantId: null,
+          customerStatus: 'APPROVED',
+          customerSubStatus: null,
+          isKFSSigned: false,
+          kfsValidity: null,
+          transactionId: null,
+          sanctionData: null,
+          data: {
+            customerRefId,
+            message: 'APPROVED',
+            nachStatus: null
+          },
+          disbursalDate: null,
+          settlementStatus: null,
+          utrNo: null,
+          orderAmount: null,
+          loanAcNo: null,
+          productTenure: null,
+          final_amount_to_merchant: null,
+          downpayment_amount: null,
+          emi_amount: null,
+          disbursedAmount: null
+        };
 
     logger.info('Returning synthetic FIBE checkout status for replay logs without checkout-status step', {
       requestId: incoming.requestId,
       loanApplicationId: incoming.loanApplicationId,
+      replayLoanApplicationIds: Array.from(replayLoanApplicationIds),
       orderId,
       customerRefId,
+      replayShowsRejectedBranch,
+      leadStatus: profileIngestionResponse?.leadStatus || null,
+      syntheticOrderStatus: syntheticPayload.orderStatus,
+      syntheticEsStatus: syntheticPayload.esStatus,
       currentEntry: this.validator.getCurrentEntry()?.toString()
     });
 
@@ -698,38 +838,74 @@ export class ReplayOrchestrator {
     return {
       success: true,
       synthetic: true,
-      payload: {
-        orderId,
-        status_code: 200,
-        status: 'SUCCESS',
-        statusCode: 200,
-        orderStatus: 'PENDING',
-        esStatus: 'APPROVED',
-        customerRefId,
-        breStatus: null,
-        merchantId: null,
-        customerStatus: 'APPROVED',
-        customerSubStatus: null,
-        isKFSSigned: false,
-        kfsValidity: null,
-        transactionId: null,
-        sanctionData: null,
-        data: {
-          customerRefId,
-          message: 'APPROVED',
-          nachStatus: null
-        },
-        disbursalDate: null,
-        settlementStatus: null,
-        utrNo: null,
-        orderAmount: null,
-        loanAcNo: null,
-        productTenure: null,
-        final_amount_to_merchant: null,
-        downpayment_amount: null,
-        emi_amount: null,
-        disbursedAmount: null
+      payload: syntheticPayload
+    };
+  }
+
+  maybeNormalizeRejectedFibeFetchOfferCallback(incoming, expectedEntry) {
+    const isRejectedFibeFetchOfferCallback =
+      incoming?.logTag === 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST' &&
+      incoming?.source === 'GATEWAY' &&
+      incoming?.destination === 'LSP' &&
+      expectedEntry?.logTag === 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST' &&
+      expectedEntry?.payload?.response?.error === 'LENDER_REJECTED_BASED_ON_PROFILE' &&
+      incoming?.payload?.response?.error === 'LENDER_SYSTEM_ERROR_RETRY';
+
+    if (!isRejectedFibeFetchOfferCallback) {
+      return incoming;
+    }
+
+    const candidateIds = [
+      incoming.loanApplicationId,
+      incoming.payload?.loanApplicationId,
+      incoming.payload?.orderId
+    ].filter(Boolean);
+
+    let matchesSyntheticRejectedBranch = candidateIds.some(loanApplicationId =>
+      this.syntheticRejectedFibeLoanApplications.has(loanApplicationId)
+    );
+
+    if (!matchesSyntheticRejectedBranch) {
+      for (const [originalLoanApplicationId, localLoanApplicationId] of this.stateManager.loanApplicationIdMappings.entries()) {
+        if (
+          candidateIds.includes(localLoanApplicationId) &&
+          this.syntheticRejectedFibeLoanApplications.has(originalLoanApplicationId)
+        ) {
+          matchesSyntheticRejectedBranch = true;
+          break;
+        }
       }
+    }
+
+    if (!matchesSyntheticRejectedBranch) {
+      return incoming;
+    }
+
+    const expectedPayload = expectedEntry.payload || {};
+    const actualPayload = incoming.payload || {};
+    const normalizedPayload = {
+      ...actualPayload,
+      loanApplicationStatus: expectedPayload.loanApplicationStatus || actualPayload.loanApplicationStatus,
+      response: expectedPayload.response || actualPayload.response,
+      eligibility: {
+        ...(actualPayload.eligibility || {}),
+        ...(expectedPayload.eligibility || {})
+      }
+    };
+
+    if (expectedPayload.loanLenderData && !actualPayload.loanLenderData) {
+      normalizedPayload.loanLenderData = expectedPayload.loanLenderData;
+    }
+
+    logger.info('Normalizing post-checkout synthetic FIBE fetch-offer callback to rejected replay payload', {
+      requestId: incoming.requestId,
+      loanApplicationId: actualPayload.loanApplicationId || incoming.loanApplicationId || null,
+      currentEntry: expectedEntry?.toString()
+    });
+
+    return {
+      ...incoming,
+      payload: normalizedPayload
     };
   }
 
@@ -881,7 +1057,25 @@ export class ReplayOrchestrator {
     const actualIds = this.collectLoanApplicationIds(incoming);
 
     for (let index = 0; index < Math.min(expectedIds.length, actualIds.length); index += 1) {
-      this.stateManager.registerLoanApplicationIdMapping(expectedIds[index], actualIds[index]);
+      const originalLoanApplicationId = expectedIds[index];
+      const localLoanApplicationId = actualIds[index];
+      const didRegister =
+        this.stateManager.registerLoanApplicationIdMapping(
+          originalLoanApplicationId,
+          localLoanApplicationId
+        );
+
+      if (
+        didRegister &&
+        typeof this.config.onLoanApplicationId === 'function' &&
+        this.config.registrySessionId
+      ) {
+        this.config.onLoanApplicationId(
+          localLoanApplicationId,
+          this.orderId,
+          this.config.registrySessionId
+        );
+      }
     }
   }
 
@@ -1029,6 +1223,19 @@ export class ReplayOrchestrator {
     const responseEntry = kfsResponseEntries.find(entry => !this.validator.processedIndices.has(entry.index)) || kfsResponseEntries[0] || null;
 
     if (!requestEntry || !responseEntry) {
+      const synthesizedPayload = this.buildSyntheticThemisKfsPayload(incoming);
+      if (synthesizedPayload) {
+        logger.warn('Synthesizing Themis-KFS response from recorded FlipKart-GetKFS response', {
+          lenderOrgId: incoming.lenderOrgId,
+          requestId: incoming.requestId
+        });
+        return {
+          success: true,
+          payload: synthesizedPayload,
+          synthesized: true
+        };
+      }
+
       return await this.fail(`No matching Themis-KFS_RESPONSE found for lenderOrgId: ${incoming.lenderOrgId}`);
     }
 
@@ -1068,6 +1275,36 @@ export class ReplayOrchestrator {
       success: true,
       payload: transformRequest(responseEntry.payload, responseEntry.logTag),
       batchProcessed: true
+    };
+  }
+
+  buildSyntheticThemisKfsPayload(incoming) {
+    const matchingAppRequest = this.validator.entries.find(entry =>
+      entry.logTag === 'FlipKart-GetKFS_REQUEST' &&
+      entry.payload?.lender_code === incoming.lenderOrgId &&
+      entry.index <= this.validator.currentIndex
+    );
+
+    if (!matchingAppRequest) {
+      return null;
+    }
+
+    const matchingAppResponse = this.validator.entries.find(entry =>
+      entry.logTag === 'FlipKart-GetKFS_RESPONSE' &&
+      entry.index > matchingAppRequest.index &&
+      entry.payload?.status === 'SUCCESS' &&
+      Array.isArray(entry.payload?.documents) &&
+      entry.payload.documents.length > 0
+    );
+
+    if (!matchingAppResponse) {
+      return null;
+    }
+
+    return {
+      kfsStatements: matchingAppResponse.payload.documents
+        .filter(document => Array.isArray(document?.value))
+        .map(document => ({ value: document.value }))
     };
   }
 
