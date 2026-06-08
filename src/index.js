@@ -3,14 +3,12 @@ import { uninstallEarlyProcessComposeStop } from './utils/early-process-compose-
 import './utils/art-log-output.js';
 
 import { readFileSync } from 'fs';
-import { hostname } from 'os';
 import { createInterface } from 'readline';
 import { logger } from './utils/logger.js';
 import { runSequentialArt } from './sequential-runner.js';
 import { fetchOrderIdsFromQAPI } from './services/http-client.js';
 import { startMultiplexerServer } from './dashboard/multiplexer.js';
 import { stopProcessCompose } from './utils/process-compose.js';
-import { startReportServer } from './report-server.js';
 
 uninstallEarlyProcessComposeStop();
 
@@ -80,13 +78,11 @@ function printReportSummary(reportPath) {
 
     console.log('');
     const htmlReportPath = report.htmlReportPath || reportPath.replace(/\.json$/, '.html');
-    const reportServerPort = process.env.ART_REPORT_SERVER_PORT || '7788';
-    const reportServerHost = process.env.ART_REPORT_SERVER_HOST || hostname();
-    const htmlReportUrl = `http://${reportServerHost}:${reportServerPort}/${htmlReportPath.split('/').pop()}`;
+    const pdfReportPath  = report.pdfReportPath  || reportPath.replace(/\.json$/, '.pdf');
     console.log(colorize(COLOR.bold + COLOR.cyan, '🧾 ART REPORT SUMMARY 🧾'));
     console.log(colorize(statusColor, `${statusEmoji} Overall Status: ${report.overallStatus || 'UNKNOWN'}`));
     console.log(colorize(COLOR.cyan, `📄 Report Path: ${reportPath}`));
-    console.log(colorize(COLOR.cyan, `🌐 HTML Report: ${htmlReportUrl}`));
+    console.log(colorize(COLOR.cyan, `📊 PDF Report:  ${pdfReportPath}`));
     console.log(
       colorize(
         COLOR.bold,
@@ -236,10 +232,6 @@ async function fetchOrderListFromQAPI(answers) {
 }
 
 async function main() {
-  // Start the HTTP report server immediately so the URL is reachable
-  // even while the ART run is in progress.
-  startReportServer();
-
   const logUnexpectedProcessError = async (kind, error) => {
     const normalizedError = error instanceof Error ? error : new Error(String(error));
 

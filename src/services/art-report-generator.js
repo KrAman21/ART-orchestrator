@@ -1,6 +1,7 @@
 import { writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { generateHtmlReport } from './art-html-report-generator.js';
+import { generatePdfReport } from './art-pdf-report-generator.js';
 
 export class ArtReportGenerator {
   constructor(config = {}) {
@@ -405,6 +406,16 @@ export class ArtReportGenerator {
       } catch (htmlError) {
         console.warn(`Warning: Could not generate HTML report: ${htmlError.message}`);
       }
+
+      // Generate PDF
+      generatePdfReport(report, reportPath)
+        .then(pdfPath => {
+          report.pdfReportPath = pdfPath;
+          console.log(`ART PDF Report generated: ${pdfPath}`);
+        })
+        .catch(pdfError => {
+          console.warn(`Warning: Could not generate PDF report: ${pdfError.message}`);
+        });
 
       writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
       console.log(`ART Report generated: ${reportPath}`);
