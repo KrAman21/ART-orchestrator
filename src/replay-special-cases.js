@@ -21,6 +21,34 @@ export const REPLAY_SPECIAL_CASES = [
     ]
   },
   {
+    logTag: 'GET_CHECKOUT_STATUS_LINE_STATUS_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated checkout-status polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'GET_CHECKOUT_STATUS_LS_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated checkout-status polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'GET_CHECKOUT_STATUS_FO_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated checkout-status polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'LenderLineStatus_RESPONSE',
+    handler: 'maybeSkipOptionalRepeatedResponseEntry',
+    description: 'Allow repeated line-status responses to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
     logTag: 'PROFILE_INGESTION_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow profile ingestion to be skipped when the live branch has already advanced into later fetch-offer steps.',
@@ -111,7 +139,7 @@ export const REPLAY_SPECIAL_CASES = [
     // If any of these logTags appear in the preceding processed entries for this
     // order, LSP will invoke LenderLineStatus itself — do NOT trigger from ART.
     skipIfPrecedingLogTags: [
-      'FlipKart-Refund',
+      'FlipKart-Refund_REQUEST',
       'FlipKart-LineOnboarding-FetchLineStatus_REQUEST'
     ]
   },

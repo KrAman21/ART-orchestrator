@@ -1159,6 +1159,59 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
   return true;
 }
 
+function maybeSkipOptionalRepeatedResponseEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
+  if (!currentEntry?.isResponse) {
+    return false;
+  }
+
+  const specialCase = REPLAY_SPECIAL_CASES.find(
+    sc => sc.logTag === currentEntry.logTag && sc.handler === 'maybeSkipOptionalRepeatedResponseEntry'
+  );
+
+  if (!specialCase) {
+    return false;
+  }
+
+  if (stuckDurationMs < (specialCase.optionalAfterSeconds ?? 5) * 1000) {
+    return false;
+  }
+
+  const priorReplayOccurrences = orchestrator.validator.entries.filter((entry) =>
+    entry.isResponse &&
+    entry.index < currentEntry.index &&
+    entry.source === currentEntry.source &&
+    entry.destination === currentEntry.destination &&
+    entry.logTag === currentEntry.logTag &&
+    sharesReplayContext(currentEntry, entry)
+  );
+
+  const processedSameTagCount = priorReplayOccurrences.filter(entry =>
+    orchestrator.validator.processedIndices.has(entry.index)
+  ).length;
+
+  if ((specialCase.requirePriorProcessedOccurrence ?? true) && processedSameTagCount < 1) {
+    return false;
+  }
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Auto-skipping optional repeated response after ${specialCase.optionalAfterSeconds ?? 5}s - Current: ${currentEntry.logTag}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      priorReplayOccurrenceCount: priorReplayOccurrences.length,
+      processedSameTagCount,
+      optionalAfterSeconds: specialCase.optionalAfterSeconds ?? 5,
+      phase: 'OPTIONAL_REPEAT_RESPONSE_SKIP'
+    }
+  );
+
+  orchestrator.validator.markProcessed(currentEntry);
+  return true;
+}
+
 async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal) {
   const startTime = Date.now();
   let lastLoggedMinute = 0;
@@ -1222,6 +1275,12 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
       }
 
       if (maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
+        stuckEntryIndex = null;
+        stuckSince = null;
+        continue;
+      }
+
+      if (maybeSkipOptionalRepeatedResponseEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
         stuckEntryIndex = null;
         stuckSince = null;
         continue;

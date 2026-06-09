@@ -2,6 +2,7 @@
 // Key = incoming/live tag base, Value = canonical/prod tag base.
 const LOG_TAG_ALIASES = {
   'GET_CHECKOUT_STATUS_FO': 'GET_CHECKOUT_STATUS_LS',
+  'GET_CHECKOUT_STATUS_LINE_STATUS': 'GET_CHECKOUT_STATUS_LS',
 };
 
 function applyTagAlias(tag) {
