@@ -149,6 +149,8 @@ export class ReplayOrchestrator {
         getServiceBaseUrl: this.getServiceBaseUrl.bind(this),
         getServiceUnixSocket: this.getServiceUnixSocket.bind(this),
         processNextLogEntry: this.processNextLogEntry.bind(this),
+        shouldAutoProcessNextLogEntry: () => true,
+        shouldBlockOnHeldExternalRequest: () => true,
         triggerWebhooks: this.webhookManager.triggerWebhooks.bind(this.webhookManager),
         trackAsyncCompletion: this.trackAsyncCompletion.bind(this),
         fail: this.fail.bind(this),
@@ -913,7 +915,7 @@ export class ReplayOrchestrator {
     const isFetchLoanApplicationDataRequest =
       incoming?.api === '/api/fetch/loanApplicationData' ||
       incoming?.logTag === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' ||
-      incoming?.logTag === 'FETCH_LOAN_APPLICATION_DATA_REQUEST';
+      incoming?.logTag === 'FETCH_LOAN_APPLICATION_DATA_API_REQUEST';
 
     if (
       incoming?.source !== 'GATEWAY' ||

@@ -49,6 +49,34 @@ export const REPLAY_SPECIAL_CASES = [
     requirePriorProcessedOccurrence: true
   },
   {
+    logTag: 'Lsp-LoanStatusRequest_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated loan-status gateway polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'Lsp-LoanStatusRequest_RESPONSE',
+    handler: 'maybeSkipOptionalRepeatedResponseEntry',
+    description: 'Allow repeated loan-status gateway polling responses to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'LSP-LoanStatus_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated app loan-status polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'LSP-LoanStatus_RESPONSE',
+    handler: 'maybeSkipOptionalRepeatedResponseEntry',
+    description: 'Allow repeated app loan-status polling responses to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
     logTag: 'PROFILE_INGESTION_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow profile ingestion to be skipped when the live branch has already advanced into later fetch-offer steps.',
@@ -105,15 +133,35 @@ export const REPLAY_SPECIAL_CASES = [
     ]
   },
   {
-    logTag: 'HARD_ELIGIBILITY_REQUEST',
+    logTag: 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
-    description: 'Allow repeated hard-eligibility lender calls to be skipped when replay already advanced into profile-ingestion or fetch-offer steps for the same context.',
+    description: 'Allow repeated in-progress fetch-offer callbacks to be skipped once the live replay has already advanced into the terminal hard-eligibility rejection branch.',
     optionalAfterSeconds: 5,
     requirePriorProcessedOccurrence: true,
+    requireBranchAdvance: true,
+    advanceWhenSeenLogTags: [
+      'FlipKart-HardEligibilityStatus_RESPONSE',
+      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
+    ],
+    skipWhenPriorProcessedEntries: [
+      {
+        logTag: 'FlipKart-HardEligibilityStatus_RESPONSE',
+        payloadPath: 'status',
+        equals: 'FAILURE'
+      }
+    ]
+  },
+  {
+    logTag: 'HARD_ELIGIBILITY_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow hard-eligibility lender calls to be skipped when the live journey has already advanced into the downstream fetch-offer/callback branch for the same context, including flows where the gateway->lender call is skipped entirely in local replay.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: false,
     advanceWhenSeenLogTags: [
       'PROFILE_INGESTION_REQUEST',
       'LSP-FetchOfferRequest_REQUEST',
-      'FlipKart-HardEligibility_RESPONSE'
+      'FlipKart-HardEligibility_RESPONSE',
+      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
     ]
   },
   {

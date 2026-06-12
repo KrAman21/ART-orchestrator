@@ -50,6 +50,7 @@ class LogEntry {
 
     // Correlation info
     this.requestId = this.message.request_id || this.xRequestId;
+    this.clientRequestId = this.message.client_request_id || null;
     this.loanApplicationId = this.message.loan_application_id;
     this.lenderOrgId = this.message.lender_org_id;
     this.orderId = this.message.order_id;

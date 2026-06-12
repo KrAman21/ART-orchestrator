@@ -4,7 +4,7 @@ import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES } from '../config.js';
-import { isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from '../replay-special-cases.js';
+import { getOptionalRepeatPolicy, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
 
@@ -84,9 +84,64 @@ function buildSyntheticThemisIneligibleResponse(lenderOrgId) {
   };
 }
 
+function sharesReplayContext(leftEntry, rightEntry) {
+  if (!leftEntry || !rightEntry) {
+    return false;
+  }
+
+  if (leftEntry.orderId && rightEntry.orderId && leftEntry.orderId !== rightEntry.orderId) {
+    return false;
+  }
+
+  if (
+    leftEntry.loanApplicationId &&
+    rightEntry.loanApplicationId &&
+    leftEntry.loanApplicationId !== rightEntry.loanApplicationId
+  ) {
+    return false;
+  }
+
+  if (leftEntry.lenderOrgId && rightEntry.lenderOrgId && leftEntry.lenderOrgId !== rightEntry.lenderOrgId) {
+    return false;
+  }
+
+  return true;
+}
+
+function getPayloadValueAtPath(payload, payloadPath) {
+  if (!payload || !payloadPath) {
+    return undefined;
+  }
+
+  return payloadPath.split('.').reduce((current, segment) => {
+    if (current === null || current === undefined) {
+      return undefined;
+    }
+
+    return current[segment];
+  }, payload);
+}
+
+function isTerminalHardEligibilityFailure(logTag, payload) {
+  if (logTag !== 'FlipKart-HardEligibilityStatus_RESPONSE') {
+    return false;
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    return false;
+  }
+
+  return (
+    payload.status === 'FAILURE' ||
+    payload.error?.error_message === 'LENDER_REJECTED_BASED_ON_PROFILE' ||
+    payload.error?.error_code === 'LENDER_REJECTED'
+  );
+}
+
 export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   constructor(logs, config = {}) {
     super(logs, config);
+    this.config.asyncReplayMode = true;
     
     this.bufferManager = new BufferManager({
       defaultTimeoutMs: 60000
@@ -105,6 +160,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.pollIntervalMs = config.pollIntervalMs || 800;
     this.shouldStop = false;
     this.orderId = config.orderId;
+    if (this.requestForwarder?.callbacks) {
+      this.requestForwarder.callbacks.shouldAutoProcessNextLogEntry = () => false;
+      this.requestForwarder.callbacks.shouldBlockOnHeldExternalRequest = () => false;
+    }
   }
   
   async start() {
@@ -183,6 +242,184 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     
     return didWork;
   }
+
+  hasProcessedBranchAdvance(currentEntry, optionalRepeatPolicy) {
+    if (!optionalRepeatPolicy.advanceWhenSeenLogTags?.length) {
+      return false;
+    }
+
+    return this.validator.entries.some((entry, index) =>
+      this.validator.processedIndices.has(index) &&
+      index > currentEntry.index &&
+      entry.isRequest &&
+      optionalRepeatPolicy.advanceWhenSeenLogTags.includes(entry.logTag) &&
+      sharesReplayContext(currentEntry, entry)
+    );
+  }
+
+  hasObservedBranchAdvance(currentEntry, optionalRepeatPolicy) {
+    if (optionalRepeatPolicy.allowObservedBranchAdvance === false) {
+      return false;
+    }
+
+    if (!optionalRepeatPolicy.advanceWhenSeenLogTags?.length) {
+      return false;
+    }
+
+    return (this.observedIncomingRequests || []).some(entry =>
+      optionalRepeatPolicy.advanceWhenSeenLogTags.includes(entry.logTag) &&
+      sharesReplayContext(currentEntry, entry)
+    );
+  }
+
+  hasPriorProcessedAlternate(currentEntry, optionalRepeatPolicy) {
+    const tagRules = optionalRepeatPolicy.skipWhenPriorProcessedLogTags || [];
+    const conditionalRules = optionalRepeatPolicy.skipWhenPriorProcessedEntries || [];
+
+    if (tagRules.length === 0 && conditionalRules.length === 0) {
+      return false;
+    }
+
+    const observedMatch = (this.observedProcessedResponses || []).some(entry =>
+      sharesReplayContext(currentEntry, entry) &&
+      conditionalRules.some(condition =>
+        entry?.logTag === condition.logTag &&
+        (
+          !condition.payloadPath ||
+          getPayloadValueAtPath(entry.payload, condition.payloadPath) === condition.equals
+        )
+      )
+    );
+
+    if (observedMatch) {
+      return true;
+    }
+
+    return this.validator.entries.some((entry, index) =>
+      this.validator.processedIndices.has(index) &&
+      index < currentEntry.index &&
+      sharesReplayContext(currentEntry, entry) &&
+      (
+        tagRules.includes(entry.logTag) ||
+        conditionalRules.some(condition =>
+          entry?.logTag === condition.logTag &&
+          (
+            !condition.payloadPath ||
+            getPayloadValueAtPath(entry.payload, condition.payloadPath) === condition.equals
+          )
+        )
+      )
+    );
+  }
+
+  shouldSkipTimedOutOptionalRequest(entry) {
+    const optionalRepeatPolicy = getOptionalRepeatPolicy(this.config, entry);
+    if (!optionalRepeatPolicy) {
+      return false;
+    }
+
+    const priorReplayOccurrences = this.validator.entries.filter(candidate =>
+      candidate.isRequest &&
+      candidate.index < entry.index &&
+      candidate.source === entry.source &&
+      candidate.destination === entry.destination &&
+      candidate.logTag === entry.logTag &&
+      sharesReplayContext(entry, candidate)
+    );
+
+    const processedSameTagCount = priorReplayOccurrences.filter(candidate =>
+      this.validator.processedIndices.has(candidate.index)
+    ).length;
+
+    const branchAdvanced = this.hasProcessedBranchAdvance(entry, optionalRepeatPolicy);
+    const branchAdvancedObserved = this.hasObservedBranchAdvance(entry, optionalRepeatPolicy);
+    const priorAlternateProcessed = this.hasPriorProcessedAlternate(entry, optionalRepeatPolicy);
+    const hasAnyAdvanceSignal = branchAdvanced || branchAdvancedObserved || priorAlternateProcessed;
+
+    if (optionalRepeatPolicy.requirePriorProcessedOccurrence && priorReplayOccurrences.length < 1) {
+      return false;
+    }
+
+    if (optionalRepeatPolicy.requireBranchAdvance && !hasAnyAdvanceSignal) {
+      return false;
+    }
+
+    if (
+      optionalRepeatPolicy.requirePriorProcessedOccurrence &&
+      processedSameTagCount < 1 &&
+      !hasAnyAdvanceSignal
+    ) {
+      return false;
+    }
+
+    if (!optionalRepeatPolicy.requirePriorProcessedOccurrence && !hasAnyAdvanceSignal) {
+      return false;
+    }
+
+    logger.warn('Skipping timed-out optional replay request in async mode', {
+      entry: entry.toString(),
+      priorReplayOccurrenceCount: priorReplayOccurrences.length,
+      processedSameTagCount,
+      branchAdvanced,
+      branchAdvancedObserved,
+      priorAlternateProcessed,
+      advanceWhenSeenLogTags: optionalRepeatPolicy.advanceWhenSeenLogTags,
+      skipWhenPriorProcessedLogTags: optionalRepeatPolicy.skipWhenPriorProcessedLogTags,
+      skipWhenPriorProcessedEntries: optionalRepeatPolicy.skipWhenPriorProcessedEntries
+    });
+
+    return true;
+  }
+
+  skipOptionalReplayRequest(entry, reason = 'optional_skip') {
+    const responseEntry = this.findCorrespondingResponse(entry, true);
+
+    this.validator.markProcessed(entry);
+    if (responseEntry) {
+      this.validator.markProcessed(responseEntry);
+    }
+
+    logger.info('Skipped optional replay request in async mode', {
+      reason,
+      entry: entry.toString(),
+      responseEntry: responseEntry?.toString?.() || null,
+      currentIndex: this.validator.currentIndex
+    });
+
+    return true;
+  }
+
+  hasObservedTerminalHardEligibilityFailure(entry) {
+    const observedProcessedResponses = this.observedProcessedResponses || [];
+    if (observedProcessedResponses.some(responseEntry =>
+      sharesReplayContext(entry, responseEntry) &&
+      isTerminalHardEligibilityFailure(responseEntry.logTag, responseEntry.payload)
+    )) {
+      return true;
+    }
+
+    return this.validator.entries.some((validatorEntry, index) =>
+      this.validator.processedIndices.has(index) &&
+      sharesReplayContext(entry, validatorEntry) &&
+      isTerminalHardEligibilityFailure(validatorEntry.logTag, validatorEntry.payload)
+    );
+  }
+
+  hasProcessedHardEligibilityStatusResponse(entry) {
+    const observedProcessedResponses = this.observedProcessedResponses || [];
+    if (observedProcessedResponses.some(responseEntry =>
+      sharesReplayContext(entry, responseEntry) &&
+      responseEntry.logTag === 'FlipKart-HardEligibilityStatus_RESPONSE'
+    )) {
+      return true;
+    }
+
+    return this.validator.entries.some((validatorEntry, index) =>
+      this.validator.processedIndices.has(index) &&
+      sharesReplayContext(entry, validatorEntry) &&
+      validatorEntry.logTag === 'FlipKart-HardEligibilityStatus_RESPONSE'
+    );
+  }
   
   async checkBufferedResponses() {
     const currentEntry = this.validator.getCurrentEntry();
@@ -190,14 +427,27 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     if (!currentEntry || !currentEntry.isResponse) {
       return false;
     }
+
+    logger.info('Checking buffered response for replay entry', {
+      entry: currentEntry.toString(),
+      currentIndex: this.validator.currentIndex,
+      responseBufferSize: this.bufferManager?.responseBuffer?.size || 0,
+      incomingBufferSize: this.bufferManager?.incomingRequests?.size || 0,
+      clientRequestId: currentEntry.clientRequestId || null,
+      orderId: currentEntry.orderId || null
+    });
     
     // Find the corresponding request entry (should be the previous unprocessed request)
     const requestEntry = this.findCorrespondingRequest(currentEntry);
     if (!requestEntry) {
-      logger.debug('No corresponding request found for response', {
-        responseEntry: currentEntry.toString()
+      logger.warn('No corresponding request found for response, trying response-only buffer resolution', {
+        responseEntry: currentEntry.toString(),
+        requestId: currentEntry.requestId || null,
+        clientRequestId: currentEntry.clientRequestId || null,
+        sourceDestination: currentEntry.sourceDestination
       });
-      return false;
+
+      return this.tryConsumeBufferedResponse(currentEntry, null);
     }
 
     // Core replay contract for GATEWAY->LENDER:
@@ -227,6 +477,14 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         });
       }
 
+      logger.logApiCall(
+        currentEntry.source,
+        currentEntry.destination,
+        getEndpointConfig(requestEntry.sourceDestination, requestEntry.logTag)?.endpoint || requestEntry.api || null,
+        'RESPONSE',
+        currentEntry.index
+      );
+
       const postResponseWebhooks = this.pendingPostResponseWebhooks?.get(contextKey);
       if (postResponseWebhooks?.length) {
         logger.info('Triggering queued post-response webhook(s) for replayed GATEWAY->LENDER response', {
@@ -252,28 +510,71 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return true;
     }
     
-    // Use the request's requestId to lookup in buffer
-    const requestId = requestEntry.requestId;
-    if (!requestId) {
-      return false;
+    return this.tryConsumeBufferedResponse(currentEntry, requestEntry);
+  }
+
+  async tryConsumeBufferedResponse(currentEntry, requestEntry = null) {
+    const requestIds = [
+      requestEntry?.requestId,
+      requestEntry?.xRequestId,
+      currentEntry.requestId,
+      currentEntry.xRequestId
+    ].filter(Boolean);
+    const effectiveClientRequestId = currentEntry.clientRequestId || requestEntry?.clientRequestId || null;
+    const effectiveLoanApplicationId = currentEntry.loanApplicationId || requestEntry?.loanApplicationId || null;
+    const effectiveLenderOrgId = currentEntry.lenderOrgId || requestEntry?.lenderOrgId || null;
+    const effectiveOrderId = currentEntry.orderId || requestEntry?.orderId || this.orderId || null;
+
+    let requestId = requestIds[0] || null;
+    let buffered = this.bufferManager.getResponseByMetadata(
+      currentEntry.logTag,
+      currentEntry.sourceDestination,
+      effectiveLoanApplicationId,
+      effectiveLenderOrgId,
+      effectiveClientRequestId,
+      requestIds,
+      effectiveOrderId
+    );
+
+    if (!buffered) {
+      for (const candidateRequestId of requestIds) {
+        buffered = this.bufferManager.getResponse(candidateRequestId);
+        if (buffered) {
+          requestId = candidateRequestId;
+          break;
+        }
+      }
+    }
+
+    if (
+      !buffered &&
+      currentEntry.sourceDestination === 'APP_WRAPPER' &&
+      this.bufferManager?.responseBuffer?.size === 1
+    ) {
+      const [[fallbackRequestId, fallbackEntry]] = this.bufferManager.responseBuffer.entries();
+      this.bufferManager.responseBuffer.delete(fallbackRequestId);
+      buffered = fallbackEntry;
+      requestId = fallbackRequestId;
+
+      logger.info('Using sole buffered APP_WRAPPER response as fallback match', {
+        entry: currentEntry.toString(),
+        requestEntry: requestEntry?.toString?.() || null,
+        fallbackRequestId
+      });
     }
     
-    let buffered = this.bufferManager.getResponse(requestId);
-    
-    // Fallback: look up by metadata when requestId mismatch occurs
     if (!buffered) {
-      buffered = this.bufferManager.getResponseByMetadata(
-        currentEntry.logTag,
-        currentEntry.sourceDestination,
-        currentEntry.loanApplicationId,
-        currentEntry.lenderOrgId
-      );
-    }
-    
-    if (!buffered) {
-      logger.debug('Response not yet in buffer', {
-        requestId,
-        responseEntry: currentEntry.toString()
+      logger.info('Response not yet in buffer', {
+        requestIds,
+        currentEntryLogTag: currentEntry.logTag,
+        currentEntrySourceDestination: currentEntry.sourceDestination,
+        effectiveClientRequestId,
+        effectiveLoanApplicationId,
+        effectiveLenderOrgId,
+        effectiveOrderId,
+        responseEntry: currentEntry.toString(),
+        requestEntry: requestEntry?.toString?.() || null,
+        responseBufferSize: this.bufferManager?.responseBuffer?.size || 0
       });
       return false;
     }
@@ -281,12 +582,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     logger.info('Found buffered response for current entry', {
       entry: currentEntry.toString(),
       requestId,
-      requestEntry: requestEntry.toString()
+      requestEntry: requestEntry?.toString?.() || null
     });
     
     if (buffered.isError) {
       const r = buffered.response;
-      // API failure: error is inside response.data.error.error_message
       const apiErr = r?.data?.error || r?.data?.Error;
       const errorMsg = apiErr?.error_message
         || apiErr?.message
@@ -361,6 +661,31 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       await this.triggerExternalRequestAsync(entry);
       return true;
     } else if (entry.isRequest) {
+      const priorFetchOfferAsyncOccurrences = this.validator.entries.filter(candidate =>
+        candidate.isRequest &&
+        candidate.index < entry.index &&
+        candidate.source === entry.source &&
+        candidate.destination === entry.destination &&
+        candidate.logTag === entry.logTag &&
+        sharesReplayContext(entry, candidate)
+      ).length;
+
+      if (
+        entry.logTag === 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST' &&
+        priorFetchOfferAsyncOccurrences >= 1 &&
+        (this.hasObservedTerminalHardEligibilityFailure(entry) || this.hasProcessedHardEligibilityStatusResponse(entry)) &&
+        !this.bufferManager?.hasMatchingBufferedRequest?.(entry)
+      ) {
+        return this.skipOptionalReplayRequest(entry, 'post_hard_eligibility_repeat_skip');
+      }
+
+      if (
+        this.shouldSkipTimedOutOptionalRequest(entry) &&
+        !this.bufferManager?.hasMatchingBufferedRequest?.(entry)
+      ) {
+        return this.skipOptionalReplayRequest(entry, 'pre_wait_optional_skip');
+      }
+
       const effectiveTimeoutMs = this.getRequestWaitTimeoutMs(entry);
 
       logger.info('Replay thread waiting for incoming request', {
@@ -390,6 +715,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
           }
           return true;
         }
+
+        if (this.shouldSkipTimedOutOptionalRequest(entry)) {
+          return this.skipOptionalReplayRequest(entry, 'timed_out_optional_skip');
+        }
+
         const message = `Replay mismatch: timed out waiting for ${entry.toString()}`;
         logger.error('Replay request mismatch', {
           entry: entry.toString(),
@@ -466,7 +796,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         entry.index,
         this.getServiceUnixSocket(service),
         entry.loanApplicationId,
-        entry.lenderOrgId
+        entry.lenderOrgId,
+        entry.clientRequestId
       );
 
       logger.logOutgoing(entry.source, entry.destination, api, transformedPayload, {
@@ -549,9 +880,91 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         actualError,
         actualErrorCode
       });
+      return true;
     }
 
-    return matchesExpectedFailure;
+    const isEarlyTerminalPollingResult =
+      requestEntry.logTag === 'FlipKart-HardEligibilityStatus_REQUEST' &&
+      this.findAllCorrespondingResponses(requestEntry).some(candidate => {
+        if (!candidate?.payload || candidate.index <= (expectedResponse?.index || requestEntry.index)) {
+          return false;
+        }
+
+        const candidatePayload = candidate.payload;
+        const candidateStatus = candidatePayload.status || candidatePayload.Status || null;
+        const candidateError =
+          candidatePayload.error?.error_message ||
+          candidatePayload.error?.message ||
+          candidatePayload.errorMessage ||
+          candidatePayload.message ||
+          null;
+        const candidateErrorCode =
+          candidatePayload.error?.error_code ||
+          candidatePayload.error?.code ||
+          candidatePayload.errorCode ||
+          null;
+
+        return (
+          candidateStatus === 'FAILURE' &&
+          (
+            (candidateError && actualError && candidateError === actualError) ||
+            (candidateErrorCode && actualErrorCode && candidateErrorCode === actualErrorCode)
+          )
+        );
+      });
+
+    if (isEarlyTerminalPollingResult) {
+      logger.info('Treating early terminal polling API failure as expected replay response', {
+        requestId: activeReq.requestId || null,
+        logTag: activeReq.logTag,
+        logIndex: activeReq.logIndex,
+        actualError,
+        actualErrorCode
+      });
+      return true;
+    }
+
+    const matchesAnyTerminalHardEligibilityReplayResponse =
+      activeReq?.logTag === 'FlipKart-HardEligibilityStatus_REQUEST' &&
+      this.validator.entries.some(entry => {
+        if (entry?.logTag !== 'FlipKart-HardEligibilityStatus_RESPONSE' || !entry?.payload) {
+          return false;
+        }
+
+        const candidateStatus = entry.payload.status || entry.payload.Status || null;
+        const candidateError =
+          entry.payload.error?.error_message ||
+          entry.payload.error?.message ||
+          entry.payload.errorMessage ||
+          entry.payload.message ||
+          null;
+        const candidateErrorCode =
+          entry.payload.error?.error_code ||
+          entry.payload.error?.code ||
+          entry.payload.errorCode ||
+          null;
+
+        return (
+          candidateStatus === 'FAILURE' &&
+          (
+            (candidateError && actualError && candidateError === actualError) ||
+            (candidateErrorCode && actualErrorCode && candidateErrorCode === actualErrorCode)
+          )
+        );
+      });
+
+    if (matchesAnyTerminalHardEligibilityReplayResponse) {
+      logger.info('Treating terminal hard-eligibility polling API failure as expected replay response via global fallback', {
+        requestId: activeReq.requestId || null,
+        logTag: activeReq.logTag,
+        logIndex: activeReq.logIndex || null,
+        actualError,
+        actualErrorCode
+      });
+      return true;
+    }
+
+    return false;
   }
   
   async replayGatewayLenderPair(entry) {
@@ -748,6 +1161,25 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return null;
     }
 
+    const pendingWaiters = this.bufferManager?.getPendingRequestWaiters?.() || [];
+    const currentEntryLabel = currentEntry.toString();
+    const replayAlreadyWaiting = pendingWaiters.some(waiter =>
+      waiter.expected === currentEntryLabel &&
+      waiter.logTag === currentEntry.logTag &&
+      waiter.source === currentEntry.source &&
+      waiter.destination === currentEntry.destination
+    );
+
+    if (replayAlreadyWaiting) {
+      logger.info('Replay already waiting for current GATEWAY->LENDER request, letting buffered matcher handle it', {
+        entry: currentEntryLabel,
+        requestId: incoming.requestId,
+        logTag: incoming.logTag,
+        lenderOrgId: incoming.lenderOrgId
+      });
+      return null;
+    }
+
     logger.info('Processing current GATEWAY->LENDER request immediately to unblock nested gateway call', {
       entry: currentEntry.toString(),
       requestId: incoming.requestId,
@@ -763,6 +1195,14 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.bufferManager?.skipWaiter?.(currentEntry);
 
     return response;
+  }
+
+  async waitForAllExternalCalls() {
+    logger.info('Skipping blocking waitForAllExternalCalls in async replay mode', {
+      pendingExternalRequests: this.pendingExternalRequests?.size || 0,
+      asyncTrackerCount: this.asyncCallTracker?.size || 0,
+      currentEntry: this.validator.getCurrentEntry()?.toString() || null
+    });
   }
   
   async handleThemisEligibilityBatchAsync(incoming) {
@@ -996,6 +1436,36 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         return entry;
       }
     }
+
+    if (responseEntry.clientRequestId || responseEntry.orderId) {
+      for (let i = this.validator.currentIndex - 1; i >= 0; i--) {
+        const entry = this.validator.entries[i];
+        if (!entry?.isRequest) continue;
+
+        const requestTag = entry.logTag.replace(/_REQUEST$/, '').replace(/_INCOMING$/, '');
+        if (requestTag !== responseTag) continue;
+
+        const sameClientRequestId =
+          responseEntry.clientRequestId &&
+          entry.clientRequestId &&
+          responseEntry.clientRequestId === entry.clientRequestId;
+        const sameOrderId =
+          responseEntry.orderId &&
+          entry.orderId &&
+          responseEntry.orderId === entry.orderId;
+
+        if (sameClientRequestId || sameOrderId) {
+          logger.info('Found corresponding request using fallback correlation', {
+            responseEntry: responseEntry.toString(),
+            requestEntry: entry.toString(),
+            sameClientRequestId,
+            sameOrderId
+          });
+          return entry;
+        }
+      }
+    }
+
     return null;
   }
   

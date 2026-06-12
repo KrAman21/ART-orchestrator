@@ -3,6 +3,7 @@ import { uninstallEarlyProcessComposeStop } from './utils/early-process-compose-
 import './utils/art-log-output.js';
 
 import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import { createInterface } from 'readline';
 import { logger } from './utils/logger.js';
 import { runSequentialArt } from './sequential-runner.js';
@@ -77,12 +78,14 @@ function printReportSummary(reportPath) {
     const statusEmoji = success ? '🟢' : '🔴';
 
     console.log('');
-    const htmlReportPath = report.htmlReportPath || reportPath.replace(/\.json$/, '.html');
-    const pdfReportPath  = report.pdfReportPath  || reportPath.replace(/\.json$/, '.pdf');
+    const jsonReportPath = resolve(reportPath);
+    const htmlReportPath = resolve(report.htmlReportPath || reportPath.replace(/\.json$/, '.html'));
+    const pdfReportPath = resolve(report.pdfReportPath || reportPath.replace(/\.json$/, '.pdf'));
     console.log(colorize(COLOR.bold + COLOR.cyan, '🧾 ART REPORT SUMMARY 🧾'));
     console.log(colorize(statusColor, `${statusEmoji} Overall Status: ${report.overallStatus || 'UNKNOWN'}`));
-    console.log(colorize(COLOR.cyan, `📄 Report Path: ${reportPath}`));
-    console.log(colorize(COLOR.cyan, `📊 PDF Report:  ${pdfReportPath}`));
+    console.log(colorize(COLOR.cyan, `📄 Report Path: ${jsonReportPath}`));
+    console.log(colorize(COLOR.cyan, `🌐 HTML Preview: ${htmlReportPath}`));
+    console.log(colorize(COLOR.cyan, `📥 PDF Download: ${pdfReportPath}`));
     console.log(
       colorize(
         COLOR.bold,

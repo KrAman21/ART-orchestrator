@@ -69,6 +69,25 @@ export class SeedDataManager {
     monthlyIncome,
     employmentType
   }) {
+    const normalizeDob = value => {
+      if (typeof value !== 'string') {
+        return value || null;
+      }
+
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return null;
+      }
+
+      const dmyMatch = trimmed.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (dmyMatch) {
+        const [, day, month, year] = dmyMatch;
+        return `${year}-${month}-${day}`;
+      }
+
+      return trimmed;
+    };
+
     const merchantScore = riskDetails?.cremo_score ?? null;
     const affluentScore = riskDetails?.affluent_score ?? null;
     const primaryAddress = addresses.find(addr => ['PERMANENT', 'DELIVERY'].includes(addr?.address_type)) || addresses[0] || null;
@@ -118,7 +137,7 @@ export class SeedDataManager {
       fatherName: null,
       middleName: middleName || null,
       lastName: lastName || null,
-      dob: dob || null,
+      dob: normalizeDob(dob),
       gender: gender || null,
       maritalStatus: maritalStatus || null,
       educationQualification: null,

@@ -1487,7 +1487,7 @@ export const API_TO_LOGTAG_MAP = {
   '/checkoutuat/merchantapiv2/get-checkout-status': { logTag: 'GET_CHECKOUT_STATUS_FO_REQUEST', api: '/checkoutuat/merchantapiv2/get-checkout-status', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/cselcdfkapi/1.0.0/credit-decision': { logTag: 'CREDIT_DECISION_REQUEST', api: '/cselcdfkapi/1.0.0/credit-decision', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/core/api/v2/workflows/hard-eligibility': { logTag: 'HARD_ELIGIBILITY_API_REQUEST', api: '/core/api/v2/workflows/hard-eligibility', sourceDestination: 'GATEWAY_LENDER', headers: {} },
-  '/api/lazypay/cof/v0/eligibility': { logTag: 'HARD_ELIGIBILITY_API_REQUEST', api: '/api/lazypay/cof/v0/eligibility', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/api/lazypay/cof/v0/eligibility': { logTag: 'HARD_ELIGIBILITY_REQUEST', api: '/api/lazypay/cof/v0/eligibility', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/uat/applicationcreation':{logTag: 'CREATE APPLICATION API_REQUEST', api: '/uat/applicationcreation', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/uat/partner_score':{logTag:'FK SCORE API_REQUEST', api: '/uat/partner_score', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/api/v1/leads':{logTag: 'HDB_CREATE_APPLICATION_API_REQUEST', api: '/api/v1/leads', sourceDestination: 'GATEWAY_LENDER', headers: {} },

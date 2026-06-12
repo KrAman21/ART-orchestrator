@@ -46,10 +46,12 @@ export class BufferManager {
   extractCorrelationIdentifiers(request = {}) {
     return {
       requestId: request.requestId || request.request_id || request.payload?.requestId || request.payload?.request_id || null,
+      clientRequestId: request.clientRequestId || request.client_request_id || request.payload?.clientRequestId || request.payload?.client_request_id || null,
       traceId: request.traceId || request.trace_id || request.payload?.traceId || request.payload?.trace_id || null,
       sequenceId: request.sequenceId || request.sequence_id || request.headers?.['x-sequence-id'] || null,
       loanApplicationId: request.loanApplicationId || request.loan_application_id || request.payload?.loanApplicationId || request.payload?.loan_application_id || null,
-      lenderOrgId: request.lenderOrgId || request.lender_org_id || request.payload?.lenderOrgId || request.payload?.lender_org_id || request.payload?.themisDetail?.lenderOrgId || null
+      lenderOrgId: request.lenderOrgId || request.lender_org_id || request.payload?.lenderOrgId || request.payload?.lender_org_id || request.payload?.themisDetail?.lenderOrgId || null,
+      orderId: request.orderId || request.order_id || request.payload?.orderId || request.payload?.order_id || null
     };
   }
   
@@ -59,10 +61,12 @@ export class BufferManager {
       canonicalRequestLogTag(request.logTag),
       `${request.source}_${request.destination}`,
       ids.requestId || '',
+      ids.clientRequestId || '',
       ids.traceId || '',
       ids.sequenceId || '',
       ids.loanApplicationId || '',
-      ids.lenderOrgId || ''
+      ids.lenderOrgId || '',
+      ids.orderId || ''
     ].filter(Boolean);
 
     if (parts.length <= 2) {
@@ -294,47 +298,28 @@ export class BufferManager {
     });
   }
   
-  getResponseByMetadata(logTag, sourceDestination, loanApplicationId = null, lenderOrgId = null) {
-    const baseTag = this._normalizeLogTag(logTag);
-    const invertedSD = this._invertSourceDestination(sourceDestination);
+  getResponseByMetadata(
+    logTag,
+    sourceDestination,
+    loanApplicationId = null,
+    lenderOrgId = null,
+    clientRequestId = null,
+    requestIds = [],
+    orderId = null
+  ) {
+    const identifiers = {
+      clientRequestId,
+      loanApplicationId,
+      lenderOrgId,
+      orderId,
+      requestIds: (requestIds || []).filter(Boolean)
+    };
+    const best = this._findBestResponseCandidate(logTag, sourceDestination, identifiers);
 
-    const candidates = [];
-    for (const [requestId, entry] of this.responseBuffer) {
-      const meta = entry.metadata || {};
-      const metaTag = this._normalizeLogTag(meta.logTag);
-
-      if (metaTag !== baseTag) continue;
-
-      const metaSD = meta.sourceDestination;
-      const sdMatch = metaSD === sourceDestination || metaSD === invertedSD;
-      if (!sdMatch) continue;
-
-      let score = metaSD === sourceDestination ? 10 : 5;
-
-      if (loanApplicationId && meta.loanApplicationId === loanApplicationId) score += 20;
-      if (lenderOrgId && meta.lenderOrgId === lenderOrgId) score += 15;
-
-      candidates.push({ requestId, entry, score, timestamp: entry.timestamp });
-    }
-
-    if (candidates.length === 0) {
-      logger.debug('No response found by metadata', {
-        logTag,
-        sourceDestination,
-        loanApplicationId,
-        lenderOrgId,
-        invertedSD,
-        bufferSize: this.responseBuffer.size
-      });
+    if (!best) {
       return null;
     }
 
-    candidates.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return a.timestamp - b.timestamp;
-    });
-
-    const best = candidates[0];
     this.responseBuffer.delete(best.requestId);
 
     logger.info('Found buffered response by metadata', {
@@ -343,10 +328,14 @@ export class BufferManager {
       matchedSD: best.entry.metadata?.sourceDestination,
       matchedRequestId: best.requestId,
       score: best.score,
-      totalCandidates: candidates.length,
+      exactMatchCount: best.exactMatchCount,
+      totalCandidates: best.totalCandidates,
+      requestIds: identifiers.requestIds,
+      clientRequestId,
       loanApplicationId,
       lenderOrgId,
-      usedInvertedMatch: best.entry.metadata?.sourceDestination === invertedSD
+      orderId,
+      usedInvertedMatch: best.entry.metadata?.sourceDestination === best.invertedSD
     });
 
     return best.entry;
@@ -365,6 +354,97 @@ export class BufferManager {
     const parts = sd.split('_');
     if (parts.length !== 2) return null;
     return `${parts[1]}_${parts[0]}`;
+  }
+
+  _findBestResponseCandidate(logTag, sourceDestination, identifiers = {}) {
+    const baseTag = this._normalizeLogTag(logTag);
+    const invertedSD = this._invertSourceDestination(sourceDestination);
+    const requestIds = (identifiers.requestIds || []).filter(Boolean);
+
+    const candidates = [];
+    for (const [requestId, entry] of this.responseBuffer) {
+      const meta = entry.metadata || {};
+      const metaTag = this._normalizeLogTag(meta.logTag);
+
+      if (metaTag !== baseTag) continue;
+
+      const metaSD = meta.sourceDestination;
+      const sdMatch = metaSD === sourceDestination || metaSD === invertedSD;
+      if (!sdMatch) continue;
+
+      const exactMatches = [];
+      const partialMatches = [];
+
+      if (identifiers.clientRequestId && meta.clientRequestId === identifiers.clientRequestId) {
+        exactMatches.push('clientRequestId');
+      }
+
+      if (identifiers.loanApplicationId && meta.loanApplicationId === identifiers.loanApplicationId) {
+        exactMatches.push('loanApplicationId');
+      }
+
+      if (identifiers.lenderOrgId && meta.lenderOrgId === identifiers.lenderOrgId) {
+        exactMatches.push('lenderOrgId');
+      }
+
+      if (identifiers.orderId && meta.orderId === identifiers.orderId) {
+        exactMatches.push('orderId');
+      }
+
+      if (requestIds.length > 0) {
+        if (requestIds.includes(requestId) || requestIds.includes(meta.requestId)) {
+          exactMatches.push('requestId');
+        } else if (meta.requestId) {
+          partialMatches.push('hasRequestId');
+        }
+      }
+
+      let score = metaSD === sourceDestination ? 30 : 20;
+      if (exactMatches.includes('clientRequestId')) score += 80;
+      if (exactMatches.includes('loanApplicationId')) score += 60;
+      if (exactMatches.includes('lenderOrgId')) score += 50;
+      if (exactMatches.includes('orderId')) score += 40;
+      if (exactMatches.includes('requestId')) score += 35;
+      if (partialMatches.includes('hasRequestId')) score += 5;
+
+      candidates.push({
+        requestId,
+        entry,
+        score,
+        timestamp: entry.timestamp,
+        exactMatches,
+        exactMatchCount: exactMatches.length,
+        totalCandidates: 0,
+        invertedSD
+      });
+    }
+
+    if (candidates.length === 0) {
+      logger.debug('No response found by metadata', {
+        logTag,
+        sourceDestination,
+        requestIds,
+        clientRequestId: identifiers.clientRequestId,
+        loanApplicationId: identifiers.loanApplicationId,
+        lenderOrgId: identifiers.lenderOrgId,
+        orderId: identifiers.orderId,
+        invertedSD,
+        bufferSize: this.responseBuffer.size
+      });
+      return null;
+    }
+
+    for (const candidate of candidates) {
+      candidate.totalCandidates = candidates.length;
+    }
+
+    candidates.sort((a, b) => {
+      if (b.exactMatchCount !== a.exactMatchCount) return b.exactMatchCount - a.exactMatchCount;
+      if (b.score !== a.score) return b.score - a.score;
+      return a.timestamp - b.timestamp;
+    });
+
+    return candidates[0];
   }
   
   registerPendingPromise(requestId, entry, timeoutMs = null) {
@@ -461,6 +541,16 @@ export class BufferManager {
     });
     
     return oldest.entry;
+  }
+
+  hasMatchingBufferedRequest(expectedEntry) {
+    for (const [, entry] of this.incomingRequests) {
+      if (entry.state === 'buffered' && this._matchesEntry(entry.request, expectedEntry)) {
+        return true;
+      }
+    }
+
+    return false;
   }
   
   _matchesRequest(incoming, expected) {

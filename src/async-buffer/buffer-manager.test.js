@@ -224,6 +224,116 @@ test('getResponseByMetadata disambiguates parallel calls using loanApplicationId
   }
 });
 
+test('getResponseByMetadata prefers clientRequestId for APP_WRAPPER style correlations', () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    manager.addResponse('resp-request-id-match', { data: { picked: 'wrong' } }, false, {
+      logTag: 'FlipKart-HardEligibility_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'different-client-id'
+    });
+
+    manager.addResponse('resp-client-id-match', { data: { picked: 'right' } }, false, {
+      logTag: 'FlipKart-HardEligibility_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'client-123'
+    });
+
+    const found = manager.getResponseByMetadata(
+      'FlipKart-HardEligibility_RESPONSE',
+      'APP_WRAPPER',
+      null,
+      null,
+      'client-123'
+    );
+
+    assert.ok(found);
+    assert.deepEqual(found.response.data, { picked: 'right' });
+    assert.equal(manager.responseBuffer.size, 1);
+  } finally {
+    manager.stop();
+  }
+});
+
+test('getResponseByMetadata does not let requestId override stronger mapped identifiers', () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    manager.addResponse('resp-request-id', { data: { picked: 'wrong' } }, false, {
+      requestId: 'req-from-log',
+      logTag: 'FlipKart-HardEligibility_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'different-client-id',
+      loanApplicationId: 'loan-a'
+    });
+
+    manager.addResponse('resp-client-id', { data: { picked: 'right' } }, false, {
+      requestId: 'different-request-id',
+      logTag: 'FlipKart-HardEligibility_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'client-123',
+      loanApplicationId: 'loan-a'
+    });
+
+    const found = manager.getResponseByMetadata(
+      'FlipKart-HardEligibility_RESPONSE',
+      'APP_WRAPPER',
+      'loan-a',
+      null,
+      'client-123',
+      ['req-from-log']
+    );
+
+    assert.ok(found);
+    assert.deepEqual(found.response.data, { picked: 'right' });
+    assert.equal(manager.responseBuffer.size, 1);
+  } finally {
+    manager.stop();
+  }
+});
+
+test('getResponseByMetadata narrows multiple same-tag candidates using exact clientRequestId', () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    manager.addResponse('resp-a', { data: { picked: 'A' } }, false, {
+      logTag: 'FlipKart-HardEligibility_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'client-a'
+    });
+
+    manager.addResponse('resp-b', { data: { picked: 'B' } }, false, {
+      logTag: 'FlipKart-HardEligibility_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'client-b'
+    });
+
+    const found = manager.getResponseByMetadata(
+      'FlipKart-HardEligibility_RESPONSE',
+      'APP_WRAPPER',
+      null,
+      null,
+      'client-b'
+    );
+
+    assert.ok(found);
+    assert.deepEqual(found.response.data, { picked: 'B' });
+    assert.equal(manager.responseBuffer.size, 1);
+  } finally {
+    manager.stop();
+  }
+});
+
 test('getResponseByMetadata disambiguates parallel calls using lenderOrgId', () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,
@@ -277,6 +387,42 @@ test('getResponseByMetadata falls back to oldest when no correlation ids match',
 
     assert.ok(found);
     assert.deepEqual(found.response.data, { version: 1 });
+  } finally {
+    manager.stop();
+  }
+});
+
+test('getResponseByMetadata can disambiguate using orderId when other ids are absent', () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    manager.addResponse('resp-order-a', { data: { picked: 'A' } }, false, {
+      logTag: 'FETCH_STATUS_REQUEST',
+      sourceDestination: 'APP_LSP',
+      orderId: 'order-a'
+    });
+    manager.addResponse('resp-order-b', { data: { picked: 'B' } }, false, {
+      logTag: 'FETCH_STATUS_REQUEST',
+      sourceDestination: 'APP_LSP',
+      orderId: 'order-b'
+    });
+
+    const found = manager.getResponseByMetadata(
+      'FETCH_STATUS_RESPONSE',
+      'LSP_APP',
+      null,
+      null,
+      null,
+      [],
+      'order-b'
+    );
+
+    assert.ok(found);
+    assert.deepEqual(found.response.data, { picked: 'B' });
+    assert.equal(manager.responseBuffer.size, 1);
   } finally {
     manager.stop();
   }

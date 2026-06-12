@@ -54,6 +54,22 @@ export class RequestForwarder {
     this.pendingPostResponseWebhooks = new Map();
   }
 
+  shouldAutoProcessNextLogEntry() {
+    return this.callbacks.shouldAutoProcessNextLogEntry
+      ? this.callbacks.shouldAutoProcessNextLogEntry() !== false
+      : true;
+  }
+
+  shouldBlockOnHeldExternalRequest() {
+    if (this.config?.asyncReplayMode) {
+      return false;
+    }
+
+    return this.callbacks.shouldBlockOnHeldExternalRequest
+      ? this.callbacks.shouldBlockOnHeldExternalRequest() !== false
+      : true;
+  }
+
   /**
    * Handle response from downstream service
    * This is called when we receive a response from GW/LSP after forwarding a request
@@ -120,13 +136,17 @@ export class RequestForwarder {
     this.callbacks.recordSuccess('response_validation', expectedEntry);
 
     // Trigger next log entry processing (for external source requests like APP->LSP)
-    this.logger.info('Triggering processNextLogEntry after response validation');
-    setImmediate(() => {
-      this.logger.info('Executing setImmediate processNextLogEntry');
-      this.callbacks.processNextLogEntry().catch(err => {
-        this.logger.error('Error processing next log entry after response validation', { error: err.message });
+    if (this.shouldAutoProcessNextLogEntry()) {
+      this.logger.info('Triggering processNextLogEntry after response validation');
+      setImmediate(() => {
+        this.logger.info('Executing setImmediate processNextLogEntry');
+        this.callbacks.processNextLogEntry().catch(err => {
+          this.logger.error('Error processing next log entry after response validation', { error: err.message });
+        });
       });
-    });
+    } else {
+      this.logger.info('Skipping auto processNextLogEntry after response validation in async replay mode');
+    }
 
     return {
       success: true,
@@ -176,9 +196,9 @@ export class RequestForwarder {
         }
       }
 
-      // Log mocked request and response
+      // Log mocked request now. The replayed response for GATEWAY->LENDER is logged
+      // only when sequence reaches the actual LENDER->GATEWAY response entry.
       this.logger.logApiCall(expectedEntry.source, expectedEntry.destination, api, 'REQUEST', expectedEntry.index);
-      this.logger.logApiCall(expectedResponse.source, expectedResponse.destination, api, 'RESPONSE', expectedResponse.index);
 
       // For LENDER calls, check for webhooks that should fire AFTER the response (CASE 7)
       let webhooksAfter = [];
@@ -191,6 +211,87 @@ export class RequestForwarder {
           // Store webhooks to trigger after we send the response back to GW
           this.pendingPostResponseWebhooks.set(contextKey, webhooksAfter);
         }
+      }
+
+      if (destination === 'LENDER') {
+        let resolveExternal, rejectExternal;
+        const externalPromise = new Promise((resolve, reject) => {
+          resolveExternal = resolve;
+          rejectExternal = reject;
+        });
+
+        // Lender responses can legitimately arrive much later in the replay
+        // than the original live caller would wait, especially when ART is
+        // preserving prod sequencing instead of responding immediately.
+        const externalTimeoutMs = Math.max(this.config.timeoutMs || 10000, 180000);
+        const timeoutHandle = setTimeout(() => {
+          if (this.pendingExternalRequests.has(contextKey)) {
+            this.pendingExternalRequests.delete(contextKey);
+            rejectExternal(new Error(
+              `External request ${contextKey} timed out after ${externalTimeoutMs}ms`
+            ));
+          }
+        }, externalTimeoutMs);
+
+        this.pendingExternalRequests.set(contextKey, {
+          requestEntry: expectedEntry,
+          responseEntry: expectedResponse,
+          promise: externalPromise,
+          resolve: resolveExternal,
+          reject: rejectExternal,
+          timeoutHandle
+        });
+
+        const earlyResponse = this.earlyExternalResponses.get(contextKey);
+        if (earlyResponse) {
+          this.logger.info('Processing early-arrived response now', { contextKey });
+          this.earlyExternalResponses.delete(contextKey);
+          this.handleExternalServiceResponse(earlyResponse).catch(err => {
+            this.logger.error('Error processing early response', { error: err.message });
+          });
+        }
+
+        this.logger.debug('Tracked pending external request', {
+          contextKey,
+          requestIndex: expectedEntry.index,
+          expectedResponseIndex: expectedResponse.index
+        });
+
+        this.logger.info('Holding GATEWAY->LENDER request until replay reaches actual response entry', {
+          contextKey,
+          requestEntry: expectedEntry.toString(),
+          responseEntry: expectedResponse.toString()
+        });
+
+        const shouldBlockHeldRequest = this.shouldBlockOnHeldExternalRequest();
+
+        this.logger.info('Evaluated held GATEWAY->LENDER request blocking mode', {
+          contextKey,
+          asyncReplayMode: this.config?.asyncReplayMode === true,
+          shouldBlockHeldRequest
+        });
+
+        if (!shouldBlockHeldRequest) {
+          this.logger.info('Not blocking on held GATEWAY->LENDER request in async replay mode', {
+            contextKey,
+            requestEntry: expectedEntry.toString(),
+            responseEntry: expectedResponse.toString()
+          });
+          return {
+            success: true,
+            payload: transformRequest(expectedResponse.payload, expectedResponse.logTag),
+            tracked: true,
+            externalSkipped: true,
+            deferredExternalResponse: true
+          };
+        }
+
+        const replayedResponse = await externalPromise;
+        return {
+          ...replayedResponse,
+          tracked: true,
+          externalSkipped: true
+        };
       }
 
       // Only track external call if there are webhooks to wait for
@@ -506,12 +607,16 @@ export class RequestForwarder {
         if (handled) {
           // Response was matched with pending request - include headers
           // Trigger next log entry processing for external source requests
-          this.logger.info('Triggering processNextLogEntry after sync downstream response');
-          setImmediate(() => {
-            this.callbacks.processNextLogEntry().catch(err => {
-              this.logger.error('Error processing next log entry after sync response', { error: err.message });
+          if (this.shouldAutoProcessNextLogEntry()) {
+            this.logger.info('Triggering processNextLogEntry after sync downstream response');
+            setImmediate(() => {
+              this.callbacks.processNextLogEntry().catch(err => {
+                this.logger.error('Error processing next log entry after sync response', { error: err.message });
+              });
             });
-          });
+          } else {
+            this.logger.info('Skipping auto processNextLogEntry after sync downstream response in async replay mode');
+          }
           return {
             success: true,
             payload: serviceResponse.data,
@@ -538,12 +643,16 @@ export class RequestForwarder {
       }
 
       // Trigger next log entry processing for external source requests
-      this.logger.info('Triggering processNextLogEntry after async downstream response');
-      setImmediate(() => {
-        this.callbacks.processNextLogEntry().catch(err => {
-          this.logger.error('Error processing next log entry after async response', { error: err.message });
+      if (this.shouldAutoProcessNextLogEntry()) {
+        this.logger.info('Triggering processNextLogEntry after async downstream response');
+        setImmediate(() => {
+          this.callbacks.processNextLogEntry().catch(err => {
+            this.logger.error('Error processing next log entry after async response', { error: err.message });
+          });
         });
-      });
+      } else {
+        this.logger.info('Skipping auto processNextLogEntry after async downstream response in async replay mode');
+      }
 
       return {
         ...finalResponse,

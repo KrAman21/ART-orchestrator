@@ -5,7 +5,7 @@ const FIELD_TRANSFORMS = {
     'mobile_number': { value: '9876543210', check: (v) => typeof v === 'string' && v.startsWith('XX') },
     'phone': { value: '9876543210', check: (v) => typeof v === 'string' && v.startsWith('XX') },
     'date_of_birth': { value: '01-01-1990', check: (v) => typeof v === 'string' && (v.startsWith('XX') || v === 'MASKED') },
-    'dateOfBirth': { value: '01-01-1990', check: (v) => typeof v === 'string' && v.startsWith('XX') },
+    'dateOfBirth': { value: '1990-01-01', check: (v) => typeof v === 'string' && (v.startsWith('XX') || v === 'MASKED') },
     'pan_number': { value: 'EHZPA1234F', check: (v) => typeof v === 'string' && v.startsWith('XX') },
     'pan': { value: 'EHZPA1234F', check: (v) => typeof v === 'string' && v.startsWith('XX') },
     'first_name': { value: 'TestFirst', check: (v) => typeof v === 'string' && v.startsWith('XX') },
