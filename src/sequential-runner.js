@@ -1,7 +1,6 @@
 import { fetchLogsFromJSONFile, filterAndSortLogs, filterOrchestratorSkippableLogs } from './services/log-fetcher.js';
 import { ReplayOrchestrator } from './orchestrator.js';
 import { AsyncReplayOrchestrator } from './async-buffer/async-orchestrator.js';
-import { createServer } from './server.js';
 import { createMockController } from './mocks/index.js';
 import { MOCK_CONFIG, SERVICE_MAP, RETRY_CONFIG, RETRY_TIMEOUT_OVERRIDES } from './config.js';
 import { BatchLogFetcher } from './log-fetcher/index.js';
@@ -9,8 +8,9 @@ import { ArtReportGenerator } from './services/art-report-generator.js';
 import { logger } from './utils/logger.js';
 import { basename, dirname, extname, join } from 'path';
 import { unlink } from 'fs/promises';
-import { getOptionalRepeatPolicy } from './replay-special-cases.js';
+import { getOptionalRepeatPolicy, REPLAY_SPECIAL_CASES } from './replay-special-cases.js';
 import { findCorrespondingResponseEntry } from './services/response-matcher.js';
+import { makeRequest } from './services/http-client.js';
 
 export async function runSequentialArt(orderList, config) {
   const maxJourneyTimeMs = config.MAX_JOURNEY_TIME_MS || 3 * 60 * 1000;
@@ -59,6 +59,13 @@ export async function runSequentialArt(orderList, config) {
   console.log(`========================================\n`);
 
   reportGenerator.startExecution();
+
+  // Start all S3 fetches concurrently in the background — returns a Map of Promises.
+  // Workers await only their own order's promise, so replay and fetching overlap.
+  console.log(`\n[PREFETCH] Starting background log fetch for all ${orderList.length} orders...`);
+  const prefetchPromises = startPrefetchPromises(orderList, config);
+  console.log(`[PREFETCH] Workers starting — fetching and replaying will run concurrently.\n`);
+
   const results = new Array(orderList.length);
   let nextOrderIndex = 0;
 
@@ -87,7 +94,8 @@ export async function runSequentialArt(orderList, config) {
         absoluteIndex + 1,
         orderList.length,
         maxJourneyTimeMs,
-        reportGenerator
+        reportGenerator,
+        await (prefetchPromises?.get(orderId) ?? Promise.resolve(null))
       );
 
       const result = {
@@ -169,15 +177,114 @@ export async function runSequentialArt(orderList, config) {
   return { success: failed === 0, results: finalizedResults };
 }
 
-async function processSingleOrder(merchantId, orderId, config, orderIndex, totalOrders, maxJourneyTimeMs, reportGenerator) {
+/**
+ * Fetches logs from S3 and runs the full filter pipeline for a single order.
+ * Returns the final filtered logs array, or throws on failure.
+ */
+async function fetchAndFilterOrderLogs(merchantId, orderId, config, logsFilePath, filteredLogsPath, finalFilteredLogsPath) {
+  const maxFetchAttempts = 5;
+  const fetchRetryIntervalMs = 2000;
+  let fetchResult = null;
+
+  const preCachedLogs = await fetchLogsFromJSONFile(logsFilePath).catch(() => []);
+  if (preCachedLogs.length > 0) {
+    fetchResult = {
+      success: true,
+      stats: { totalLogs: preCachedLogs.length },
+      allLogs: preCachedLogs
+    };
+  } else {
+    for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
+      const fetcher = new BatchLogFetcher({
+        sessionToken: config.SESSION_TOKEN,
+        outputPath: logsFilePath,
+        delayBetweenRequests: 500,
+        maxRetries: 3
+      });
+
+      fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+
+      if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
+        break;
+      }
+
+      logger.warn(`[PREFETCH] Fetch attempt ${attempt}/${maxFetchAttempts} failed for order ${orderId}`, {
+        attempt,
+        maxFetchAttempts,
+        totalLogs: fetchResult.stats?.totalLogs || 0,
+        error: fetchResult.error || 'No logs found'
+      });
+
+      if (attempt < maxFetchAttempts) {
+        await sleep(fetchRetryIntervalMs);
+      }
+    }
+  }
+
+  if (!fetchResult?.success || fetchResult.stats.totalLogs === 0) {
+    throw new Error(`No logs found after ${maxFetchAttempts} attempts`);
+  }
+
+  const logs = await fetchLogsFromJSONFile(logsFilePath);
+  if (logs.length === 0) throw new Error('No logs to process after fetch');
+
+  const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
+  if (filteredLogs.length === 0) throw new Error('No logs remaining after filterAndSortLogs');
+
+  const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
+  if (finalFilteredLogs.length === 0) throw new Error('No logs remaining after filterOrchestratorSkippableLogs');
+
+  return finalFilteredLogs;
+}
+
+/**
+ * Prefetch pipeline: fetches and filters S3 logs for ALL orders concurrently.
+ * Returns a Map<orderId, { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath }>
+ * (or { error, logsFilePath, ... } on failure).
+ * Workers consume pre-fetched data and skip the S3 wait entirely.
+ */
+function startPrefetchPromises(orderList, config) {
+  // Returns Map<orderId, Promise<{finalFilteredLogs,...}|{error,...}>> immediately.
+  // All fetches fire concurrently in the background. Each worker awaits its own.
+  const promises = new Map();
+
+  for (const { merchantId, orderId } of orderList) {
+    // idx matches position in orderList, same as what processSingleOrder uses
+    const orderIndex = orderList.findIndex(o => o.orderId === orderId) + 1;
+    const logsFilePath          = getPerOrderFilePath(config.LOGS_FILE_PATH             || 'data/logs.json',              orderId, orderIndex, config);
+    const filteredLogsPath      = getPerOrderFilePath(config.FILTERED_LOGS_PATH         || 'data/filtered-logs.json',      orderId, orderIndex, config);
+    const finalFilteredLogsPath = getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH   || 'data/final-filtered-logs.json', orderId, orderIndex, config);
+
+    const p = fetchAndFilterOrderLogs(
+      merchantId, orderId, config,
+      logsFilePath, filteredLogsPath, finalFilteredLogsPath
+    ).then(
+      finalFilteredLogs => {
+        console.log(`[PREFETCH] ✓ ${orderId}: ${finalFilteredLogs.length} logs ready`);
+        return { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
+      },
+      error => {
+        console.log(`[PREFETCH] ✗ ${orderId}: ${error.message}`);
+        logger.warn(`[PREFETCH] Failed for order ${orderId}`, { orderId, error: error.message });
+        return { error: error.message, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
+      }
+    );
+
+    promises.set(orderId, p);
+  }
+
+  return promises;
+}
+
+async function processSingleOrder(merchantId, orderId, config, orderIndex, totalOrders, maxJourneyTimeMs, reportGenerator, prefetchedData = null) {
   let server = null;
   let orchestrator = null;
   let mocks = null;
   let progressInterval = null;
   const registrySessionId = getRegistrySessionId(config, orderId);
-  const logsFilePath = getPerOrderFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex, config);
-  const filteredLogsPath = getPerOrderFilePath(config.FILTERED_LOGS_PATH || 'data/filtered-logs.json', orderId, orderIndex, config);
-  const finalFilteredLogsPath = getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json', orderId, orderIndex, config);
+  const logsFilePath = prefetchedData?.logsFilePath ?? getPerOrderFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex, config);
+  const filteredLogsPath = prefetchedData?.filteredLogsPath ?? getPerOrderFilePath(config.FILTERED_LOGS_PATH || 'data/filtered-logs.json', orderId, orderIndex, config);
+  const finalFilteredLogsPath = prefetchedData?.finalFilteredLogsPath ?? getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json', orderId, orderIndex, config);
 
   console.log(`Replay artifacts for ${orderId}:`);
   console.log(`  Raw logs: ${logsFilePath}`);
@@ -192,133 +299,175 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
   });
 
   try {
-    logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 1: Fetching logs`, {
-      orderId,
-      orderIndex,
-      totalOrders,
-      phase: 'FETCH_LOGS'
-    });
+    let finalFilteredLogs;
 
-    let fetchResult = null;
-    const maxFetchAttempts = 5;
-    const fetchRetryIntervalMs = 2000;
-
-    const preCachedLogs = await fetchLogsFromJSONFile(logsFilePath).catch(() => []);
-    if (preCachedLogs.length > 0) {
-      console.log(`  Using pre-cached logs for order ${orderId} (${preCachedLogs.length} entries)`);
-      fetchResult = {
-        success: true,
-        stats: { totalLogs: preCachedLogs.length },
-        allLogs: preCachedLogs
-      };
+    if (prefetchedData?.finalFilteredLogs) {
+      finalFilteredLogs = prefetchedData.finalFilteredLogs;
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Using pre-fetched logs`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        logCount: finalFilteredLogs.length,
+        phase: 'PREFETCH_HIT'
+      });
+      console.log(`[PREFETCH] Using ${finalFilteredLogs.length} pre-fetched logs for order ${orderId}`);
     } else {
-      for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
-        const fetcher = new BatchLogFetcher({
-          sessionToken: config.SESSION_TOKEN,
-          outputPath: logsFilePath,
-          delayBetweenRequests: 500,
-          maxRetries: 3
+      if (prefetchedData?.error) {
+        logger.warn(`[PREFETCH] Pre-fetch failed for order ${orderId}, falling back to inline fetch`, {
+          orderId,
+          error: prefetchedData.error
         });
+      }
 
-        fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 1: Fetching logs`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        phase: 'FETCH_LOGS'
+      });
 
-        if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
-          break;
-        }
+      let fetchResult = null;
+      const maxFetchAttempts = 5;
+      const fetchRetryIntervalMs = 2000;
 
-        logger.warn(`Log fetch attempt ${attempt}/${maxFetchAttempts} failed for order ${orderId}`, {
-          attempt,
-          maxFetchAttempts,
-          totalLogs: fetchResult.stats?.totalLogs || 0,
-          error: fetchResult.error || 'No logs found'
-        });
+      const preCachedLogs = await fetchLogsFromJSONFile(logsFilePath).catch(() => []);
+      if (preCachedLogs.length > 0) {
+        console.log(`  Using pre-cached logs for order ${orderId} (${preCachedLogs.length} entries)`);
+        fetchResult = {
+          success: true,
+          stats: { totalLogs: preCachedLogs.length },
+          allLogs: preCachedLogs
+        };
+      } else {
+        for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
+          const fetcher = new BatchLogFetcher({
+            sessionToken: config.SESSION_TOKEN,
+            outputPath: logsFilePath,
+            delayBetweenRequests: 500,
+            maxRetries: 3
+          });
 
-        if (attempt < maxFetchAttempts) {
-          console.log(`  Log fetch attempt ${attempt}/${maxFetchAttempts} returned 0 logs, retrying in 2s...`);
-          await new Promise(resolve => setTimeout(resolve, fetchRetryIntervalMs));
+          fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+
+          if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
+            break;
+          }
+
+          logger.warn(`Log fetch attempt ${attempt}/${maxFetchAttempts} failed for order ${orderId}`, {
+            attempt,
+            maxFetchAttempts,
+            totalLogs: fetchResult.stats?.totalLogs || 0,
+            error: fetchResult.error || 'No logs found'
+          });
+
+          if (attempt < maxFetchAttempts) {
+            console.log(`  Log fetch attempt ${attempt}/${maxFetchAttempts} returned 0 logs, retrying in 2s...`);
+            await new Promise(resolve => setTimeout(resolve, fetchRetryIntervalMs));
+          }
         }
       }
-    }
 
-    if (!fetchResult.success || fetchResult.stats.totalLogs === 0) {
-      const error = `No logs found after ${maxFetchAttempts} attempts`;
-      console.log(`  Failed to fetch logs for order ${orderId} after ${maxFetchAttempts} attempts, skipping.`);
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: error,
-        logsProcessed: 0
+      if (!fetchResult.success || fetchResult.stats.totalLogs === 0) {
+        const error = `No logs found after ${maxFetchAttempts} attempts`;
+        console.log(`  Failed to fetch logs for order ${orderId} after ${maxFetchAttempts} attempts, skipping.`);
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: error,
+          logsProcessed: 0
+        });
+        return {
+          success: false,
+          logCount: 0,
+          error
+        };
+      }
+
+      console.log(`Fetched ${fetchResult.stats.totalLogs} logs for order ${orderId} (attempt ${fetchResult.stats.totalLogs > 0 ? 'succeeded' : 'exhausted'})`);
+
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 2: Loading and filtering logs`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        phase: 'FILTER_LOGS'
       });
-      return {
-        success: false,
-        logCount: 0,
-        error
-      };
-    }
 
-    console.log(`Fetched ${fetchResult.stats.totalLogs} logs for order ${orderId} (attempt ${fetchResult.stats.totalLogs > 0 ? 'succeeded' : 'exhausted'})`);
+      const logs = await fetchLogsFromJSONFile(logsFilePath);
 
-    logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 2: Loading and filtering logs`, {
-      orderId,
-      orderIndex,
-      totalOrders,
-      phase: 'FILTER_LOGS'
-    });
-    
-    const logs = await fetchLogsFromJSONFile(logsFilePath);
+      if (logs.length === 0) {
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: 'No logs to process',
+          logsProcessed: 0
+        });
+        return { success: false, logCount: 0, error: 'No logs to process' };
+      }
 
-    if (logs.length === 0) {
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: 'No logs to process',
-        logsProcessed: 0
-      });
-      return { success: false, logCount: 0, error: 'No logs to process' };
-    }
+      console.log(`Loaded ${logs.length} logs`);
 
-    console.log(`Loaded ${logs.length} logs`);
+      const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
 
-    const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
-    
-    if (filteredLogs.length === 0) {
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: 'No logs after filtering',
-        logsProcessed: 0
-      });
-      return { success: false, logCount: 0, error: 'No logs after filtering' };
-    }
+      if (filteredLogs.length === 0) {
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: 'No logs after filtering',
+          logsProcessed: 0
+        });
+        return { success: false, logCount: 0, error: 'No logs after filtering' };
+      }
 
-    const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
-    
-    if (finalFilteredLogs.length === 0) {
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: 'No logs after second filtering',
-        logsProcessed: 0
-      });
-      return { success: false, logCount: 0, error: 'No logs after second filtering' };
+      finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
+
+      if (finalFilteredLogs.length === 0) {
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: 'No logs after second filtering',
+          logsProcessed: 0
+        });
+        return { success: false, logCount: 0, error: 'No logs after second filtering' };
+      }
     }
 
     orderReport.logsTotal = finalFilteredLogs.length;
     console.log(`Ready to replay ${finalFilteredLogs.length} unique logs`);
 
-    if (MOCK_CONFIG.enabled) {
-      console.log('\nMock mode enabled - starting mock services...');
-      const lspPort = new URL(MOCK_CONFIG.mockLspUrl).port || 4232;
-      const gwPort = new URL(MOCK_CONFIG.mockGwUrl).port || 2344;
+    const replayLenderOrgIds = getReplayLenderOrgIds(finalFilteredLogs);
+    const skippedLenderOrgIds = (config.SKIP_LENDER_ORG_IDS || []).filter(lenderOrgId =>
+      replayLenderOrgIds.includes(lenderOrgId)
+    );
 
-      mocks = createMockController({
-        lspPort: parseInt(lspPort, 10),
-        gwPort: parseInt(gwPort, 10),
-        orchestratorUrl: `http://localhost:${config.PORT}`
+    if (skippedLenderOrgIds.length > 0) {
+      const skipReason = `Skipped by config: replay contains lenderOrgId(s) ${skippedLenderOrgIds.join(', ')}`;
+      logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - ${skipReason}`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        replayLenderOrgIds,
+        skippedLenderOrgIds,
+        phase: 'ORDER_SKIPPED'
       });
 
-      await mocks.start(logs);
+      reportGenerator.finalizeOrder(orderId, {
+        success: true,
+        skipped: true,
+        stopReason: skipReason,
+        logsProcessed: 0,
+        artResults: {
+          passed: 0,
+          failed: 0,
+          processedLogs: [],
+          payloadComparisons: []
+        }
+      });
 
-      SERVICE_MAP.LSP.baseUrl = MOCK_CONFIG.mockLspUrl;
-      SERVICE_MAP.GW.baseUrl = MOCK_CONFIG.mockGwUrl;
+      return {
+        success: true,
+        skipped: true,
+        logCount: 0
+      };
+    }
 
-      console.log(`Mock services started`);
+    if (MOCK_CONFIG.enabled) {
+      throw new Error('MOCK_CONFIG.enabled is not supported in unix-socket-only ART mode.');
     }
 
     logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 3: Starting ART replay`, {
@@ -335,7 +484,9 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       orderId,
       orderIndex,
       totalOrders,
-      reportGenerator
+      reportGenerator,
+      registrySessionId,
+      onLoanApplicationId: config.onLoanApplicationId
     });
 
     if (config.onOrchestratorReady) {
@@ -347,14 +498,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         config.onLoanApplicationId?.(laId, orderId, registrySessionId);
       }
     } else {
-      const app = createServer(orchestrator);
-      await new Promise((resolve, reject) => {
-        server = app.listen(config.PORT, () => {
-          console.log(`\nART Server running on port ${config.PORT} for order ${orderId}`);
-          resolve();
-        });
-        server.on('error', reject);
-      });
+      throw new Error('Legacy per-order TCP server mode is no longer supported. Use the unix-socket multiplexer flow.');
     }
 
     logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 4: Running ART replay`, {
@@ -433,10 +577,19 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
 
     if (completionResult.timedOut) {
       const currentEntry = orchestrator.validator?.getCurrentEntry();
+      const lastMatchTimeout = orchestrator.bufferManager?.getLastMatchTimeout?.() || null;
+      const pendingWaiters = orchestrator.bufferManager?.getPendingRequestWaiters?.() || [];
+      const primaryPendingWaiter = pendingWaiters[0] || null;
+      const timeoutReason = lastMatchTimeout?.expected
+        ? `Timed out waiting for matching request ${lastMatchTimeout.expected}`
+        : primaryPendingWaiter?.expected
+          ? `Timed out while waiting on pending request ${primaryPendingWaiter.expected}`
+        : `Timeout after ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes`;
+
       reportGenerator.markOrderStuck(orderId, {
         logTag: currentEntry?.logTag || 'unknown',
         logIndex: currentEntry?.index || 0,
-        reason: `Timeout after ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes`
+        reason: timeoutReason
       });
 
       printBufferDebugInfo(orchestrator, orderId);
@@ -455,7 +608,11 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       : completionResult.failed
         ? `API Failure: ${apiErrorMessage || completionResult.error || 'Unknown API error'}`
         : completionResult.timedOut
-          ? `Timeout: Max journey time of ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes exceeded`
+          ? `Timeout: ${orchestrator.bufferManager?.getLastMatchTimeout?.()?.expected
+            ? `Timed out waiting for matching request ${orchestrator.bufferManager.getLastMatchTimeout().expected}`
+            : orchestrator.bufferManager?.getPendingRequestWaiters?.()?.[0]?.expected
+              ? `Timed out while waiting on pending request ${orchestrator.bufferManager.getPendingRequestWaiters()[0].expected}`
+            : `Max journey time of ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes exceeded`}`
           : (artResults.failed > 0 ? `${artResults.failed} assertions failed` : 'Completed successfully');
 
     reportGenerator.finalizeOrder(orderId, {
@@ -483,7 +640,10 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     return {
       success: !completionResult.timedOut && artResults.failed === 0,
       logCount: finalFilteredLogs.length,
-      artResults
+      artResults,
+      error: !completionResult.timedOut && artResults.failed === 0
+        ? null
+        : (apiErrorMessage || stopReason || artResults.failureReason || 'ART replay failed')
     };
 
   } catch (error) {
@@ -608,6 +768,51 @@ function sharesReplayContext(leftEntry, rightEntry) {
   return true;
 }
 
+function collectLenderOrgIds(value, acc = new Set()) {
+  if (value === null || value === undefined) {
+    return acc;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectLenderOrgIds(item, acc);
+    }
+    return acc;
+  }
+
+  if (typeof value !== 'object') {
+    return acc;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if ((key === 'lenderOrgId' || key === 'lender_org_id') && typeof nestedValue === 'string' && nestedValue.trim()) {
+      acc.add(nestedValue.trim());
+    }
+    collectLenderOrgIds(nestedValue, acc);
+  }
+
+  return acc;
+}
+
+function getReplayLenderOrgIds(finalFilteredLogs) {
+  const lenderOrgIds = new Set();
+
+  for (const rawLog of finalFilteredLogs || []) {
+    const message = rawLog?.message || {};
+    if (message.log_tag !== 'LSP-FetchOfferRequest_REQUEST') {
+      continue;
+    }
+
+    collectLenderOrgIds(message.trace_request, lenderOrgIds);
+
+    if (typeof message.lender_org_id === 'string' && message.lender_org_id.trim()) {
+      lenderOrgIds.add(message.lender_org_id.trim());
+    }
+  }
+
+  return [...lenderOrgIds];
+}
+
 function hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy) {
   if (!optionalRepeatPolicy.advanceWhenSeenLogTags?.length) {
     return false;
@@ -623,6 +828,10 @@ function hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPol
 }
 
 function hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy) {
+  if (optionalRepeatPolicy.allowObservedBranchAdvance === false) {
+    return false;
+  }
+
   if (!optionalRepeatPolicy.advanceWhenSeenLogTags?.length) {
     return false;
   }
@@ -635,17 +844,229 @@ function hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPoli
   );
 }
 
-function hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy) {
-  if (!optionalRepeatPolicy.skipWhenPriorProcessedLogTags?.length) {
+function getPayloadValueAtPath(payload, payloadPath) {
+  if (!payload || !payloadPath) {
+    return undefined;
+  }
+
+  return payloadPath.split('.').reduce((current, segment) => {
+    if (current === null || current === undefined) {
+      return undefined;
+    }
+
+    return current[segment];
+  }, payload);
+}
+
+function matchesPriorProcessedEntryCondition(entry, condition) {
+  if (!condition || entry?.logTag !== condition.logTag) {
     return false;
+  }
+
+  if (!condition.payloadPath) {
+    return true;
+  }
+
+  return getPayloadValueAtPath(entry.payload, condition.payloadPath) === condition.equals;
+}
+
+function matchesObservedProcessedResponseCondition(entry, condition) {
+  if (!condition || entry?.logTag !== condition.logTag) {
+    return false;
+  }
+
+  if (!condition.payloadPath) {
+    return true;
+  }
+
+  return getPayloadValueAtPath(entry.payload, condition.payloadPath) === condition.equals;
+}
+
+function hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy) {
+  const hasTagBasedRules = optionalRepeatPolicy.skipWhenPriorProcessedLogTags?.length;
+  const hasConditionalRules = optionalRepeatPolicy.skipWhenPriorProcessedEntries?.length;
+
+  if (!hasTagBasedRules && !hasConditionalRules) {
+    return false;
+  }
+
+  const observedProcessedResponses = orchestrator.observedProcessedResponses || [];
+  const matchingObservedResponse = observedProcessedResponses.some(entry =>
+    optionalRepeatPolicy.skipWhenPriorProcessedEntries.some(condition =>
+      matchesObservedProcessedResponseCondition(entry, condition)
+    ) &&
+    sharesReplayContext(currentEntry, entry)
+  );
+
+  if (matchingObservedResponse) {
+    return true;
   }
 
   return orchestrator.validator.entries.some((entry, index) =>
     orchestrator.validator.processedIndices.has(index) &&
     index < currentEntry.index &&
-    optionalRepeatPolicy.skipWhenPriorProcessedLogTags.includes(entry.logTag) &&
+    (
+      optionalRepeatPolicy.skipWhenPriorProcessedLogTags.includes(entry.logTag) ||
+      optionalRepeatPolicy.skipWhenPriorProcessedEntries.some(condition =>
+        matchesPriorProcessedEntryCondition(entry, condition)
+      )
+    ) &&
     sharesReplayContext(currentEntry, entry)
   );
+}
+
+/**
+ * For CORE→GATEWAY entries with `triggerGatewayCall` in REPLAY_SPECIAL_CASES:
+ * LSP no longer invokes this endpoint in new code for standard checkout flows.
+ * After `triggerAfterSeconds`, ART calls the gateway itself using the payload
+ * from the recorded production log entry, then marks req+resp as processed.
+ *
+ * Skipped entirely if any of `skipIfPrecedingLogTags` appear in already-processed
+ * entries — meaning LSP will make the call itself in that branch.
+ */
+async function maybeTriggerLenderLineStatusGatewayCall(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
+  if (!currentEntry?.isRequest) return false;
+  if (currentEntry.source !== 'CORE' || currentEntry.destination !== 'GATEWAY') return false;
+
+  const specialCase = REPLAY_SPECIAL_CASES.find(
+    sc => sc.logTag === currentEntry.logTag && sc.handler === 'triggerGatewayCall'
+  );
+  if (!specialCase) return false;
+
+  const triggerAfterMs = (specialCase.triggerAfterSeconds ?? 2) * 1000;
+  if (stuckDurationMs < triggerAfterMs) return false;
+
+  // If preceding logs indicate a branch where LSP will invoke this itself, skip
+  const skipTags = specialCase.skipIfPrecedingLogTags || [];
+  if (skipTags.length > 0) {
+    const processedEntries = orchestrator.validator.entries.filter(e =>
+      orchestrator.validator.processedIndices.has(e.index) && e.index < currentEntry.index
+    );
+    const hasPrecedingTag = processedEntries.some(e => skipTags.some(t => e.logTag?.includes(t)));
+    if (hasPrecedingTag) {
+      logger.info('maybeTriggerLenderLineStatusGatewayCall: skipping trigger — preceding logTag found', {
+        orderId, currentLogTag: currentEntry.logTag, skipTags
+      });
+      return false;
+    }
+  }
+
+  const endpoint = specialCase.endpoint;
+  const payload = currentEntry.payload || {};
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Triggering ${currentEntry.logTag} to gateway (LSP no longer initiates this call) - endpoint: ${endpoint}`,
+    {
+      orderId, orderIndex, totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      triggerAfterSeconds: specialCase.triggerAfterSeconds,
+      endpoint,
+      phase: 'TRIGGER_GATEWAY_CALL'
+    }
+  );
+
+  try {
+    const serviceResponse = await makeRequest(
+      orchestrator.getServiceBaseUrl('GW'),
+      endpoint,
+      'POST',
+      payload,
+      currentEntry.requestId,
+      'CORE_GATEWAY',
+      currentEntry.logTag,
+      currentEntry.merchantId || null,
+      { 'x-merchant-id': currentEntry.merchantId || 'flipkart', 'x-request-id': currentEntry.requestId || '' },
+      null,
+      orchestrator.getServiceUnixSocket('GW'),
+      10000
+    );
+
+    if (serviceResponse?.error || (serviceResponse?.status && serviceResponse.status >= 400)) {
+      logger.error('maybeTriggerLenderLineStatusGatewayCall: gateway returned error', {
+        orderId, status: serviceResponse?.status, error: serviceResponse?.message
+      });
+      // Don't block replay on gateway error — still advance past this entry
+    } else {
+      logger.info('maybeTriggerLenderLineStatusGatewayCall: gateway call succeeded', {
+        orderId, status: serviceResponse?.status, logTag: currentEntry.logTag
+      });
+    }
+  } catch (err) {
+    logger.error('maybeTriggerLenderLineStatusGatewayCall: request threw', {
+      orderId, error: err?.message
+    });
+    // Still advance to avoid blocking replay
+  }
+
+  const responseEntry = findCorrespondingResponseEntry(
+    orchestrator.validator.entries,
+    currentEntry,
+    { searchAll: false, processedIndices: orchestrator.validator.processedIndices }
+  );
+
+  if (typeof orchestrator.bufferManager?.skipWaiter === 'function') {
+    orchestrator.bufferManager.skipWaiter(currentEntry);
+  }
+  orchestrator.validator.markProcessed(currentEntry);
+  if (responseEntry) {
+    orchestrator.validator.markProcessed(responseEntry);
+  }
+
+  return true;
+}
+
+/**
+ * For GATEWAY→LENDER entries that have `skipAfterTimeoutFallback` in REPLAY_SPECIAL_CASES:
+ * if the gateway does not make the call within N seconds (default 4s), skip both
+ * the request and its corresponding response and let replay continue.
+ *
+ * If the request DOES arrive before the timeout the bufferManager will match it
+ * and respond with the prod-log response — this function will never fire.
+ */
+function maybeSkipGatewayLenderAuthFallback(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
+  if (!currentEntry?.isRequest) return false;
+  if (currentEntry.source !== 'GATEWAY' || currentEntry.destination !== 'LENDER') return false;
+
+  const specialCase = REPLAY_SPECIAL_CASES.find(
+    sc => sc.logTag === currentEntry.logTag && sc.handler === 'skipAfterTimeoutFallback'
+  );
+  if (!specialCase) return false;
+
+  const optionalAfterMs = (specialCase.optionalAfterSeconds ?? 4) * 1000;
+  if (stuckDurationMs < optionalAfterMs) return false;
+
+  const responseEntry = findCorrespondingResponseEntry(
+    orchestrator.validator.entries,
+    currentEntry,
+    { searchAll: false, processedIndices: orchestrator.validator.processedIndices }
+  );
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Skipping optional GATEWAY→LENDER auth entry after ${specialCase.optionalAfterSeconds}s (token likely cached) - logTag: ${currentEntry.logTag}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      skippedResponseIndex: responseEntry?.index ?? null,
+      optionalAfterSeconds: specialCase.optionalAfterSeconds,
+      phase: 'GATEWAY_LENDER_AUTH_SKIP'
+    }
+  );
+
+  // Unblock the async-orchestrator's waitForMatchingRequest before marking processed
+  if (typeof orchestrator.bufferManager?.skipWaiter === 'function') {
+    orchestrator.bufferManager.skipWaiter(currentEntry);
+  }
+
+  orchestrator.validator.markProcessed(currentEntry);
+  if (responseEntry) {
+    orchestrator.validator.markProcessed(responseEntry);
+  }
+
+  return true;
 }
 
 function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
@@ -675,26 +1096,27 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
   const branchAdvanced = hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
   const branchAdvancedObserved = hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
   const priorAlternateProcessed = hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy);
+  const hasAnyAdvanceSignal = branchAdvanced || branchAdvancedObserved || priorAlternateProcessed;
 
   if (optionalRepeatPolicy.requirePriorProcessedOccurrence && priorReplayOccurrences.length < 1) {
+    return false;
+  }
+
+  if (optionalRepeatPolicy.requireBranchAdvance && !hasAnyAdvanceSignal) {
     return false;
   }
 
   if (
     optionalRepeatPolicy.requirePriorProcessedOccurrence &&
     processedSameTagCount < 1 &&
-    !branchAdvanced &&
-    !branchAdvancedObserved &&
-    !priorAlternateProcessed
+    !hasAnyAdvanceSignal
   ) {
     return false;
   }
 
   if (
     !optionalRepeatPolicy.requirePriorProcessedOccurrence &&
-    !branchAdvanced &&
-    !branchAdvancedObserved &&
-    !priorAlternateProcessed
+    !hasAnyAdvanceSignal
   ) {
     return false;
   }
@@ -725,11 +1147,68 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
     }
   );
 
+  if (typeof orchestrator.bufferManager?.skipWaiter === 'function') {
+    orchestrator.bufferManager.skipWaiter(currentEntry);
+  }
+
   orchestrator.validator.markProcessed(currentEntry);
   if (responseEntry) {
     orchestrator.validator.markProcessed(responseEntry);
   }
 
+  return true;
+}
+
+function maybeSkipOptionalRepeatedResponseEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
+  if (!currentEntry?.isResponse) {
+    return false;
+  }
+
+  const specialCase = REPLAY_SPECIAL_CASES.find(
+    sc => sc.logTag === currentEntry.logTag && sc.handler === 'maybeSkipOptionalRepeatedResponseEntry'
+  );
+
+  if (!specialCase) {
+    return false;
+  }
+
+  if (stuckDurationMs < (specialCase.optionalAfterSeconds ?? 5) * 1000) {
+    return false;
+  }
+
+  const priorReplayOccurrences = orchestrator.validator.entries.filter((entry) =>
+    entry.isResponse &&
+    entry.index < currentEntry.index &&
+    entry.source === currentEntry.source &&
+    entry.destination === currentEntry.destination &&
+    entry.logTag === currentEntry.logTag &&
+    sharesReplayContext(currentEntry, entry)
+  );
+
+  const processedSameTagCount = priorReplayOccurrences.filter(entry =>
+    orchestrator.validator.processedIndices.has(entry.index)
+  ).length;
+
+  if ((specialCase.requirePriorProcessedOccurrence ?? true) && processedSameTagCount < 1) {
+    return false;
+  }
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Auto-skipping optional repeated response after ${specialCase.optionalAfterSeconds ?? 5}s - Current: ${currentEntry.logTag}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      priorReplayOccurrenceCount: priorReplayOccurrences.length,
+      processedSameTagCount,
+      optionalAfterSeconds: specialCase.optionalAfterSeconds ?? 5,
+      phase: 'OPTIONAL_REPEAT_RESPONSE_SKIP'
+    }
+  );
+
+  orchestrator.validator.markProcessed(currentEntry);
   return true;
 }
 
@@ -783,7 +1262,25 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
       const currentMaxRetryMs = currentMaxRetrySeconds * 1000;
       const stuckDurationMs = Date.now() - stuckSince;
 
+      if (await maybeTriggerLenderLineStatusGatewayCall(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
+        stuckEntryIndex = null;
+        stuckSince = null;
+        continue;
+      }
+
+      if (maybeSkipGatewayLenderAuthFallback(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
+        stuckEntryIndex = null;
+        stuckSince = null;
+        continue;
+      }
+
       if (maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
+        stuckEntryIndex = null;
+        stuckSince = null;
+        continue;
+      }
+
+      if (maybeSkipOptionalRepeatedResponseEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
         stuckEntryIndex = null;
         stuckSince = null;
         continue;

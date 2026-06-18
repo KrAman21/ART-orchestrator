@@ -2,8 +2,9 @@ import { logger } from '../utils/logger.js';
 import { MOCK_CONFIG, QAPI_CONFIG } from '../config.js';
 import { fetchS3TraceLogs as fetchS3TraceLogsFromClient } from '../log-fetcher/s3-trace-logs-client.js';
 import { unixSocketRequest } from './unix-socket-client.js';
+import crypto from 'crypto';
 
-export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null) {
+export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, timeoutMs = 30000) {
   const parts = sourceDestination?.split('_') || [];
   const source = parts[0] || '';
   const dest = parts[1] || '';
@@ -12,7 +13,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     logger.logApiCall(source, dest, endpoint, 'REQUEST', logIndex);
   }
 
-  logger.info('Making HTTP request', {
+  logger.info('Making request', {
     baseUrl,
     endpoint,
     method,
@@ -25,25 +26,18 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     unixSocket
   });
 
-  if (baseUrl.includes('8070')) {
-    logger.info('=== LSP CALL INITIATED ===', {
-      baseUrl,
-      endpoint,
-      url: `${baseUrl}${endpoint}`,
-      method,
-      requestId,
-      logTag,
-      headers: customHeaders,
-      timestamp: new Date().toISOString()
-    });
-  }
-
   const url = `${baseUrl}${endpoint}`;
   const headers = {
     ...customHeaders,
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   };
+
+  // The payload may be transformed after we receive the original request.
+  // Let the HTTP client recalculate body-specific/hop-by-hop headers.
+  for (const headerName of ['content-length', 'Content-Length', 'host', 'Host', 'connection', 'Connection']) {
+    delete headers[headerName];
+  }
 
   if (requestId) {
     headers['x-request-id'] = requestId;
@@ -78,60 +72,35 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       contentType: headers['Content-Type']
     });
 
-    if (baseUrl.includes('8070')) {
-      logger.info('=== LSP REQUEST DETAILS ===', {
-        url,
-        method,
-        headers: { ...headers },
-        body: body,
-        requestId,
-        logTag,
-        timestamp: new Date().toISOString()
-      });
-    }
+    const sendRequest = async (requestBody) => {
+      if (unixSocket) {
+        logger.info('Using Unix socket for request', { socket: unixSocket, serviceUrl: url, timeoutMs });
+        const socketResponse = await unixSocketRequest(unixSocket, baseUrl, endpoint, {
+          method,
+          body: requestBody,
+          headers,
+          timeout: timeoutMs
+        });
+        return {
+          ok: socketResponse.ok,
+          status: socketResponse.status,
+          statusText: socketResponse.statusText,
+          json: () => Promise.resolve(socketResponse.data),
+          headers: new Map(Object.entries(socketResponse.headers || {}))
+        };
+      }
 
-    let response;
-    if (unixSocket) {
-      console.log(`🔌 Using Unix socket for request: ${unixSocket}`);
-      console.log(`🔌 URL: ${url}`);
-      logger.info('Using Unix socket for request', { socket: unixSocket, url });
-      const socketResponse = await unixSocketRequest(unixSocket, baseUrl, endpoint, {
-        method,
-        body,
-        headers
-      });
-      response = {
-        ok: socketResponse.ok,
-        status: socketResponse.status,
-        statusText: socketResponse.statusText,
-        json: () => Promise.resolve(socketResponse.data),
-        headers: new Map(Object.entries(socketResponse.headers || {}))
-      };
-    } else {
-      response = await fetch(url, {
+      return fetch(url, {
         method,
         headers,
-        body
+        body: requestBody,
+        signal: AbortSignal.timeout(timeoutMs)
       });
-    }
+    };
 
-    const data = await response.json().catch(() => null);
+    let response = await sendRequest(body);
 
-    // Detailed logging for LSP calls (port 8070)
-    if (baseUrl.includes('8070')) {
-      logger.info('=== LSP CALL RESPONSE ===', {
-        url,
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok,
-        hasData: !!data,
-        dataKeys: data ? Object.keys(data) : [],
-        data: data,
-        error: !response.ok ? (data?.error || 'HTTP error') : null,
-        requestId,
-        timestamp: new Date().toISOString()
-      });
-    }
+    let data = await response.json().catch(() => null);
 
     logger.info('HTTP_RESPONSE_FULL_BODY', {
       requestId,
@@ -141,6 +110,46 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       data: data,
       dataString: data ? JSON.stringify(data) : null
     });
+
+    if (
+      sourceDestination === 'APP_CORE' &&
+      method !== 'GET' &&
+      response.status === 400 &&
+      data?.expectedValue === 'String' &&
+      data?.actualValue === 'Object' &&
+      body
+    ) {
+      const requestPayload = {
+        payload: payload ?? {},
+        header: {
+          'X-Merchant-Id': merchantId || payload?.merchantId || payload?.merchant_id || 'flipkart',
+          ...(payload?.clientAuthToken ? { 'X-Client-Auth-Token': payload.clientAuthToken } : {}),
+          ...customHeaders
+        },
+        timeStamp: new Date().toISOString(),
+        requestId: requestId || payload?.requestId || crypto.randomUUID()
+      };
+      const retryBody = JSON.stringify(JSON.stringify(requestPayload));
+      logger.warn('Retrying APP_CORE request as unencrypted JwtPayload text after LSP type mismatch', {
+        requestId,
+        endpoint,
+        logTag,
+        envelopeRequestId: requestPayload.requestId
+      });
+
+      response = await sendRequest(retryBody);
+      data = await response.json().catch(() => null);
+
+      logger.info('HTTP_RESPONSE_FULL_BODY', {
+        requestId,
+        url,
+        status: response.status,
+        statusText: response.statusText,
+        data: data,
+        dataString: data ? JSON.stringify(data) : null,
+        retry: 'APP_CORE_UNENCRYPTED_JWT_TEXT'
+      });
+    }
 
     logger.debug('HTTP response received', {
       status: response.status,
@@ -258,10 +267,19 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
  */
 export async function checkHealth(serviceConfig) {
   try {
-    const response = await fetch(`${serviceConfig.baseUrl}/health`, {
-      method: 'GET',
-      timeout: 2000
-    });
+    let response;
+    if (serviceConfig.unixSocket) {
+      const socketResponse = await unixSocketRequest(serviceConfig.unixSocket, serviceConfig.baseUrl, '/health', {
+        method: 'GET',
+        timeout: 2000
+      });
+      response = { ok: socketResponse.ok };
+    } else {
+      response = await fetch(`${serviceConfig.baseUrl}/health`, {
+        method: 'GET',
+        timeout: 2000
+      });
+    }
 
     const healthy = response.ok;
     logger.logHealthCheck(serviceConfig.name, healthy);
@@ -355,7 +373,7 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = nu
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-Web-LoginToken': QAPI_CONFIG.token,
+        'Authorization': QAPI_CONFIG.authorization,
         'Consumer-Credit-Dashboard': 'Consumer-Credit-Dashboard',
         'Referer': 'https://dashboard.credit.juspay.in/'
       },

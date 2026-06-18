@@ -5,7 +5,6 @@ import { getApiMapping } from '../config.js';
 import { setupUnixSocket, configureSocketPermissions } from '../utils/socket-utils.js';
 import SessionOrchestratorRegistry from './session-registry.js';
 
-const MULTIPLEXER_PORT = parseInt(process.env.MULTIPLEXER_PORT || process.env.PORT || '3001', 10);
 const MULTIPLEXER_UNIX_SOCKET = process.env.MULTIPLEXER_UNIX_SOCKET || null;
 
 export function createMultiplexerServer() {
@@ -46,7 +45,7 @@ export function createMultiplexerServer() {
 
     if (!mapping) {
       logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
-      return res.json({ success: true, ignored: true, message: 'Webhook ignored' });
+      return res.json('Webhook ignored');
     }
 
     const payload = req.body;
@@ -90,7 +89,7 @@ export function createMultiplexerServer() {
     const source = parts[0];
     const destination = parts[1];
     const logTag = mapping.logTag;
-    const requestId = req.headers['x-request-id'] || req.body.request_id;
+    const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;
 
     try {
       const result = await orchestrator.handleIncomingRequest({
@@ -128,24 +127,11 @@ export function createMultiplexerServer() {
   return { app, registry };
 }
 
-export function startMultiplexerServer(port = MULTIPLEXER_PORT) {
+export function startMultiplexerServer() {
   const { app, registry } = createMultiplexerServer();
-  let server = null;
   let unixServer = null;
 
   const readyPromises = [];
-
-  if (port > 0) {
-    server = createHttpServer(app);
-    readyPromises.push(new Promise((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(port, () => {
-        logger.info(`ART multiplexer listening on http://localhost:${port}`);
-        server.off('error', reject);
-        resolve();
-      });
-    }));
-  }
 
   if (MULTIPLEXER_UNIX_SOCKET) {
     try {
@@ -172,13 +158,16 @@ export function startMultiplexerServer(port = MULTIPLEXER_PORT) {
           error: error.message
         });
       });
-    } catch (error) {
+  } catch (error) {
       logger.error('Failed to prepare multiplexer unix socket', { error: error.message });
     }
   }
 
+  if (!MULTIPLEXER_UNIX_SOCKET) {
+    throw new Error('MULTIPLEXER_UNIX_SOCKET is required. ART no longer supports TCP port listeners.');
+  }
+
   return {
-    server,
     unixServer,
     registry,
     ready: Promise.all(readyPromises).then(() => undefined)

@@ -48,9 +48,11 @@ export class RetryHandler {
     }
 
     const futureMatch = this.findFutureUnprocessedMatch(incoming);
+    const processedMatch = this.findProcessedMatch(incoming);
     if (futureMatch) {
       this.logger.info('Incoming request has future unprocessed replay match, not treating as retry', {
         futureEntryIndex: futureMatch.index,
+        processedEntryIndex: processedMatch?.index ?? null,
         currentEntryIndex: currentEntry?.index,
         incomingLogTag: incoming.logTag,
         incomingLenderOrgId: incoming.lenderOrgId,
@@ -195,6 +197,24 @@ export class RetryHandler {
     }
 
     return null; // Not a retry
+  }
+
+  /**
+   * Find a processed request matching this incoming request.
+   *
+   * @param {Object} incoming - The incoming request
+   * @returns {Object|null} - Matching processed entry or null
+   */
+  findProcessedMatch(incoming) {
+    for (const [index, entry] of this.validator.entries.entries()) {
+      if (!this.validator.processedIndices.has(index)) continue;
+      if (!entry || !entry.isRequest || entry.shouldSkip()) continue;
+      if (this.validator.matchesExpected(entry, incoming)) {
+        return entry;
+      }
+    }
+
+    return null;
   }
 
   /**

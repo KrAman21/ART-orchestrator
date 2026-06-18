@@ -2,15 +2,17 @@ import { makeRequest as blockingMakeRequest } from '../services/http-client.js';
 import { logger } from '../utils/logger.js';
 
 export class NonBlockingHttpClient {
-  constructor(bufferManager, reportGenerator = null, orderId = null) {
+  constructor(bufferManager, reportGenerator = null, orderId = null, options = {}) {
     this.bufferManager = bufferManager;
     this.reportGenerator = reportGenerator;
     this.orderId = orderId;
     this.activeRequests = new Map();
     this.failedRequests = [];
+    this.shouldTreatApiFailureAsExpected =
+      options.shouldTreatApiFailureAsExpected || (() => false);
   }
   
-  async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, loanApplicationId = null) {
+  async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, loanApplicationId = null, lenderOrgId = null, clientRequestId = null) {
     logger.info('Non-blocking HTTP send initiated', {
       requestId,
       logTag,
@@ -35,12 +37,16 @@ export class NonBlockingHttpClient {
     this.activeRequests.set(requestId, {
       promise: requestPromise,
       timestamp: Date.now(),
+      requestId,
       logTag,
       sourceDestination,
       endpoint,
       baseUrl,
       payload,
-      loanApplicationId
+      logIndex,
+      loanApplicationId,
+      lenderOrgId,
+      clientRequestId
     });
     
     requestPromise.then(response => {
@@ -50,6 +56,14 @@ export class NonBlockingHttpClient {
       const responseBodyStr = typeof response.data === 'string' 
         ? response.data 
         : JSON.stringify(response.data);
+      logger.logOutgoing('RESPONSE', baseUrl || 'unknown', endpoint, response.data, {
+        requestId,
+        logTag,
+        sourceDestination,
+        status: response.status,
+        statusText: response.statusText,
+        responseType: 'async-http-response'
+      });
       logger.info('HTTP_RESPONSE_RECEIVED', { 
         requestId, 
         logTag,
@@ -65,7 +79,9 @@ export class NonBlockingHttpClient {
       });
       
       const apiFailure = this.checkApiFailure(response);
-      const hasFailure = response.error || response.status >= 500;
+      const expectedApiFailure =
+        !!apiFailure && this.shouldTreatApiFailureAsExpected(activeReq, response, apiFailure);
+      const hasFailure = response.error || response.status >= 500 || (!!apiFailure && !expectedApiFailure);
       
       logger.info('Non-blocking request result', { 
         requestId, 
@@ -73,6 +89,7 @@ export class NonBlockingHttpClient {
         hasError: response.error,
         apiFailure: !!apiFailure,
         apiFailureDetails: apiFailure,
+        expectedApiFailure,
         responseDataType: typeof response.data,
         willRecordFailure: hasFailure,
         hasActiveReq: !!activeReq
@@ -80,7 +97,7 @@ export class NonBlockingHttpClient {
       
       if (hasFailure) {
         const errorMsg = apiFailure 
-          ? `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`
+          ? `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`
           : response.message;
         logger.error('Non-blocking request failed - recording', { 
           requestId, 
@@ -91,17 +108,41 @@ export class NonBlockingHttpClient {
           hasActiveReq: !!activeReq
         });
         this.recordFailure(activeReq, requestId, response, null, apiFailure);
-        this.bufferManager.addResponse(requestId, response, true, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId });
+        this.bufferManager.addResponse(requestId, response, true, {
+          requestId,
+          logTag,
+          sourceDestination,
+          loanApplicationId: activeReq?.loanApplicationId,
+          lenderOrgId: activeReq?.lenderOrgId,
+          clientRequestId: activeReq?.clientRequestId,
+          orderId: this.orderId
+        });
       } else {
         logger.info('Non-blocking request completed successfully', { requestId, status: response.status });
-        this.bufferManager.addResponse(requestId, response, false, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId });
+        this.bufferManager.addResponse(requestId, response, false, {
+          requestId,
+          logTag,
+          sourceDestination,
+          loanApplicationId: activeReq?.loanApplicationId,
+          lenderOrgId: activeReq?.lenderOrgId,
+          clientRequestId: activeReq?.clientRequestId,
+          orderId: this.orderId
+        });
       }
     }).catch(error => {
       const activeReq = this.activeRequests.get(requestId);
       this.activeRequests.delete(requestId);
       logger.error('Non-blocking request exception', { requestId, error: error.message, hasActiveReq: !!activeReq });
       this.recordFailure(activeReq, requestId, { error: true, message: error.message }, error);
-      this.bufferManager.addResponse(requestId, { error: true, message: error.message }, true, { logTag, sourceDestination, loanApplicationId: activeReq?.loanApplicationId });
+      this.bufferManager.addResponse(requestId, { error: true, message: error.message }, true, {
+        requestId,
+        logTag,
+        sourceDestination,
+        loanApplicationId: activeReq?.loanApplicationId,
+        lenderOrgId: activeReq?.lenderOrgId,
+        clientRequestId: activeReq?.clientRequestId,
+        orderId: this.orderId
+      });
     });
     
     await new Promise(resolve => setImmediate(resolve));
@@ -136,7 +177,7 @@ export class NonBlockingHttpClient {
       requestPayload: activeReq.payload,
       error: response.error || !!apiFailure || true,
       errorMessage: apiFailure 
-        ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`
+        ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`
         : (response.message || (exception && exception.message) || 'Unknown error'),
       errorCode: apiFailure?.error_code || apiFailure?.code || null,
       errorStack: exception && exception.stack,
@@ -177,11 +218,12 @@ export class NonBlockingHttpClient {
         }
       }
       
-      const status = data.status || data.Status || null;
+      const payload = data.payload || data.Payload || null;
+      const status = data.status || data.Status || payload?.status || payload?.Status || null;
       logger.debug('Checking API status', { status, dataType: typeof data, hasStatus: !!status });
       
       if (status && (status === 'FAILURE' || status === 'FAILED' || status === 'ERROR')) {
-        const errorInfo = data.error || data.Error || { message: 'API returned failure status', status };
+        const errorInfo = data.error || data.Error || payload?.error || payload?.Error || { message: 'API returned failure status', status };
         logger.info('API failure detected', { status, error: errorInfo });
         return errorInfo;
       }

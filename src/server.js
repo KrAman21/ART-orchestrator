@@ -58,7 +58,7 @@ export function createServer(orchestrator) {
       const api = '/' + req.params.api;
       console.log(`Handling API: ${api}`);
       const payload = req.body;
-      const requestId = req.headers['x-request-id'] || req.body.request_id;
+      const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;
       
 
       // Determine source/destination and logTag from API endpoint mapping
@@ -66,7 +66,7 @@ export function createServer(orchestrator) {
       if (!mapping) {
         // Unknown API endpoint - likely a webhook/callback, ignore gracefully
         logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
-        return res.json({ success: true, ignored: true, message: 'Webhook ignored' });
+        return res.json('Webhook ignored');
       }
 
       // Source/destination always from mapping

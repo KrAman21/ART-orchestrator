@@ -3,10 +3,12 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { logger } from '../utils/logger.js';
+import { SERVICE_MAP } from '../config.js';
 
 const execFileAsync = promisify(execFile);
 const SEEDED_SESSION_TOKENS = new Set();
 const SEEDED_MERCHANT_USERS = new Set();
+const SEEDED_CLIENT_AUTH_TOKENS = new Set();
 const UNENCRYPTED_SESSION_METADATA_BASE64 = 'eyJlbmNyeXB0aW9uRmxvdyI6Ik5PTkUifQ==';
 const EMPTY_MERCHANT_SHARED_DATA_BASE64 = Buffer.from(
   JSON.stringify({
@@ -23,6 +25,33 @@ function sqlEscape(value) {
 
 function buildLspStyleId() {
   return `LSP${crypto.randomUUID().replaceAll('-', '')}`;
+}
+
+function getLspDbSocketDir() {
+  if (process.env.ART_LSP_DB_SOCKET_DIR) {
+    return process.env.ART_LSP_DB_SOCKET_DIR;
+  }
+
+  const lspUnixSocket = SERVICE_MAP?.LSP?.unixSocket;
+  if (lspUnixSocket) {
+    if (lspUnixSocket.endsWith('/data/el/el.sock')) {
+      return lspUnixSocket.replace(/\/data\/el\/el\.sock$/, '/data/lsp-db');
+    }
+
+    return lspUnixSocket.replace(/\/euler-lsp\/euler-lsp\.sock$/, '/lsp-db');
+  }
+
+  return '/home/kumar-aman/Desktop/repos/euler-lsp/data/lsp-db';
+}
+
+function buildPsqlEnv() {
+  return {
+    ...process.env,
+    PGHOST: getLspDbSocketDir(),
+    PGUSER: process.env.ART_LSP_DB_USER || 'testUser',
+    PGPASSWORD: process.env.ART_LSP_DB_PASSWORD || 'testPassword',
+    PGDATABASE: process.env.ART_LSP_DB_NAME || 'testLsp'
+  };
 }
 
 function getPsqlBinary() {
@@ -94,15 +123,7 @@ async function seedLoanStatusSession(sessionToken, userId, entry) {
     ON CONFLICT (session_token) DO NOTHING;
   `;
 
-  const env = {
-    ...process.env,
-    PGHOST: process.env.ART_LSP_DB_SOCKET_DIR || '/home/kumar-aman/Desktop/repos2/euler-lsp/data/lsp-db',
-    PGUSER: process.env.ART_LSP_DB_USER || 'testUser',
-    PGPASSWORD: process.env.ART_LSP_DB_PASSWORD || 'testPassword',
-    PGDATABASE: process.env.ART_LSP_DB_NAME || 'testLsp'
-  };
-
-  await execFileAsync(psqlBinary, ['-v', 'ON_ERROR_STOP=1', '-c', sql], { env });
+  await execFileAsync(psqlBinary, ['-v', 'ON_ERROR_STOP=1', '-c', sql], { env: buildPsqlEnv() });
 
   logger.info('Seeded LSP session for loan status replay', {
     logTag: entry?.logTag,
@@ -168,15 +189,7 @@ async function seedLoanStatusMerchantUser(userId, entry) {
       metadata = EXCLUDED.metadata;
   `;
 
-  const env = {
-    ...process.env,
-    PGHOST: process.env.ART_LSP_DB_SOCKET_DIR || '/home/kumar-aman/Desktop/repos2/euler-lsp/data/lsp-db',
-    PGUSER: process.env.ART_LSP_DB_USER || 'testUser',
-    PGPASSWORD: process.env.ART_LSP_DB_PASSWORD || 'testPassword',
-    PGDATABASE: process.env.ART_LSP_DB_NAME || 'testLsp'
-  };
-
-  await execFileAsync(psqlBinary, ['-v', 'ON_ERROR_STOP=1', '-c', sql], { env });
+  await execFileAsync(psqlBinary, ['-v', 'ON_ERROR_STOP=1', '-c', sql], { env: buildPsqlEnv() });
 
   logger.info('Seeded LSP merchant_user for loan status replay', {
     logTag: entry?.logTag,
@@ -186,8 +199,88 @@ async function seedLoanStatusMerchantUser(userId, entry) {
   });
 }
 
+async function seedClientAuthTokenForGetLenderFlows(entry) {
+  const psqlBinary = getPsqlBinary();
+  if (!psqlBinary) {
+    logger.warn('Unable to seed CAT for getLenderFlows: psql binary not found', {
+      logTag: entry?.logTag
+    });
+    return;
+  }
+
+  const payload = entry?.payload || {};
+  const clientAuthToken = payload.clientAuthToken;
+  const customerId = payload.customerId;
+  const merchantId = entry?.message?.merchant_id || payload.merchantId || payload.merchant_id || 'flipkart';
+
+  if (!clientAuthToken || !customerId) {
+    logger.warn('Skipping CAT seeding due to missing getLenderFlows token/customer', {
+      logTag: entry?.logTag,
+      hasClientAuthToken: Boolean(clientAuthToken),
+      hasCustomerId: Boolean(customerId)
+    });
+    return;
+  }
+
+  if (SEEDED_CLIENT_AUTH_TOKENS.has(clientAuthToken)) {
+    return;
+  }
+
+  const now = new Date();
+  const expiry = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const sql = `
+    INSERT INTO public.cat (
+      id,
+      merchant_id,
+      customer_id,
+      auth_token,
+      status,
+      expiry,
+      created_at,
+      updated_at
+    ) VALUES (
+      '${sqlEscape(buildLspStyleId())}',
+      '${sqlEscape(merchantId)}',
+      '${sqlEscape(customerId)}',
+      '${sqlEscape(clientAuthToken)}',
+      'ACTIVE',
+      '${expiry.toISOString()}',
+      '${now.toISOString()}',
+      '${now.toISOString()}'
+    )
+    ON CONFLICT (auth_token) DO UPDATE SET
+      merchant_id = EXCLUDED.merchant_id,
+      customer_id = EXCLUDED.customer_id,
+      status = 'ACTIVE',
+      expiry = EXCLUDED.expiry,
+      updated_at = EXCLUDED.updated_at;
+  `;
+
+  await execFileAsync(psqlBinary, ['-v', 'ON_ERROR_STOP=1', '-c', sql], { env: buildPsqlEnv() });
+  SEEDED_CLIENT_AUTH_TOKENS.add(clientAuthToken);
+
+  logger.info('Seeded CAT for getLenderFlows replay', {
+    logTag: entry?.logTag,
+    merchantId,
+    customerId,
+    dbSocketDir: getLspDbSocketDir()
+  });
+}
+
 export async function ensureAppCorePreconditions(entry, customHeaders = {}) {
   if (!entry || entry.sourceDestination !== 'APP_CORE') {
+    return;
+  }
+
+  if (entry.logTag === 'GetLenderFlows_REQUEST') {
+    try {
+      await seedClientAuthTokenForGetLenderFlows(entry);
+    } catch (error) {
+      logger.warn('Failed to seed CAT for getLenderFlows replay', {
+        logTag: entry.logTag,
+        error: error.message
+      });
+    }
     return;
   }
 

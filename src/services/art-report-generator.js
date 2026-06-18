@@ -1,5 +1,7 @@
 import { writeFileSync } from 'fs';
 import { resolve } from 'path';
+import { generateHtmlReport } from './art-html-report-generator.js';
+import { generatePdfReport } from './art-pdf-report-generator.js';
 
 export class ArtReportGenerator {
   constructor(config = {}) {
@@ -36,7 +38,8 @@ export class ArtReportGenerator {
       artResults: {
         passed: 0,
         failed: 0,
-        total: 0
+        total: 0,
+        payloadComparisons: []
       },
       timeline: [],
       bufferFailures: [],
@@ -178,7 +181,7 @@ export class ArtReportGenerator {
     order.duration = new Date(order.endTime) - new Date(order.startTime);
 
     if (result.success) {
-      order.status = 'COMPLETED';
+      order.status = result.skipped ? 'SKIPPED' : 'COMPLETED';
     } else if (order.status === 'ERROR') {
       order.status = 'ERROR';
     } else if (result.stopReason === 'Stopped by user') {
@@ -197,7 +200,8 @@ export class ArtReportGenerator {
     order.artResults = {
       passed: result.artResults?.passed || 0,
       failed: result.artResults?.failed || 0,
-      total: result.artResults?.processedLogs?.length || 0
+      total: result.artResults?.processedLogs?.length || 0,
+      payloadComparisons: result.artResults?.payloadComparisons || []
     };
 
     const failedLogs = (result.artResults?.errors || []).map(error => ({
@@ -257,6 +261,82 @@ export class ArtReportGenerator {
     this.generateReport(overallSuccess);
   }
 
+  buildOrderOutcome(order) {
+    const failurePoint =
+      order.diagnostics?.failureAt ||
+      order.diagnostics?.timeoutAt ||
+      order.diagnostics?.lastProcessedLog ||
+      null;
+
+    return {
+      orderId: order.orderId,
+      status: order.status,
+      failureReason:
+        order.errorMessage ||
+        failurePoint?.message ||
+        failurePoint?.reason ||
+        order.stopReason ||
+        null,
+      logIndex: failurePoint?.logIndex ?? order.currentLogIndex ?? null,
+      logTag: failurePoint?.logTag ?? order.currentLogTag ?? null,
+      ...(order.stopReason ? { stopReason: order.stopReason } : {})
+    };
+  }
+
+  buildRequestDetails(order) {
+    return {
+      orderId: order.orderId,
+      status: order.status,
+      failedAt: {
+        logIndex:
+          order.diagnostics?.failureAt?.logIndex ??
+          order.diagnostics?.timeoutAt?.logIndex ??
+          order.currentLogIndex ??
+          null,
+        logTag:
+          order.diagnostics?.failureAt?.logTag ??
+          order.diagnostics?.timeoutAt?.logTag ??
+          order.currentLogTag ??
+          null,
+        reason:
+          order.errorMessage ||
+          order.diagnostics?.failureAt?.message ||
+          order.diagnostics?.timeoutAt?.reason ||
+          order.stopReason ||
+          null
+      },
+      requests: (order.bufferFailures || []).map((failure) => ({
+        requestId: failure.requestId || null,
+        logTag: failure.logTag || null,
+        sourceDestination: failure.sourceDestination || null,
+        endpoint: failure.endpoint || null,
+        baseUrl: failure.baseUrl || null,
+        httpStatus: failure.httpStatus || null,
+        errorMessage: failure.errorMessage || failure.error || null,
+        requestPayload: failure.requestPayload || null,
+        responseData: failure.responseData || null
+      }))
+    };
+  }
+
+  buildPayloadComparisons(order) {
+    const mismatchedComparisons = (order.artResults?.payloadComparisons || [])
+      .filter((comparison) => (comparison.differenceCount || 0) > 0);
+
+    return {
+      orderId: order.orderId,
+      status: order.status,
+      comparisons: mismatchedComparisons.map((comparison) => ({
+        timestamp: comparison.timestamp || null,
+        logTag: comparison.logTag || null,
+        logIndex: comparison.logIndex ?? null,
+        entry: comparison.entry || null,
+        differenceCount: comparison.differenceCount || 0,
+        differences: comparison.differences || []
+      }))
+    };
+  }
+
   generateReport(overallSuccess) {
     // Finalize any orders that never completed (process terminated mid-run)
     const now = new Date().toISOString();
@@ -273,6 +353,19 @@ export class ArtReportGenerator {
     const ordersWithBufferFailures = this.orders.filter(o => o.bufferFailures && o.bufferFailures.length > 0).length;
     const totalFailedLogs = this.orders.reduce((acc, order) => acc + (order.diagnostics?.failedLogsCount || order.artResults?.failed || 0), 0);
     const totalTimeoutLogs = this.orders.reduce((acc, order) => acc + (order.diagnostics?.timeoutLogsCount || 0), 0);
+    const totalPayloadComparisons = this.orders.reduce((acc, order) => acc + (order.artResults?.payloadComparisons?.length || 0), 0);
+    const totalPayloadMismatches = this.orders.reduce(
+      (acc, order) => acc + (order.artResults?.payloadComparisons?.filter((comparison) => (comparison.differenceCount || 0) > 0).length || 0),
+      0
+    );
+
+    const orderOutcomes = this.orders.map((order) => this.buildOrderOutcome(order));
+    const requestDetails = this.orders
+      .filter((order) => (order.bufferFailures || []).length > 0)
+      .map((order) => this.buildRequestDetails(order));
+    const payloadComparisons = this.orders
+      .map((order) => this.buildPayloadComparisons(order))
+      .filter((order) => order.comparisons.length > 0);
 
     const report = {
       executionId: `art-${Date.now()}`,
@@ -285,6 +378,7 @@ export class ArtReportGenerator {
       summary: {
         totalOrders: this.orders.length,
         completed: this.orders.filter(o => o.status === 'COMPLETED').length,
+        skipped: this.orders.filter(o => o.status === 'SKIPPED').length,
         failed: this.orders.filter(o => o.status === 'FAILED' || o.status === 'ERROR').length,
         stuck: this.orders.filter(o => o.status === 'STUCK').length,
         timeout: this.orders.filter(o => o.status === 'TIMEOUT').length,
@@ -292,32 +386,43 @@ export class ArtReportGenerator {
         totalFailedLogs,
         totalTimeoutLogs,
         totalBufferFailures,
-        ordersWithBufferFailures
+        ordersWithBufferFailures,
+        totalPayloadComparisons,
+        totalPayloadMismatches
       },
-      bufferFailuresSummary: {
-        totalFailures: totalBufferFailures,
-        failuresByOrder: this.orders.reduce((acc, order) => {
-          if (order.bufferFailures && order.bufferFailures.length > 0) {
-            acc[order.orderId] = {
-              count: order.bufferFailures.length,
-              failures: order.bufferFailures
-            };
-          }
-          return acc;
-        }, {}),
-        allFailures: this.globalBufferFailures
-      },
-      orders: this.orders
+      orderOutcomes,
+      requestDetails,
+      payloadComparisons
     };
 
     try {
       const reportPath = resolve(process.cwd(), this.reportPath);
+
+      // Generate HTML first so the path can be embedded in the JSON
+      try {
+        const htmlPath = generateHtmlReport(report, reportPath);
+        report.htmlReportPath = htmlPath;
+        console.log(`ART HTML Report generated: ${htmlPath}`);
+      } catch (htmlError) {
+        console.warn(`Warning: Could not generate HTML report: ${htmlError.message}`);
+      }
+
+      // Generate PDF
+      generatePdfReport(report, reportPath)
+        .then(pdfPath => {
+          report.pdfReportPath = pdfPath;
+          console.log(`ART PDF Report generated: ${pdfPath}`);
+        })
+        .catch(pdfError => {
+          console.warn(`Warning: Could not generate PDF report: ${pdfError.message}`);
+        });
+
       writeFileSync(reportPath, JSON.stringify(report, null, 2), 'utf-8');
-      console.log(`\n📊 ART Report generated: ${reportPath}`);
+      console.log(`ART Report generated: ${reportPath}`);
       
       if (totalBufferFailures > 0) {
-        console.log(`⚠️  Warning: ${totalBufferFailures} buffer request(s) failed during execution`);
-        console.log(`   Check report.json -> bufferFailuresSummary for details`);
+        console.log(`Warning: ${totalBufferFailures} buffer request(s) failed during execution`);
+        console.log('Check report.json -> requestDetails for the failed request payloads');
       }
       
       return report;

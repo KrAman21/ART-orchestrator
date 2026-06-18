@@ -21,6 +21,62 @@ export const REPLAY_SPECIAL_CASES = [
     ]
   },
   {
+    logTag: 'GET_CHECKOUT_STATUS_LINE_STATUS_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated checkout-status polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'GET_CHECKOUT_STATUS_LS_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated checkout-status polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'GET_CHECKOUT_STATUS_FO_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated checkout-status polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'LenderLineStatus_RESPONSE',
+    handler: 'maybeSkipOptionalRepeatedResponseEntry',
+    description: 'Allow repeated line-status responses to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'Lsp-LoanStatusRequest_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated loan-status gateway polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'Lsp-LoanStatusRequest_RESPONSE',
+    handler: 'maybeSkipOptionalRepeatedResponseEntry',
+    description: 'Allow repeated loan-status gateway polling responses to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'LSP-LoanStatus_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated app loan-status polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'LSP-LoanStatus_RESPONSE',
+    handler: 'maybeSkipOptionalRepeatedResponseEntry',
+    description: 'Allow repeated app loan-status polling responses to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
+  },
+  {
     logTag: 'PROFILE_INGESTION_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow profile ingestion to be skipped when the live branch has already advanced into later fetch-offer steps.',
@@ -28,6 +84,83 @@ export const REPLAY_SPECIAL_CASES = [
     requirePriorProcessedOccurrence: false,
     advanceWhenSeenLogTags: [
       'LSP-FetchOfferRequest_REQUEST',
+      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
+    ]
+  },
+  {
+    logTag: 'LSP-FetchOfferRequest_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow duplicate fetch-offer requests to be skipped once replay has already moved into the post-fetch branch for the same context, or when redirection already returned NOT_REQUIRED for that journey.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
+    allowObservedBranchAdvance: false,
+    requireBranchAdvance: true,
+    advanceWhenSeenLogTags: [
+      'POLLING API :: LINE_STATUS_REQUEST',
+      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+      'CALCULATE_EMI_REQUEST',
+      'PROFILE_INGESTION_REQUEST'
+    ],
+    skipWhenPriorProcessedEntries: [
+      {
+        logTag: 'FlipKart-GetRedirectionURL_RESPONSE',
+        payloadPath: 'status',
+        equals: 'NOT_REQUIRED'
+      }
+    ]
+  },
+  {
+    logTag: 'LSP-GetKFS_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow duplicate KFS gateway requests to be skipped once replay has already advanced into the post-KFS branch for the same context.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
+    advanceWhenSeenLogTags: [
+      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+      'LSP-FetchOfferRequest_REQUEST',
+      'FlipKart-GetKFS_RESPONSE'
+    ]
+  },
+  {
+    logTag: 'CHECK ELIGIBILITY STATUS API_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated hard-eligibility status polls to be skipped when replay has already advanced into the corresponding status response branch.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
+    advanceWhenSeenLogTags: [
+      'FlipKart-HardEligibilityStatus_REQUEST',
+      'FlipKart-HardEligibilityStatus_RESPONSE'
+    ]
+  },
+  {
+    logTag: 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated in-progress fetch-offer callbacks to be skipped once the live replay has already advanced into the terminal hard-eligibility rejection branch.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
+    requireBranchAdvance: true,
+    advanceWhenSeenLogTags: [
+      'FlipKart-HardEligibilityStatus_RESPONSE',
+      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
+    ],
+    skipWhenPriorProcessedEntries: [
+      {
+        logTag: 'FlipKart-HardEligibilityStatus_RESPONSE',
+        payloadPath: 'status',
+        equals: 'FAILURE'
+      }
+    ]
+  },
+  {
+    logTag: 'HARD_ELIGIBILITY_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow hard-eligibility lender calls to be skipped when the live journey has already advanced into the downstream fetch-offer/callback branch for the same context, including flows where the gateway->lender call is skipped entirely in local replay.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: false,
+    advanceWhenSeenLogTags: [
+      'PROFILE_INGESTION_REQUEST',
+      'LSP-FetchOfferRequest_REQUEST',
+      'FlipKart-HardEligibility_RESPONSE',
       'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
     ]
   },
@@ -41,6 +174,28 @@ export const REPLAY_SPECIAL_CASES = [
       'FlipKart-GetRedirectionURL_REQUEST',
       'FlipKart-GetRedirectionURL_RESPONSE'
     ]
+  },
+  {
+    logTag: 'LenderLineStatus_REQUEST',
+    handler: 'triggerGatewayCall',
+    description:
+      'LenderLineStatus_REQUEST (CORE→GATEWAY) is no longer initiated by LSP in the new code path for standard checkout flows. ' +
+      'ART triggers the call to /gateway/v1.0/lineStatus itself after a short wait, ' +
+      'unless the preceding logs indicate a Refund or FetchLineStatus journey (in which case LSP will make the call as before).',
+    triggerAfterSeconds: 2,
+    endpoint: '/gateway/v1.0/lineStatus',
+    // If any of these logTags appear in the preceding processed entries for this
+    // order, LSP will invoke LenderLineStatus itself — do NOT trigger from ART.
+    skipIfPrecedingLogTags: [
+      'FlipKart-Refund_REQUEST',
+      'FlipKart-LineOnboarding-FetchLineStatus_REQUEST'
+    ]
+  },
+  {
+    logTag: 'GENERATE PARTNER AUTH TOKEN_REQUEST',
+    handler: 'skipAfterTimeoutFallback',
+    description: 'If the gateway does not send the GENERATE PARTNER AUTH TOKEN call to ART within 4s, skip the req/resp pair — the auth token is likely already cached. If the request does arrive within 4s it is served normally from prod logs.',
+    optionalAfterSeconds: 4
   }
 ];
 
@@ -79,7 +234,12 @@ export function getOptionalRepeatPolicy(config, currentEntry) {
       5,
     requirePriorProcessedOccurrence:
       builtInSpecialCase?.requirePriorProcessedOccurrence ?? true,
+    allowObservedBranchAdvance:
+      builtInSpecialCase?.allowObservedBranchAdvance ?? true,
+    requireBranchAdvance:
+      builtInSpecialCase?.requireBranchAdvance ?? false,
     advanceWhenSeenLogTags: builtInSpecialCase?.advanceWhenSeenLogTags || [],
-    skipWhenPriorProcessedLogTags: builtInSpecialCase?.skipWhenPriorProcessedLogTags || []
+    skipWhenPriorProcessedLogTags: builtInSpecialCase?.skipWhenPriorProcessedLogTags || [],
+    skipWhenPriorProcessedEntries: builtInSpecialCase?.skipWhenPriorProcessedEntries || []
   };
 }

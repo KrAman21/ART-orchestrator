@@ -55,6 +55,94 @@ function getRequestResponseTagInfo(logTag) {
   return null;
 }
 
+const HARD_ELIGIBILITY_DEPENDENT_TAGS = new Set([
+  'LSP-FetchOfferRequest_REQUEST',
+  'LSP-FetchOfferRequest_RESPONSE',
+  'POLLING API :: LINE_STATUS_REQUEST',
+  'POLLING API :: LINE_STATUS_RESPONSE',
+  'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+  'FETCH_OFFER_ASYNC_RESPONSE_RESPONSE',
+  'LSP-HardEligibility_REQUEST',
+  'LSP-HardEligibility_RESPONSE',
+  'Themis-HardEligibility_REQUEST',
+  'Themis-HardEligibility_RESPONSE',
+  'FlipKart-HardEligibilityStatus_REQUEST',
+  'FlipKart-HardEligibilityStatus_RESPONSE',
+  'FlipKart-GetRedirectionURL_REQUEST',
+  'FlipKart-GetRedirectionURL_RESPONSE',
+  'ProcessStatus_REQUEST',
+  'ProcessStatus_RESPONSE'
+]);
+
+const SELECT_OFFER_DEPENDENT_TAGS = new Set([
+  'LOCK_TENURE_REQUEST',
+  'LOCK_TENURE_RESPONSE',
+  'GET_REDIRECTION_URL_SO_REQUEST',
+  'GET_REDIRECTION_URL_SO_RESPONSE',
+  'LSP-LoanStatus_REQUEST',
+  'LSP-LoanStatus_RESPONSE',
+  'Lsp-LoanStatusRequest_REQUEST',
+  'Lsp-LoanStatusRequest_RESPONSE'
+]);
+
+function pruneDependentsAfterRemovedTrigger(logs, keepSet, {
+  triggerTag,
+  triggerRoute,
+  dependentTags,
+  reason
+}) {
+  const removedTriggerTimes = logs
+    .map((log, index) => ({ log, index }))
+    .filter(({ log, index }) => {
+      const msg = log?.message || {};
+      return !keepSet.has(index) && msg.trace_route === triggerRoute && msg.log_tag === triggerTag;
+    })
+    .map(({ log }) => getCreatedAtTime(log))
+    .filter(timestamp => Number.isFinite(timestamp));
+
+  if (removedTriggerTimes.length === 0) {
+    return logs.filter((_, index) => keepSet.has(index));
+  }
+
+  const firstRemovedTriggerAt = Math.min(...removedTriggerTimes);
+
+  return logs.filter((log, index) => {
+    if (!keepSet.has(index)) {
+      return false;
+    }
+
+    const msg = log?.message || {};
+    const createdAt = getCreatedAtTime(log);
+    const shouldPrune =
+      createdAt >= firstRemovedTriggerAt &&
+      dependentTags.has((msg.log_tag || '').trim());
+
+    if (shouldPrune) {
+      console.log(`Pruned orphaned ${reason} dependent log: index ${index}, trace_route: ${msg.trace_route}, log_tag: ${msg.log_tag}`);
+    }
+
+    return !shouldPrune;
+  });
+}
+
+function pruneOrphanedHardEligibilityDependents(logs, keepSet) {
+  return pruneDependentsAfterRemovedTrigger(logs, keepSet, {
+    triggerTag: 'FlipKart-HardEligibility_REQUEST',
+    triggerRoute: 'APP_WRAPPER',
+    dependentTags: HARD_ELIGIBILITY_DEPENDENT_TAGS,
+    reason: 'hard-eligibility'
+  });
+}
+
+function pruneOrphanedSelectOfferDependents(logs, keepSet) {
+  return pruneDependentsAfterRemovedTrigger(logs, keepSet, {
+    triggerTag: 'LSP-SelectOffer_REQUEST',
+    triggerRoute: 'CORE_GATEWAY',
+    dependentTags: SELECT_OFFER_DEPENDENT_TAGS,
+    reason: 'select-offer'
+  });
+}
+
 function balanceRequestResponsePairs(logs) {
   const groups = new Map();
   const keepSet = new Set();
@@ -111,7 +199,9 @@ function balanceRequestResponsePairs(logs) {
     }
   }
 
-  return logs.filter((_, index) => keepSet.has(index));
+  const hardEligibilityPruned = pruneOrphanedHardEligibilityDependents(logs, keepSet);
+  const keptAfterHardEligibilityPrune = new Set(hardEligibilityPruned.map(log => logs.indexOf(log)));
+  return pruneOrphanedSelectOfferDependents(logs, keptAfterHardEligibilityPrune);
 }
 
 function shouldSkipLog(log) {
@@ -291,6 +381,8 @@ export async function filterAndSortLogs(logs, outputPath = null) {
 
   const filtered = sortedByTime.filter((log, index) => {
     const msg = log?.message || {};
+    const logTag = (msg.log_tag || '').trim();
+    const traceRoute = msg.trace_route || '';
 
     const hasTraceRequest = msg.trace_request !== undefined && msg.trace_request !== null;
     const hasTraceResponse = msg.trace_response !== undefined && msg.trace_response !== null;
@@ -299,28 +391,38 @@ export async function filterAndSortLogs(logs, outputPath = null) {
     const hasTraceResponseAck = msg.trace_response_ack !== undefined && msg.trace_response_ack !== null;
 
     if (!hasTraceRequest && !hasTraceResponse && !hasTraceError && !hasTraceRequestAck && !hasTraceResponseAck) {
+      if (logTag.includes('HardEligibility')) {
+        console.log(`First-level filter: dropping hard eligibility log without payload/ack at sorted index ${index}, trace_route: ${traceRoute}, log_tag: ${logTag}, request_id: ${msg.request_id || log?.xRequestId || ''}`);
+      }
+
       missingPayloadLogs.push({
         index,
         requestId: msg.request_id || log?.xRequestId || '',
-        logTag: (msg.log_tag || '').trim(),
-        traceRoute: msg.trace_route || '',
+        logTag,
+        traceRoute,
         checkpoint: msg.checkpoint || 'N/A'
       });
       return false;
     }
 
     const requestId = msg.request_id || log?.xRequestId || '';
-    const logTag = (msg.log_tag || '').trim();
-    const traceRoute = msg.trace_route || '';
 
     const key = `${requestId}_${logTag}_${traceRoute}`;
 
     if (seen.has(key)) {
+      if (logTag.includes('HardEligibility')) {
+        console.log(`First-level filter: dropping duplicate hard eligibility log at sorted index ${index}, key: ${key}`);
+      }
+
       duplicates.push({ index, key: key.substring(0, 60), logTag });
       return false;
     }
 
     if (logTag.startsWith('CHECKOUT.')) {
+      if (logTag.includes('HardEligibility')) {
+        console.log(`First-level filter: dropping checkout hard eligibility log at sorted index ${index}, log_tag: ${logTag}`);
+      }
+
       return false;
     }
 

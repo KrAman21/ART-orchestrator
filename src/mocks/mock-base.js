@@ -31,7 +31,7 @@ export class BaseMockService {
   constructor(name, config) {
     this.name = name;
     this.port = config.port;
-    this.orchestratorUrl = config.orchestratorUrl || 'http://localhost:3001';
+    this.orchestratorUrl = config.orchestratorUrl || 'http://art-orchestrator';
     this.logs = [];
     this.parsedLogs = [];
     this.processedIndices = new Set();

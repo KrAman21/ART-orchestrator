@@ -40,11 +40,27 @@ class SessionOrchestratorRegistry {
   }
 
   findFirstActive() {
+    const activeEntries = [];
     for (const [, entry] of this.sessions) {
       if (entry.orchestrator.isRunning) {
-        return entry.orchestrator;
+        activeEntries.push(entry);
       }
     }
+
+    if (activeEntries.length === 1) {
+      return activeEntries[0].orchestrator;
+    }
+
+    if (activeEntries.length > 1) {
+      logger.warn('Multiple active orchestrators present; refusing ambiguous fallback routing', {
+        activeSessions: activeEntries.map(entry => ({
+          sessionId: entry.sessionId,
+          orderCount: entry.orderIds.size,
+          loanApplicationCount: entry.loanApplicationIds.size
+        }))
+      });
+    }
+
     return null;
   }
 

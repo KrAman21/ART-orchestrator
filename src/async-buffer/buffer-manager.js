@@ -7,10 +7,15 @@ export class BufferManager {
     this.incomingRequests = new Map();
     this.responseBuffer = new Map();
     this.pendingPromises = new Map();
+    this.requestWaiters = new Set();
+    this.sequenceCounter = 0;
+    this.lastMatchTimeout = null;
     
     this.config = {
       maxBufferSize: 1000,
       defaultTimeoutMs: 60000,
+      cleanupIntervalMs: 1000,
+      completedRetentionMs: 5000,
       ...config
     };
     
@@ -21,43 +26,249 @@ export class BufferManager {
   }
   
   _startCleanupTimer() {
-    setInterval(() => {
+    this.cleanupTimer = setInterval(() => {
       this._cleanupExpiredEntries();
     }, this.config.cleanupIntervalMs);
   }
+
+  stop() {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+
+    for (const waiter of this.requestWaiters) {
+      clearTimeout(waiter.timer);
+    }
+    this.requestWaiters.clear();
+  }
+
+  extractCorrelationIdentifiers(request = {}) {
+    return {
+      requestId: request.requestId || request.request_id || request.payload?.requestId || request.payload?.request_id || null,
+      clientRequestId: request.clientRequestId || request.client_request_id || request.payload?.clientRequestId || request.payload?.client_request_id || null,
+      traceId: request.traceId || request.trace_id || request.payload?.traceId || request.payload?.trace_id || null,
+      sequenceId: request.sequenceId || request.sequence_id || request.headers?.['x-sequence-id'] || null,
+      loanApplicationId: request.loanApplicationId || request.loan_application_id || request.payload?.loanApplicationId || request.payload?.loan_application_id || null,
+      lenderOrgId: request.lenderOrgId || request.lender_org_id || request.payload?.lenderOrgId || request.payload?.lender_org_id || request.payload?.themisDetail?.lenderOrgId || null,
+      orderId: request.orderId || request.order_id || request.payload?.orderId || request.payload?.order_id || null
+    };
+  }
   
   generateKey(request) {
+    const ids = this.extractCorrelationIdentifiers(request);
     const parts = [
-      request.logTag,
+      canonicalRequestLogTag(request.logTag),
       `${request.source}_${request.destination}`,
-      request.requestId || '',
-      request.loanApplicationId || '',
-      request.lenderOrgId || ''
-    ];
-    return parts.filter(Boolean).join(':');
+      ids.requestId || '',
+      ids.clientRequestId || '',
+      ids.traceId || '',
+      ids.sequenceId || '',
+      ids.loanApplicationId || '',
+      ids.lenderOrgId || '',
+      ids.orderId || ''
+    ].filter(Boolean);
+
+    if (parts.length <= 2) {
+      this.sequenceCounter += 1;
+      parts.push(`seq-${this.sequenceCounter}`);
+    }
+
+    return parts.join(':');
   }
   
   async addIncomingRequest(request) {
+    const key = this.generateKey(request);
+    const existing = this.incomingRequests.get(key);
+
+    if (existing && !this._isTerminalRequestState(existing.state)) {
+      logger.warn('Duplicate request buffered, reusing existing wait handle', {
+        key,
+        state: existing.state,
+        requestId: request.requestId || null,
+        logTag: request.logTag
+      });
+      return existing;
+    }
+
     if (this.incomingRequests.size >= this.config.maxBufferSize) {
       throw new Error('Incoming request buffer full');
     }
     
-    const key = this.generateKey(request);
     const deferred = new DeferredPromise(this.config.defaultTimeoutMs);
+    deferred.promise.catch(() => {});
     
     const entry = {
       request,
       deferred,
       timestamp: Date.now(),
-      key
+      key,
+      state: 'buffered',
+      claimedAt: null,
+      completedAt: null
     };
     
     this.incomingRequests.set(key, entry);
-    this._signalWorkAvailable();
     
-    logger.info('Buffered incoming request', { key, bufferSize: this.incomingRequests.size });
+    logger.info('Request buffered', {
+      key,
+      bufferSize: this.incomingRequests.size,
+      requestId: request.requestId || null,
+      logTag: request.logTag,
+      source: request.source,
+      destination: request.destination
+    });
+    
+    // Notify matching waiters AFTER logging to ensure proper ordering
+    this._signalWorkAvailable();
+    this._notifyMatchingWaiters(entry);
     
     return entry;
+  }
+
+  async waitForMatchingRequest(expectedEntry, timeoutMs = this.config.defaultTimeoutMs) {
+    const claimed = this._claimOldestMatchingRequest(expectedEntry);
+    if (claimed) {
+      logger.info('Found and claimed buffered request immediately', {
+        key: claimed.key,
+        expected: expectedEntry.toString()
+      });
+      return claimed;
+    }
+
+    // Check if there's already a waiter for this expected entry
+    for (const waiter of this.requestWaiters) {
+      if (this._matchesRequest(waiter.expectedEntry, expectedEntry)) {
+        logger.warn('Duplicate waiter detected, reusing existing waiter', {
+          expected: expectedEntry.toString(),
+          existingWaiter: waiter.expectedEntry.toString()
+        });
+        // Return the existing waiter's promise
+        return new Promise((resolve) => {
+          const originalResolve = waiter.resolve;
+          waiter.resolve = (entry) => {
+            originalResolve(entry);
+            resolve(entry);
+          };
+        });
+      }
+    }
+
+    logger.info('Waiting for buffered request match', {
+      expected: expectedEntry.toString(),
+      timeoutMs,
+      currentBufferSize: this.incomingRequests.size
+    });
+
+    return new Promise(resolve => {
+      const waiter = {
+        expectedEntry,
+        resolve: entry => {
+          clearTimeout(waiter.timer);
+          this.requestWaiters.delete(waiter);
+          logger.info('Waiter resolved', {
+            expected: expectedEntry.toString(),
+            found: !!entry
+          });
+          resolve(entry);
+        }
+      };
+
+      waiter.timer = setTimeout(() => {
+        this.requestWaiters.delete(waiter);
+        
+        // Enhanced logging to debug matching issues
+        const bufferedRequests = Array.from(this.incomingRequests.entries()).map(([key, entry]) => ({
+          key,
+          logTag: entry.request.logTag,
+          source: entry.request.source,
+          destination: entry.request.destination,
+          state: entry.state,
+          requestId: entry.request.requestId || null
+        }));
+
+        this.lastMatchTimeout = {
+          timestamp: new Date().toISOString(),
+          expected: expectedEntry.toString(),
+          expectedLogTag: expectedEntry.logTag,
+          expectedSource: expectedEntry.source,
+          expectedDestination: expectedEntry.destination,
+          timeoutMs,
+          bufferedRequests,
+          bufferSize: this.incomingRequests.size
+        };
+        
+        logger.error('Timeout waiting for matching request', {
+          expected: expectedEntry.toString(),
+          expectedLogTag: expectedEntry.logTag,
+          expectedSource: expectedEntry.source,
+          expectedDestination: expectedEntry.destination,
+          timeoutMs,
+          bufferedRequests,
+          bufferSize: this.incomingRequests.size
+        });
+        resolve(null);
+      }, timeoutMs);
+
+      this.requestWaiters.add(waiter);
+    });
+  }
+
+  getLastMatchTimeout() {
+    return this.lastMatchTimeout;
+  }
+
+  getPendingRequestWaiters() {
+    return Array.from(this.requestWaiters).map((waiter) => ({
+      expected: waiter.expectedEntry?.toString?.() || null,
+      logTag: waiter.expectedEntry?.logTag || null,
+      source: waiter.expectedEntry?.source || null,
+      destination: waiter.expectedEntry?.destination || null
+    }));
+  }
+
+  completeIncomingRequest(key, response) {
+    const entry = this.incomingRequests.get(key);
+    if (!entry) {
+      logger.warn('Attempted to complete missing buffered request', { key });
+      return false;
+    }
+
+    entry.state = 'completed';
+    entry.completedAt = Date.now();
+    entry.deferred.resolve(response);
+
+    logger.info('Response delivered', {
+      key,
+      requestId: entry.request.requestId || null,
+      logTag: entry.request.logTag
+    });
+
+    return true;
+  }
+
+  failIncomingRequest(key, error) {
+    const entry = this.incomingRequests.get(key);
+    if (!entry) {
+      logger.warn('Attempted to fail missing buffered request', {
+        key,
+        error: error.message
+      });
+      return false;
+    }
+
+    entry.state = error?.name === 'TimeoutError' ? 'timed_out' : 'failed';
+    entry.completedAt = Date.now();
+    entry.deferred.reject(error);
+
+    logger.error('Buffered request failed', {
+      key,
+      requestId: entry.request.requestId || null,
+      logTag: entry.request.logTag,
+      error: error.message
+    });
+
+    return true;
   }
   
   addResponse(requestId, response, isError = false, metadata = {}) {
@@ -87,51 +298,153 @@ export class BufferManager {
     });
   }
   
-  getResponseByMetadata(logTag, sourceDestination, loanApplicationId = null) {
-    const baseTag = (tag) => (tag || '').replace(/_REQUEST$/i, '').replace(/_RESPONSE$/i, '').replace(/_OUTGOING$/i, '').replace(/_INCOMING$/i, '');
-    
-    const matches = [];
-    for (const [requestId, entry] of this.responseBuffer) {
-      const meta = entry.metadata || {};
-      if (baseTag(meta.logTag) === baseTag(logTag) && meta.sourceDestination === sourceDestination) {
-        matches.push({ requestId, entry });
-      }
-    }
-    
-    if (matches.length === 0) {
-      logger.debug('No response found by metadata', { logTag, sourceDestination, loanApplicationId, bufferSize: this.responseBuffer.size });
+  getResponseByMetadata(
+    logTag,
+    sourceDestination,
+    loanApplicationId = null,
+    lenderOrgId = null,
+    clientRequestId = null,
+    requestIds = [],
+    orderId = null
+  ) {
+    const identifiers = {
+      clientRequestId,
+      loanApplicationId,
+      lenderOrgId,
+      orderId,
+      requestIds: (requestIds || []).filter(Boolean)
+    };
+    const best = this._findBestResponseCandidate(logTag, sourceDestination, identifiers);
+
+    if (!best) {
       return null;
     }
-    
-    // Sort by timestamp (oldest first)
-    matches.sort((a, b) => a.entry.timestamp - b.entry.timestamp);
-    
-    // If loanApplicationId provided, prefer exact match
-    if (loanApplicationId) {
-      const matchingLoanApp = matches.find(m => m.entry.metadata?.loanApplicationId === loanApplicationId);
-      if (matchingLoanApp) {
-        this.responseBuffer.delete(matchingLoanApp.requestId);
-        logger.info('Found buffered response by metadata (loanApplicationId match)', {
-          logTag,
-          sourceDestination,
-          loanApplicationId,
-          matchedRequestId: matchingLoanApp.requestId
-        });
-        return matchingLoanApp.entry;
-      }
-    }
-    
-    // Return oldest matching
-    const oldest = matches[0];
-    this.responseBuffer.delete(oldest.requestId);
-    logger.info('Found buffered response by metadata (oldest match)', {
+
+    this.responseBuffer.delete(best.requestId);
+
+    logger.info('Found buffered response by metadata', {
       logTag,
       sourceDestination,
+      matchedSD: best.entry.metadata?.sourceDestination,
+      matchedRequestId: best.requestId,
+      score: best.score,
+      exactMatchCount: best.exactMatchCount,
+      totalCandidates: best.totalCandidates,
+      requestIds: identifiers.requestIds,
+      clientRequestId,
       loanApplicationId,
-      matchedRequestId: oldest.requestId,
-      totalMatches: matches.length
+      lenderOrgId,
+      orderId,
+      usedInvertedMatch: best.entry.metadata?.sourceDestination === best.invertedSD
     });
-    return oldest.entry;
+
+    return best.entry;
+  }
+
+  _normalizeLogTag(tag) {
+    return (tag || '')
+      .replace(/_REQUEST$/i, '')
+      .replace(/_RESPONSE$/i, '')
+      .replace(/_OUTGOING$/i, '')
+      .replace(/_INCOMING$/i, '');
+  }
+
+  _invertSourceDestination(sd) {
+    if (!sd || typeof sd !== 'string') return null;
+    const parts = sd.split('_');
+    if (parts.length !== 2) return null;
+    return `${parts[1]}_${parts[0]}`;
+  }
+
+  _findBestResponseCandidate(logTag, sourceDestination, identifiers = {}) {
+    const baseTag = this._normalizeLogTag(logTag);
+    const invertedSD = this._invertSourceDestination(sourceDestination);
+    const requestIds = (identifiers.requestIds || []).filter(Boolean);
+
+    const candidates = [];
+    for (const [requestId, entry] of this.responseBuffer) {
+      const meta = entry.metadata || {};
+      const metaTag = this._normalizeLogTag(meta.logTag);
+
+      if (metaTag !== baseTag) continue;
+
+      const metaSD = meta.sourceDestination;
+      const sdMatch = metaSD === sourceDestination || metaSD === invertedSD;
+      if (!sdMatch) continue;
+
+      const exactMatches = [];
+      const partialMatches = [];
+
+      if (identifiers.clientRequestId && meta.clientRequestId === identifiers.clientRequestId) {
+        exactMatches.push('clientRequestId');
+      }
+
+      if (identifiers.loanApplicationId && meta.loanApplicationId === identifiers.loanApplicationId) {
+        exactMatches.push('loanApplicationId');
+      }
+
+      if (identifiers.lenderOrgId && meta.lenderOrgId === identifiers.lenderOrgId) {
+        exactMatches.push('lenderOrgId');
+      }
+
+      if (identifiers.orderId && meta.orderId === identifiers.orderId) {
+        exactMatches.push('orderId');
+      }
+
+      if (requestIds.length > 0) {
+        if (requestIds.includes(requestId) || requestIds.includes(meta.requestId)) {
+          exactMatches.push('requestId');
+        } else if (meta.requestId) {
+          partialMatches.push('hasRequestId');
+        }
+      }
+
+      let score = metaSD === sourceDestination ? 30 : 20;
+      if (exactMatches.includes('clientRequestId')) score += 80;
+      if (exactMatches.includes('loanApplicationId')) score += 60;
+      if (exactMatches.includes('lenderOrgId')) score += 50;
+      if (exactMatches.includes('orderId')) score += 40;
+      if (exactMatches.includes('requestId')) score += 35;
+      if (partialMatches.includes('hasRequestId')) score += 5;
+
+      candidates.push({
+        requestId,
+        entry,
+        score,
+        timestamp: entry.timestamp,
+        exactMatches,
+        exactMatchCount: exactMatches.length,
+        totalCandidates: 0,
+        invertedSD
+      });
+    }
+
+    if (candidates.length === 0) {
+      logger.debug('No response found by metadata', {
+        logTag,
+        sourceDestination,
+        requestIds,
+        clientRequestId: identifiers.clientRequestId,
+        loanApplicationId: identifiers.loanApplicationId,
+        lenderOrgId: identifiers.lenderOrgId,
+        orderId: identifiers.orderId,
+        invertedSD,
+        bufferSize: this.responseBuffer.size
+      });
+      return null;
+    }
+
+    for (const candidate of candidates) {
+      candidate.totalCandidates = candidates.length;
+    }
+
+    candidates.sort((a, b) => {
+      if (b.exactMatchCount !== a.exactMatchCount) return b.exactMatchCount - a.exactMatchCount;
+      if (b.score !== a.score) return b.score - a.score;
+      return a.timestamp - b.timestamp;
+    });
+
+    return candidates[0];
   }
   
   registerPendingPromise(requestId, entry, timeoutMs = null) {
@@ -182,35 +495,91 @@ export class BufferManager {
   
   findMatchingRequest(expectedEntry) {
     const matches = [];
+    
+    logger.debug('Finding matching request', {
+      expected: expectedEntry.toString(),
+      expectedLogTag: expectedEntry.logTag,
+      expectedSource: expectedEntry.source,
+      expectedDestination: expectedEntry.destination,
+      bufferSize: this.incomingRequests.size
+    });
+    
     for (const [key, entry] of this.incomingRequests) {
-      if (this._matchesEntry(entry.request, expectedEntry)) {
+      if (entry.state === 'buffered' && this._matchesEntry(entry.request, expectedEntry)) {
         matches.push({ key, entry });
       }
     }
     
     if (matches.length === 0) {
+      logger.debug('No matching requests found', {
+        expected: expectedEntry.toString(),
+        bufferSize: this.incomingRequests.size,
+        bufferedStates: Array.from(this.incomingRequests.values()).map(e => ({
+          logTag: e.request.logTag,
+          source: e.request.source,
+          dest: e.request.destination,
+          state: e.state
+        }))
+      });
       return null;
     }
     
     matches.sort((a, b) => a.entry.timestamp - b.entry.timestamp);
     const oldest = matches[0];
     
-    this.incomingRequests.delete(oldest.key);
+    oldest.entry.state = 'claimed';
+    oldest.entry.claimedAt = Date.now();
     
-    logger.info('Found matching buffered request (oldest first)', {
+    logger.info('Request matched', {
       key: oldest.key,
       bufferSize: this.incomingRequests.size,
       totalMatches: matches.length,
-      timestamp: oldest.entry.timestamp
+      bufferedAt: oldest.entry.timestamp,
+      claimedAt: oldest.entry.claimedAt,
+      waitTime: oldest.entry.claimedAt - oldest.entry.timestamp,
+      expected: expectedEntry.toString()
     });
     
     return oldest.entry;
   }
+
+  hasMatchingBufferedRequest(expectedEntry) {
+    for (const [, entry] of this.incomingRequests) {
+      if (entry.state === 'buffered' && this._matchesEntry(entry.request, expectedEntry)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
   
   _matchesRequest(incoming, expected) {
-    if (canonicalRequestLogTag(incoming.logTag) !== canonicalRequestLogTag(expected.logTag)) return false;
-    if (incoming.source !== expected.source) return false;
-    if (incoming.destination !== expected.destination) return false;
+    const incomingLogTag = canonicalRequestLogTag(incoming.logTag);
+    const expectedLogTag = canonicalRequestLogTag(expected.logTag);
+    
+    if (incomingLogTag !== expectedLogTag) {
+      logger.debug('LogTag mismatch', {
+        incoming: incomingLogTag,
+        expected: expectedLogTag
+      });
+      return false;
+    }
+    
+    if (incoming.source !== expected.source) {
+      logger.debug('Source mismatch', {
+        incoming: incoming.source,
+        expected: expected.source
+      });
+      return false;
+    }
+    
+    if (incoming.destination !== expected.destination) {
+      logger.debug('Destination mismatch', {
+        incoming: incoming.destination,
+        expected: expected.destination
+      });
+      return false;
+    }
     
     return true;
   }
@@ -259,16 +628,23 @@ export class BufferManager {
     const expired = [];
     
     for (const [key, entry] of this.incomingRequests) {
-      if (now - entry.timestamp > this.config.defaultTimeoutMs) {
+      if (entry.state === 'buffered' && now - entry.timestamp > this.config.defaultTimeoutMs) {
         expired.push(key);
+      } else if (
+        this._isTerminalRequestState(entry.state) &&
+        entry.completedAt &&
+        now - entry.completedAt > this.config.completedRetentionMs
+      ) {
+        this.incomingRequests.delete(key);
       }
     }
     
     expired.forEach(key => {
       const entry = this.incomingRequests.get(key);
       if (entry) {
-        entry.deferred.reject(new Error('Request expired in buffer'));
-        this.incomingRequests.delete(key);
+        const error = new Error('Request expired in buffer');
+        error.name = 'TimeoutError';
+        this.failIncomingRequest(key, error);
       }
     });
     
@@ -299,8 +675,74 @@ export class BufferManager {
   }
   
   clear() {
+    this.stop();
     this.incomingRequests.clear();
     this.responseBuffer.clear();
     this.pendingPromises.clear();
+  }
+
+  _isTerminalRequestState(state) {
+    return state === 'completed' || state === 'failed' || state === 'timed_out';
+  }
+
+  /**
+   * Immediately resolve any pending waiter for a given expected entry with null.
+   * Used when an entry is mocked/skipped externally (e.g. via mockExternalRequest)
+   * so the replay thread doesn't have to wait the full timeout.
+   */
+  skipWaiter(expectedEntry) {
+    for (const waiter of this.requestWaiters) {
+      if (this._matchesRequest(waiter.expectedEntry, expectedEntry)) {
+        clearTimeout(waiter.timer);
+        this.requestWaiters.delete(waiter);
+        logger.info('Waiter skipped (entry mocked externally)', {
+          expected: expectedEntry.toString()
+        });
+        waiter.resolve(null);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  _claimOldestMatchingRequest(expectedEntry) {
+    return this.findMatchingRequest(expectedEntry);
+  }
+
+  _notifyMatchingWaiters(entry) {
+    if (this._isTerminalRequestState(entry.state)) {
+      return;
+    }
+
+    for (const waiter of this.requestWaiters) {
+      if (!this._matchesEntry(entry.request, waiter.expectedEntry)) {
+        continue;
+      }
+
+      if (entry.state === 'buffered') {
+        entry.state = 'claimed';
+        entry.claimedAt = Date.now();
+        
+        logger.info('Request matched via notify', {
+          key: entry.key,
+          bufferSize: this.incomingRequests.size,
+          totalMatches: 1,
+          bufferedAt: entry.timestamp,
+          claimedAt: entry.claimedAt,
+          waitTime: entry.claimedAt - entry.timestamp,
+          expected: waiter.expectedEntry.toString()
+        });
+      } else {
+        logger.warn('Request already claimed, skipping notify', {
+          key: entry.key,
+          state: entry.state,
+          expected: waiter.expectedEntry.toString()
+        });
+        continue;
+      }
+
+      waiter.resolve(entry);
+      return;
+    }
   }
 }
