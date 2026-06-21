@@ -12,6 +12,7 @@ const LOG_LEVELS = {
 const CURRENT_LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase()] ?? LOG_LEVELS.INFO;
 const LOG_FILE = process.env.LOG_FILE || 'orchestrator-output.log';
 const LOG_TO_FILE = process.env.LOG_TO_FILE !== 'false';
+const DIRECTION_LOGS_TO_FILE = process.env.DIRECTION_LOGS_TO_FILE !== 'false';
 
 function canWriteToDir(dirPath) {
   try {
@@ -54,17 +55,27 @@ function initLogFile(filePath) {
 }
 
 const GLOBAL_KEY = '__art_logger_initialized__';
-if (LOG_TO_FILE && !global[GLOBAL_KEY]) {
+if ((LOG_TO_FILE || DIRECTION_LOGS_TO_FILE) && !global[GLOBAL_KEY]) {
   try {
-    initLogFile(LOG_FILE_PATH);
-    initLogFile(INCOMING_LOG_FILE);
-    initLogFile(OUTGOING_LOG_FILE);
+    if (LOG_TO_FILE) {
+      initLogFile(LOG_FILE_PATH);
+    }
+    if (DIRECTION_LOGS_TO_FILE) {
+      initLogFile(INCOMING_LOG_FILE);
+      initLogFile(OUTGOING_LOG_FILE);
+    }
     global[GLOBAL_KEY] = true;
-    console.log(`[LOGGER_INIT] Initialized log files: ${LOG_FILE_PATH}, ${INCOMING_LOG_FILE}, ${OUTGOING_LOG_FILE}`);
+    console.log(
+      `[LOGGER_INIT] Initialized log files: ${[
+        LOG_TO_FILE ? LOG_FILE_PATH : null,
+        DIRECTION_LOGS_TO_FILE ? INCOMING_LOG_FILE : null,
+        DIRECTION_LOGS_TO_FILE ? OUTGOING_LOG_FILE : null
+      ].filter(Boolean).join(', ')}`
+    );
   } catch (error) {
     console.error(`[LOGGER_INIT] Failed: ${error.message}`);
   }
-} else if (LOG_TO_FILE) {
+} else if (LOG_TO_FILE || DIRECTION_LOGS_TO_FILE) {
   console.log(`[LOGGER_INIT] Already initialized, skipping file clear`);
 }
 
@@ -87,7 +98,7 @@ function logToFile(logEntry, filePath = LOG_FILE_PATH) {
 }
 
 function logToDirectionFile(direction, logEntry) {
-  if (!LOG_TO_FILE) return;
+  if (!DIRECTION_LOGS_TO_FILE) return;
   const filePath = direction === 'incoming' ? INCOMING_LOG_FILE : OUTGOING_LOG_FILE;
   try {
     const entry = { ...logEntry, _direction: direction, _timestamp: formatTimestamp() };
@@ -209,6 +220,34 @@ export const logger = {
     const entry = {
       timestamp: formatTimestamp(),
       direction: 'outgoing',
+      source,
+      destination,
+      api,
+      payload,
+      ...meta
+    };
+    logToDirectionFile('outgoing', entry);
+  },
+
+  logFinalIncoming: (source, destination, api, payload, meta = {}) => {
+    const entry = {
+      timestamp: formatTimestamp(),
+      direction: 'incoming',
+      event: 'received',
+      source,
+      destination,
+      api,
+      payload,
+      ...meta
+    };
+    logToDirectionFile('incoming', entry);
+  },
+
+  logFinalOutgoing: (source, destination, api, payload, meta = {}) => {
+    const entry = {
+      timestamp: formatTimestamp(),
+      direction: 'outgoing',
+      event: 'forwarded',
       source,
       destination,
       api,

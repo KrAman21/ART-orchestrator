@@ -3,6 +3,23 @@ import { MOCK_CONFIG, QAPI_CONFIG } from '../config.js';
 import { fetchS3TraceLogs as fetchS3TraceLogsFromClient } from '../log-fetcher/s3-trace-logs-client.js';
 import { unixSocketRequest } from './unix-socket-client.js';
 import crypto from 'crypto';
+import { isAbsoluteUrl, resolveReplayEndpoint } from './replay-request-resolver.js';
+
+function buildRequestUrl(baseUrl, endpoint) {
+  if (isAbsoluteUrl(endpoint)) {
+    const parsed = new URL(endpoint);
+    return {
+      url: endpoint,
+      socketEndpoint: `${parsed.pathname}${parsed.search}`
+    };
+  }
+
+  const socketEndpoint = resolveReplayEndpoint(endpoint) || endpoint;
+  return {
+    url: `${baseUrl}${socketEndpoint}`,
+    socketEndpoint
+  };
+}
 
 export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, timeoutMs = 30000) {
   const parts = sourceDestination?.split('_') || [];
@@ -26,7 +43,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     unixSocket
   });
 
-  const url = `${baseUrl}${endpoint}`;
+  const { url, socketEndpoint } = buildRequestUrl(baseUrl, endpoint);
   const headers = {
     ...customHeaders,
     'Content-Type': 'application/json',
@@ -75,7 +92,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     const sendRequest = async (requestBody) => {
       if (unixSocket) {
         logger.info('Using Unix socket for request', { socket: unixSocket, serviceUrl: url, timeoutMs });
-        const socketResponse = await unixSocketRequest(unixSocket, baseUrl, endpoint, {
+        const socketResponse = await unixSocketRequest(unixSocket, baseUrl, socketEndpoint, {
           method,
           body: requestBody,
           headers,
@@ -195,11 +212,17 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
  * @returns {Promise<Object>} - Response from GW
  */
 export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = {}, gwUnixSocket = null) {
-  const endpoint = `/gateway/webhook/${lenderOrgId}`;
-  const url = `${gwBaseUrl}${endpoint}`;
+  const replayUrl = headers.__artReplayUrl;
+  const method = headers.__artReplayMethod || 'POST';
+  delete headers.__artReplayUrl;
+  delete headers.__artReplayMethod;
+
+  const endpoint = resolveReplayEndpoint(replayUrl) || `/gateway/webhook/${lenderOrgId}`;
+  const { url, socketEndpoint } = buildRequestUrl(gwBaseUrl, endpoint);
 
   logger.info('Triggering webhook to GW', {
     endpoint,
+    method,
     lenderOrgId,
     payloadPreview: payload ? JSON.stringify(payload).substring(0, 200) : null
   });
@@ -208,8 +231,8 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
     let response;
     if (gwUnixSocket) {
       logger.info('Using Unix socket for webhook request', { socket: gwUnixSocket, url });
-      const socketResponse = await unixSocketRequest(gwUnixSocket, gwBaseUrl, endpoint, {
-        method: 'POST',
+      const socketResponse = await unixSocketRequest(gwUnixSocket, gwBaseUrl, socketEndpoint, {
+        method,
         body: JSON.stringify(payload),
         headers: {
           'Content-Type': 'application/json',
@@ -225,7 +248,7 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
       };
     } else {
       response = await fetch(url, {
-        method: 'POST',
+        method,
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',

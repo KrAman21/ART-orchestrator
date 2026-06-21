@@ -2,6 +2,13 @@ import { isAsyncParallelApi } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { findCorrespondingResponseEntry, matchesRequestContext } from '../services/response-matcher.js';
 
+function transformReplayPayloadForEntry(stateManager, payload, entry) {
+  const remappedPayload = stateManager?.remapReplayValue
+    ? stateManager.remapReplayValue(payload, null, { logTag: entry?.logTag })
+    : payload;
+  return transformRequest(remappedPayload, entry?.logTag);
+}
+
 /**
  * RetryHandler - Handles retry detection for incoming requests
  * Checks if an incoming request is a retry of a previously processed request
@@ -11,11 +18,13 @@ export class RetryHandler {
   /**
    * @param {Object} dependencies - Dependencies for the handler
    * @param {Object} dependencies.validator - Validator instance with entries and processedIndices
+   * @param {Object} dependencies.stateManager - State manager instance
    * @param {Map} dependencies.pendingExternalRequests - Map of pending external requests
    * @param {Object} dependencies.logger - Logger instance
    */
-  constructor({ validator, pendingExternalRequests, logger }) {
+  constructor({ validator, stateManager, pendingExternalRequests, logger }) {
     this.validator = validator;
+    this.stateManager = stateManager;
     this.pendingExternalRequests = pendingExternalRequests;
     this.logger = logger;
   }
@@ -112,7 +121,7 @@ export class RetryHandler {
           // Return the expected response payload
           return {
             success: true,
-            payload: transformRequest(pendingInfo.responseEntry.payload, pendingInfo.responseEntry.logTag),
+            payload: transformReplayPayloadForEntry(this.stateManager, pendingInfo.responseEntry.payload, pendingInfo.responseEntry),
             retried: true
           };
         }
@@ -188,7 +197,7 @@ export class RetryHandler {
 
             return {
               success: true,
-              payload: transformRequest(responseEntry.payload, responseEntry.logTag),
+              payload: transformReplayPayloadForEntry(this.stateManager, responseEntry.payload, responseEntry),
               retried: true
             };
           }

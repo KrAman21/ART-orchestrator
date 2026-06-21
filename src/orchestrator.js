@@ -12,13 +12,21 @@ import { OutOfOrderHandler } from './incoming-handlers/out-of-order-handler.js';
 import { LogProcessor } from './processing/log-processor.js';
 import { RequestForwarder } from './processing/request-forwarder.js';
 import { AsyncTracker } from './async-tracking/async-tracker.js';
-import { WebhookManager } from './webhook/webhook-manager.js';
 import { isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from './replay-special-cases.js';
 import {
   findAllCorrespondingResponseEntries,
   findCorrespondingResponseEntry,
   matchesRequestContext
 } from './services/response-matcher.js';
+
+function extractReplayIndexFromResultEntry(entryText) {
+  if (typeof entryText !== 'string') {
+    return null;
+  }
+
+  const match = entryText.match(/^\[(\d+)\]/);
+  return match ? Number(match[1]) : null;
+}
 
 export class ReplayOrchestrator {
   constructor(logs, config = {}) {
@@ -42,9 +50,7 @@ export class ReplayOrchestrator {
     this.pendingExternalRequests = new Map();
     this.earlyExternalResponses = new Map();
     this.requestToExternalCalls = new Map();
-    this.triggeredWebhooks = new Set();
     this.asyncCallTracker = new Map();
-    this.pendingPostResponseWebhooks = new Map();
     this.observedIncomingRequests = [];
     this.observedProcessedResponses = [];
     this.syntheticRejectedFibeLoanApplications = new Set();
@@ -77,9 +83,7 @@ export class ReplayOrchestrator {
     this.pendingExternalRequests.clear();
     this.earlyExternalResponses.clear();
     this.requestToExternalCalls.clear();
-    this.triggeredWebhooks.clear();
     this.asyncCallTracker.clear();
-    this.pendingPostResponseWebhooks.clear();
     this.observedIncomingRequests = [];
     this.observedProcessedResponses = [];
     this.syntheticRejectedFibeLoanApplications.clear();
@@ -89,9 +93,52 @@ export class ReplayOrchestrator {
     this._initHandlers();
   }
 
+  rewindToReplayIndex(targetIndex) {
+    const rewound = this.validator.rewindToIndex(targetIndex);
+    if (!rewound) {
+      return false;
+    }
+
+    this.stateManager.clearReplayTransientState();
+    this.pendingExternalRequests.clear();
+    this.earlyExternalResponses.clear();
+    this.requestToExternalCalls.clear();
+    this.asyncCallTracker.clear();
+    this.observedIncomingRequests = [];
+    this.observedProcessedResponses = [];
+    this.bufferFailures = [];
+    this.failureReason = null;
+
+    this.results.processedLogs = this.results.processedLogs.filter(log => {
+      const replayIndex = extractReplayIndexFromResultEntry(log.entry);
+      return replayIndex === null || replayIndex < targetIndex;
+    });
+    this.results.errors = this.results.errors.filter(error => {
+      const replayIndex = extractReplayIndexFromResultEntry(error.entry);
+      return replayIndex === null || replayIndex < targetIndex;
+    });
+    this.results.payloadComparisons = this.results.payloadComparisons.filter(comparison =>
+      comparison.logIndex === null || comparison.logIndex < targetIndex
+    );
+    this.results.passed = this.results.processedLogs.length;
+    this.results.failed = this.results.errors.length;
+
+    this.isRunning = true;
+
+    logger.info('Rewound orchestrator replay state in place', {
+      orderId: this.orderId,
+      targetIndex,
+      processedLogsRetained: this.results.processedLogs.length,
+      payloadComparisonsRetained: this.results.payloadComparisons.length
+    });
+
+    return true;
+  }
+
   _initHandlers() {
     this.retryHandler = new RetryHandler({
       validator: this.validator,
+      stateManager: this.stateManager,
       pendingExternalRequests: this.pendingExternalRequests,
       logger: logger
     });
@@ -113,23 +160,13 @@ export class ReplayOrchestrator {
       }
     });
 
-    this.webhookManager = new WebhookManager({
-      validator: this.validator,
-      logger: logger,
-      config: this.config,
-      triggeredWebhooks: this.triggeredWebhooks
-    });
-
     this.asyncTracker = new AsyncTracker({
       asyncCallTracker: this.asyncCallTracker,
       pendingExternalRequests: this.pendingExternalRequests,
-      triggeredWebhooks: this.triggeredWebhooks,
       logger: logger,
       validator: this.validator,
       config: this.config,
       callbacks: {
-        triggerWebhooks: this.webhookManager.triggerWebhooks.bind(this.webhookManager),
-        triggerAppWebhooksAfterResponse: this.triggerAppWebhooksAfterResponse.bind(this),
         getContextKey: this.getContextKey.bind(this)
       }
     });
@@ -151,7 +188,6 @@ export class ReplayOrchestrator {
         processNextLogEntry: this.processNextLogEntry.bind(this),
         shouldAutoProcessNextLogEntry: () => true,
         shouldBlockOnHeldExternalRequest: () => true,
-        triggerWebhooks: this.webhookManager.triggerWebhooks.bind(this.webhookManager),
         trackAsyncCompletion: this.trackAsyncCompletion.bind(this),
         fail: this.fail.bind(this),
         recordBufferFailure: this.recordBufferFailure.bind(this)
@@ -160,7 +196,6 @@ export class ReplayOrchestrator {
 
     this.requestForwarder.pendingExternalRequests = this.pendingExternalRequests;
     this.requestForwarder.earlyExternalResponses = this.earlyExternalResponses;
-    this.requestForwarder.pendingPostResponseWebhooks = this.pendingPostResponseWebhooks;
 
     this.logProcessor = new LogProcessor({
       validator: this.validator,
@@ -512,8 +547,9 @@ export class ReplayOrchestrator {
     }
 
     incoming = this.maybeNormalizeRejectedFibeFetchOfferCallback(incoming, expectedEntry);
+    incoming = this.normalizeIncomingReplayIdentifiers(incoming);
 
-    this.registerReplayLoanApplicationIdMappings(expectedEntry, incoming);
+    this.registerReplayIdentifierMappings(expectedEntry, incoming);
 
     logger.logApiCall(incoming.source, incoming.destination, incoming.api, 'REQUEST', expectedEntry.index);
 
@@ -1055,14 +1091,6 @@ export class ReplayOrchestrator {
     return this.asyncTracker.waitForPendingExternalRequests(currentEntry);
   }
 
-  async triggerWebhooks(webhooks) {
-    return this.webhookManager.triggerWebhooks(webhooks);
-  }
-
-  async triggerAppWebhooksAfterResponse() {
-    return this.webhookManager.triggerAppWebhooksAfterResponse();
-  }
-
   comparePayloads(expected, actual, logTag) {
     const comparison = compareLog(expected, actual, logTag);
     const currentEntry = this.validator.getCurrentEntry();
@@ -1079,34 +1107,53 @@ export class ReplayOrchestrator {
     return comparison;
   }
 
-  registerReplayLoanApplicationIdMappings(expectedEntry, incoming) {
-    const expectedIds = this.collectLoanApplicationIds(expectedEntry);
-    const actualIds = this.collectLoanApplicationIds(incoming);
+  normalizeIncomingReplayIdentifiers(incoming) {
+    if (!incoming) {
+      return incoming;
+    }
 
-    for (let index = 0; index < Math.min(expectedIds.length, actualIds.length); index += 1) {
-      const originalLoanApplicationId = expectedIds[index];
-      const localLoanApplicationId = actualIds[index];
-      const didRegister =
-        this.stateManager.registerLoanApplicationIdMapping(
-          originalLoanApplicationId,
-          localLoanApplicationId
+    return {
+      ...incoming,
+      loanApplicationId: this.stateManager.getMappedIdentifier(
+        'loanApplicationId',
+        incoming.loanApplicationId
+      ),
+      payload: this.stateManager.remapReplayValue(incoming.payload),
+      message: this.stateManager.remapReplayValue(incoming.message)
+    };
+  }
+
+  registerReplayIdentifierMappings(expectedEntry, incoming) {
+    for (const identifierType of this.stateManager.getTrackedIdentifierTypes()) {
+      const expectedIds = this.collectReplayIdentifiers(expectedEntry, identifierType);
+      const actualIds = this.collectReplayIdentifiers(incoming, identifierType);
+
+      for (let index = 0; index < Math.min(expectedIds.length, actualIds.length); index += 1) {
+        const originalValue = expectedIds[index];
+        const localValue = actualIds[index];
+        const didRegister = this.stateManager.registerIdentifierMapping(
+          identifierType,
+          originalValue,
+          localValue
         );
 
-      if (
-        didRegister &&
-        typeof this.config.onLoanApplicationId === 'function' &&
-        this.config.registrySessionId
-      ) {
-        this.config.onLoanApplicationId(
-          localLoanApplicationId,
-          this.orderId,
+        if (
+          didRegister &&
+          identifierType === 'loanApplicationId' &&
+          typeof this.config.onLoanApplicationId === 'function' &&
           this.config.registrySessionId
-        );
+        ) {
+          this.config.onLoanApplicationId(
+            localValue,
+            this.orderId,
+            this.config.registrySessionId
+          );
+        }
       }
     }
   }
 
-  collectLoanApplicationIds(source) {
+  collectReplayIdentifiers(source, identifierType) {
     const ids = [];
     const seen = new Set();
 
@@ -1121,7 +1168,11 @@ export class ReplayOrchestrator {
       }
 
       for (const [key, nestedValue] of Object.entries(value)) {
-        if ((key === 'loanApplicationId' || key === 'loan_application_id') && typeof nestedValue === 'string' && !seen.has(nestedValue)) {
+        if (
+          this.stateManager.getIdentifierTypeForKey(key) === identifierType &&
+          typeof nestedValue === 'string' &&
+          !seen.has(nestedValue)
+        ) {
           seen.add(nestedValue);
           ids.push(nestedValue);
         } else {
@@ -1130,11 +1181,7 @@ export class ReplayOrchestrator {
       }
     };
 
-    visit({
-      loanApplicationId: source?.loanApplicationId,
-      payload: source?.payload,
-      message: source?.message
-    });
+    visit(source);
 
     return ids;
   }

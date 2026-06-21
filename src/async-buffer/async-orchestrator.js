@@ -4,9 +4,10 @@ import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES } from '../config.js';
-import { getOptionalRepeatPolicy, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase } from '../replay-special-cases.js';
+import { getOptionalRepeatPolicy, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
+import { resolveReplayEndpoint } from '../services/replay-request-resolver.js';
 
 function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
   if (!entry || entry.sourceDestination !== 'APP_WRAPPER') {
@@ -34,25 +35,35 @@ function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
   return merchantSpecificEndpoints[merchantId]?.[entry.logTag] || endpointConfig?.endpoint || null;
 }
 
-function remapReplayIds(value, stateManager) {
+function shouldPreserveReplayLenderId(logTag, keyHint) {
+  return logTag === 'GetLenderFlows_REQUEST' && keyHint === 'lenderId';
+}
+
+function remapReplayIds(value, stateManager, logTag, keyHint = null) {
+  if (typeof value === 'string') {
+    return stateManager?.remapReplayValue
+      ? stateManager.remapReplayValue(value, keyHint, { logTag })
+      : value;
+  }
+
   if (!value || typeof value !== 'object') {
     return value;
   }
 
   if (Array.isArray(value)) {
-    return value.map(item => remapReplayIds(item, stateManager));
+    return value.map(item => remapReplayIds(item, stateManager, logTag, keyHint));
   }
 
   const remapped = {};
   const mappedLenderId = getLenderId(value.lender_org_id || value.lenderOrgId);
 
   for (const [key, nestedValue] of Object.entries(value)) {
-    if ((key === 'loanApplicationId' || key === 'loan_application_id') && typeof nestedValue === 'string') {
-      remapped[key] = stateManager.getMappedLoanApplicationId(nestedValue);
+    if (shouldPreserveReplayLenderId(logTag, key)) {
+      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key);
     } else if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
       remapped[key] = mappedLenderId;
     } else {
-      remapped[key] = remapReplayIds(nestedValue, stateManager);
+      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key);
     }
   }
 
@@ -315,6 +326,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   shouldSkipTimedOutOptionalRequest(entry) {
     const optionalRepeatPolicy = getOptionalRepeatPolicy(this.config, entry);
     if (!optionalRepeatPolicy) {
+      if (entry?.logTag === 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST') {
+        logger.info('Optional skip evaluation: no policy matched', {
+          entry: entry.toString()
+        });
+      }
       return false;
     }
 
@@ -335,12 +351,49 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     const branchAdvancedObserved = this.hasObservedBranchAdvance(entry, optionalRepeatPolicy);
     const priorAlternateProcessed = this.hasPriorProcessedAlternate(entry, optionalRepeatPolicy);
     const hasAnyAdvanceSignal = branchAdvanced || branchAdvancedObserved || priorAlternateProcessed;
+    const isFetchOfferAsyncResponse = entry.logTag === 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST';
+
+    if (isFetchOfferAsyncResponse && (priorReplayOccurrences.length >= 1 || hasAnyAdvanceSignal)) {
+      logger.warn('Skipping timed-out optional replay request in async mode', {
+        entry: entry.toString(),
+        priorReplayOccurrenceCount: priorReplayOccurrences.length,
+        processedSameTagCount,
+        branchAdvanced,
+        branchAdvancedObserved,
+        priorAlternateProcessed,
+        advanceWhenSeenLogTags: optionalRepeatPolicy.advanceWhenSeenLogTags,
+        skipWhenPriorProcessedLogTags: optionalRepeatPolicy.skipWhenPriorProcessedLogTags,
+        skipWhenPriorProcessedEntries: optionalRepeatPolicy.skipWhenPriorProcessedEntries,
+        specialCase: 'fetch_offer_async_repeat_or_advanced_branch'
+      });
+      return true;
+    }
 
     if (optionalRepeatPolicy.requirePriorProcessedOccurrence && priorReplayOccurrences.length < 1) {
+      logger.info('Optional skip evaluation blocked: no prior replay occurrence', {
+        entry: entry.toString(),
+        priorReplayOccurrenceCount: priorReplayOccurrences.length,
+        processedSameTagCount,
+        branchAdvanced,
+        branchAdvancedObserved,
+        priorAlternateProcessed,
+        requirePriorProcessedOccurrence: optionalRepeatPolicy.requirePriorProcessedOccurrence,
+        requireBranchAdvance: optionalRepeatPolicy.requireBranchAdvance
+      });
       return false;
     }
 
     if (optionalRepeatPolicy.requireBranchAdvance && !hasAnyAdvanceSignal) {
+      logger.info('Optional skip evaluation blocked: required branch advance missing', {
+        entry: entry.toString(),
+        priorReplayOccurrenceCount: priorReplayOccurrences.length,
+        processedSameTagCount,
+        branchAdvanced,
+        branchAdvancedObserved,
+        priorAlternateProcessed,
+        requirePriorProcessedOccurrence: optionalRepeatPolicy.requirePriorProcessedOccurrence,
+        requireBranchAdvance: optionalRepeatPolicy.requireBranchAdvance
+      });
       return false;
     }
 
@@ -349,10 +402,30 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       processedSameTagCount < 1 &&
       !hasAnyAdvanceSignal
     ) {
+      logger.info('Optional skip evaluation blocked: prior occurrence exists but neither processed nor branch-advanced', {
+        entry: entry.toString(),
+        priorReplayOccurrenceCount: priorReplayOccurrences.length,
+        processedSameTagCount,
+        branchAdvanced,
+        branchAdvancedObserved,
+        priorAlternateProcessed,
+        requirePriorProcessedOccurrence: optionalRepeatPolicy.requirePriorProcessedOccurrence,
+        requireBranchAdvance: optionalRepeatPolicy.requireBranchAdvance
+      });
       return false;
     }
 
     if (!optionalRepeatPolicy.requirePriorProcessedOccurrence && !hasAnyAdvanceSignal) {
+      logger.info('Optional skip evaluation blocked: no advance signal', {
+        entry: entry.toString(),
+        priorReplayOccurrenceCount: priorReplayOccurrences.length,
+        processedSameTagCount,
+        branchAdvanced,
+        branchAdvancedObserved,
+        priorAlternateProcessed,
+        requirePriorProcessedOccurrence: optionalRepeatPolicy.requirePriorProcessedOccurrence,
+        requireBranchAdvance: optionalRepeatPolicy.requireBranchAdvance
+      });
       return false;
     }
 
@@ -381,6 +454,39 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     logger.info('Skipped optional replay request in async mode', {
       reason,
+      entry: entry.toString(),
+      responseEntry: responseEntry?.toString?.() || null,
+      currentIndex: this.validator.currentIndex
+    });
+
+    return true;
+  }
+
+  skipMissingThemisEligibilityReplayRequest(entry, reason = 'missing_live_lender_call') {
+    const responseEntry = this.findCorrespondingResponse(entry, true);
+
+    this.validator.markProcessed(entry);
+    if (responseEntry) {
+      this.validator.markProcessed(responseEntry);
+    }
+
+    const warningInfo = {
+      type: 'MISSING_EXPECTED_ASYNC_CALL',
+      logTag: entry.logTag,
+      lenderOrgId: entry.lenderOrgId || null,
+      requestEntry: entry.toString(),
+      responseEntry: responseEntry?.toString?.() || null,
+      reason
+    };
+
+    if (this.reportGenerator && this.orderId) {
+      this.reportGenerator.recordReplayWarning(this.orderId, warningInfo);
+    }
+
+    logger.warn('Skipped missing Themis-Eligibility replay pair', {
+      reason,
+      orderId: this.orderId,
+      lenderOrgId: entry.lenderOrgId || null,
       entry: entry.toString(),
       responseEntry: responseEntry?.toString?.() || null,
       currentIndex: this.validator.currentIndex
@@ -484,17 +590,6 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         'RESPONSE',
         currentEntry.index
       );
-
-      const postResponseWebhooks = this.pendingPostResponseWebhooks?.get(contextKey);
-      if (postResponseWebhooks?.length) {
-        logger.info('Triggering queued post-response webhook(s) for replayed GATEWAY->LENDER response', {
-          contextKey,
-          webhookCount: postResponseWebhooks.length,
-          entry: currentEntry.toString()
-        });
-        await this.triggerWebhooks(postResponseWebhooks);
-        this.pendingPostResponseWebhooks.delete(contextKey);
-      }
 
       this.validator.advance();
       this.recordSuccess('gateway_lender_response_replay', currentEntry);
@@ -661,27 +756,31 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       await this.triggerExternalRequestAsync(entry);
       return true;
     } else if (entry.isRequest) {
-      const priorFetchOfferAsyncOccurrences = this.validator.entries.filter(candidate =>
-        candidate.isRequest &&
-        candidate.index < entry.index &&
-        candidate.source === entry.source &&
-        candidate.destination === entry.destination &&
-        candidate.logTag === entry.logTag &&
-        sharesReplayContext(entry, candidate)
-      ).length;
+      const hasBufferedMatch = this.bufferManager?.hasMatchingBufferedRequest?.(entry) || false;
+      const isSkippableAsync = isSkippableAsyncApiLogTag(entry.logTag);
 
-      if (
-        entry.logTag === 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST' &&
-        priorFetchOfferAsyncOccurrences >= 1 &&
-        (this.hasObservedTerminalHardEligibilityFailure(entry) || this.hasProcessedHardEligibilityStatusResponse(entry)) &&
-        !this.bufferManager?.hasMatchingBufferedRequest?.(entry)
-      ) {
-        return this.skipOptionalReplayRequest(entry, 'post_hard_eligibility_repeat_skip');
+      if (isSkippableAsync) {
+        logger.info('Matched skippable async API during replay', {
+          entry: entry.toString(),
+          logTag: entry.logTag,
+          configuredSkippableAsyncApis: Array.from(SKIPPABLE_ASYNC_API_LOG_TAGS),
+          hasBufferedMatch
+        });
       }
 
+      const shouldPreWaitSkip = this.shouldSkipTimedOutOptionalRequest(entry);
+
+      logger.info('Pre-wait optional skip decision', {
+        entry: entry.toString(),
+        hasBufferedMatch,
+        shouldPreWaitSkip,
+        isSkippableAsync
+      });
+
       if (
-        this.shouldSkipTimedOutOptionalRequest(entry) &&
-        !this.bufferManager?.hasMatchingBufferedRequest?.(entry)
+        !isSkippableAsync &&
+        shouldPreWaitSkip &&
+        !hasBufferedMatch
       ) {
         return this.skipOptionalReplayRequest(entry, 'pre_wait_optional_skip');
       }
@@ -690,7 +789,9 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
       logger.info('Replay thread waiting for incoming request', {
         entry: entry.toString(),
-        timeoutMs: effectiveTimeoutMs
+        timeoutMs: effectiveTimeoutMs,
+        isSkippableAsync,
+        hasBufferedMatch
       });
 
       const buffered = await this.bufferManager.waitForMatchingRequest(
@@ -717,17 +818,28 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         }
 
         if (this.shouldSkipTimedOutOptionalRequest(entry)) {
+          logger.warn('Buffered request wait expired and entry is eligible for skip', {
+            entry: entry.toString(),
+            timeoutMs: effectiveTimeoutMs,
+            isSkippableAsync
+          });
           return this.skipOptionalReplayRequest(entry, 'timed_out_optional_skip');
         }
 
-        const message = `Replay mismatch: timed out waiting for ${entry.toString()}`;
-        logger.error('Replay request mismatch', {
+        if (entry.logTag === 'Themis-Eligibility_REQUEST' && entry.source === 'GATEWAY') {
+          logger.warn('Buffered request wait expired for Themis-Eligibility lender call; skipping replay pair', {
+            entry: entry.toString(),
+            timeoutMs: effectiveTimeoutMs,
+            lenderOrgId: entry.lenderOrgId || null
+          });
+          return this.skipMissingThemisEligibilityReplayRequest(entry, 'timed_out_missing_lender_call');
+        }
+
+        logger.warn('Replay request still missing after buffer wait timeout; keeping entry pending', {
           entry: entry.toString(),
           timeoutMs: effectiveTimeoutMs
         });
-        this.recordFailure('request_replay_timeout', entry, message);
-        await this.fail(message);
-        return true;
+        return false;
       }
 
       try {
@@ -751,13 +863,22 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   }
 
   getRequestWaitTimeoutMs(entry) {
+    if (isSkippableAsyncApiLogTag(entry.logTag)) {
+      logger.info('Using short wait timeout for skippable async API', {
+        entry: entry?.toString?.(),
+        logTag: entry?.logTag,
+        timeoutMs: 40_000,
+        configuredSkippableAsyncApis: Array.from(SKIPPABLE_ASYNC_API_LOG_TAGS)
+      });
+      return 40_000;
+    }
+
     const baseTimeoutMs = this.config.timeoutMs;
     const perLogTagOverrideMs = RETRY_TIMEOUT_OVERRIDES[entry.logTag]
       ? RETRY_TIMEOUT_OVERRIDES[entry.logTag] * 1000
       : 0;
     const isGatewayToLender = entry.source === 'GATEWAY' && entry.destination === 'LENDER';
     const gatewayToLenderTimeoutMs = isGatewayToLender ? baseTimeoutMs * 5 : baseTimeoutMs;
-
     return Math.max(baseTimeoutMs, gatewayToLenderTimeoutMs, perLogTagOverrideMs);
   }
   
@@ -765,20 +886,28 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     try {
       const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
       const resolvedEndpoint = resolveWrapperEndpointForMerchant(entry, endpointConfig);
-      const api = resolvedEndpoint || this.getApiForLogTag(entry.logTag);
+      const replayEndpoint = resolveReplayEndpoint(entry.url);
+      const isDirectLenderGatewayRequest =
+        entry.isRequest && entry.source === 'LENDER' && entry.destination === 'GATEWAY';
+      let api = resolvedEndpoint || this.getApiForLogTag(entry.logTag);
+      if (isDirectLenderGatewayRequest && replayEndpoint) {
+        api = replayEndpoint;
+      }
       const customHeaders = {
         ...(endpointConfig?.headers || {}),
         ...buildAppCoreAuthHeaders(entry, this.validator.entries)
       };
       await ensureAppCorePreconditions(entry, customHeaders);
       const service = endpointConfig?.service || entry.destination;
+      const method = entry.httpMethod || endpointConfig?.method || 'POST';
       
-      const remappedPayload = remapReplayIds(entry.payload, this.stateManager);
+      const remappedPayload = remapReplayIds(entry.payload, this.stateManager, entry.logTag);
       const transformedPayload = transformRequest(remappedPayload, entry.logTag);
       
       logger.info('ORCH_SENDING_ASYNC', {
         destination: service,
         api,
+        method,
         logTag: entry.logTag,
         requestId: entry.requestId
       });
@@ -786,7 +915,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       this.httpClient.send(
         this.getServiceBaseUrl(service),
         api,
-        'POST',
+        method,
         transformedPayload,
         entry.requestId,
         entry.sourceDestination,
@@ -795,17 +924,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         customHeaders,
         entry.index,
         this.getServiceUnixSocket(service),
-        entry.loanApplicationId,
+        this.stateManager.getMappedLoanApplicationId(entry.loanApplicationId),
         entry.lenderOrgId,
         entry.clientRequestId
       );
 
-      logger.logOutgoing(entry.source, entry.destination, api, transformedPayload, {
-        requestId: entry.requestId,
-        logTag: entry.logTag,
-        sourceDestination: entry.sourceDestination
-      });
-      
       this.validator.advance();
       
       logger.info('Async request sent, main thread continuing', {
@@ -1000,6 +1123,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     this.recordObservedIncomingRequest(incoming);
 
+    const normalizedSourceDestination = normalizeSourceDestination(
+      `${incoming.source}_${incoming.destination}`,
+      incoming.logTag
+    );
+
     logger.info('ASYNC_ORCH_RECEIVING', {
       source: incoming.source,
       destination: incoming.destination,
@@ -1009,33 +1137,23 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       lenderOrgId: incoming.lenderOrgId
     });
 
+    logger.logFinalIncoming(incoming.source, incoming.destination, incoming.api, incoming.payload, {
+      requestId: incoming.requestId,
+      logTag: incoming.logTag,
+      lenderOrgId: incoming.lenderOrgId,
+      loanApplicationId: incoming.loanApplicationId,
+      sourceDestination: normalizedSourceDestination
+    });
+
     if (isThemisEligibilitySpecialCase(incoming.logTag) && incoming.source === 'GATEWAY' &&
         (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
-      logger.logIncoming(incoming.source, incoming.destination, incoming.api, incoming.payload, {
-        requestId: incoming.requestId,
-        logTag: incoming.logTag,
-        lenderOrgId: incoming.lenderOrgId,
-        handler: 'ThemisEligibilityBatchAsync'
-      });
       return await this.handleThemisEligibilityBatchAsync(incoming);
     }
 
     if (isThemisKfsSpecialCase(incoming.logTag) && incoming.source === 'GATEWAY' &&
         (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
-      logger.logIncoming(incoming.source, incoming.destination, incoming.api, incoming.payload, {
-        requestId: incoming.requestId,
-        logTag: incoming.logTag,
-        lenderOrgId: incoming.lenderOrgId,
-        handler: 'ThemisKFSBatchAsync'
-      });
       return await this.handleThemisKFSBatchAsync(incoming);
     }
-
-    logger.logIncoming(incoming.source, incoming.destination, incoming.api, incoming.payload, {
-      requestId: incoming.requestId,
-      logTag: incoming.logTag,
-      handler: 'BufferManager'
-    });
 
     const syntheticCompatibilityResponse = this.maybeHandleSyntheticFibeGenerateToken(incoming);
     if (syntheticCompatibilityResponse) {
@@ -1091,11 +1209,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return retryResult;
     }
 
-    const sourceDestination = normalizeSourceDestination(
-      `${incoming.source}_${incoming.destination}`,
-      incoming.logTag
-    );
-    const parts = sourceDestination.split('_');
+    const parts = normalizedSourceDestination.split('_');
     const normalizedIncoming = {
       ...incoming,
       source: parts[0],
@@ -1487,6 +1601,26 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       activeHttpRequests: this.httpClient.getActiveRequestCount(),
       isPolling: this.isPolling
     };
+  }
+
+  rewindToReplayIndex(targetIndex) {
+    const rewound = super.rewindToReplayIndex(targetIndex);
+    if (!rewound) {
+      return false;
+    }
+
+    this.bufferManager.resetForReplay();
+    this.httpClient.cleanup(0);
+    this.httpClient.failedRequests = [];
+    this.shouldStop = false;
+    this.isRunning = true;
+
+    logger.info('Rewound async orchestrator replay state in place', {
+      orderId: this.orderId,
+      targetIndex
+    });
+
+    return true;
   }
   
   async stop() {

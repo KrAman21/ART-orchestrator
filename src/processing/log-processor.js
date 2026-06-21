@@ -3,6 +3,7 @@ import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
+import { resolveReplayEndpoint } from '../services/replay-request-resolver.js';
 
 function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
   if (!entry || entry.sourceDestination !== 'APP_WRAPPER') {
@@ -35,25 +36,35 @@ import {
   matchesRequestContext
 } from '../services/response-matcher.js';
 
-function remapReplayIds(value, stateManager) {
+export function shouldPreserveReplayLenderId(logTag, keyHint) {
+  return logTag === 'GetLenderFlows_REQUEST' && keyHint === 'lenderId';
+}
+
+export function remapReplayIds(value, stateManager, logTag, keyHint = null) {
+  if (typeof value === 'string') {
+    return stateManager?.remapReplayValue
+      ? stateManager.remapReplayValue(value, keyHint, { logTag })
+      : value;
+  }
+
   if (!value || typeof value !== 'object') {
     return value;
   }
 
   if (Array.isArray(value)) {
-    return value.map(item => remapReplayIds(item, stateManager));
+    return value.map(item => remapReplayIds(item, stateManager, logTag, keyHint));
   }
 
   const remapped = {};
   const mappedLenderId = getLenderId(value.lender_org_id || value.lenderOrgId);
 
   for (const [key, nestedValue] of Object.entries(value)) {
-    if ((key === 'loanApplicationId' || key === 'loan_application_id') && typeof nestedValue === 'string') {
-      remapped[key] = stateManager.getMappedLoanApplicationId(nestedValue);
+    if (shouldPreserveReplayLenderId(logTag, key)) {
+      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key);
     } else if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
       remapped[key] = mappedLenderId;
     } else {
-      remapped[key] = remapReplayIds(nestedValue, stateManager);
+      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key);
     }
   }
 
@@ -163,6 +174,18 @@ export class LogProcessor {
         entry: entry.toString(),
         source: entry.source
       });
+
+      if (entry.source === 'LENDER' && entry.destination === 'GATEWAY') {
+        this.logger.info('LENDER_GATEWAY triggering', {
+          entry: entry.toString(),
+          index: entry.index,
+          logTag: entry.logTag,
+          requestId: entry.requestId,
+          lenderOrgId: entry.lenderOrgId || null,
+          orderId: entry.orderId || null
+        });
+      }
+
       await this.triggerExternalRequest(entry);
     } else if (entry.isRequest) {
       // For CORE, GATEWAY, LSP, WRAPPER sources - wait for incoming request
@@ -188,12 +211,15 @@ export class LogProcessor {
     try {
       const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
       const resolvedEndpoint = resolveWrapperEndpointForMerchant(entry, endpointConfig);
+      const replayEndpoint = resolveReplayEndpoint(entry.url);
+      const isDirectLenderGatewayRequest =
+        entry.isRequest && entry.source === 'LENDER' && entry.destination === 'GATEWAY';
       let api;
 
-      if (entry.isLenderToGwWebhook && entry.isLenderToGwWebhook()) {
+      if (isDirectLenderGatewayRequest) {
         const webhookConfig = getEndpointConfig('LENDER_GW', 'WEBHOOK Request');
-        api = webhookConfig?.endpoint || '/gateway/webhook';
-        if (entry.lenderOrgId) {
+        api = replayEndpoint || resolvedEndpoint || webhookConfig?.endpoint || '/gateway/webhook';
+        if (!replayEndpoint && entry.lenderOrgId) {
           api = `${api}/${entry.lenderOrgId}`;
         }
       } else {
@@ -209,6 +235,7 @@ export class LogProcessor {
       };
       await ensureAppCorePreconditions(entry, customHeaders);
       const service = endpointConfig?.service || entry.destination;
+      const method = entry.httpMethod || endpointConfig?.method || 'POST';
 
       const expectedResponses = this.validator.peekNext(100).filter(e => {
         if (!(e.source === entry.destination &&
@@ -230,7 +257,7 @@ export class LogProcessor {
       const sourceDestinationForRequest = entry.originalSourceDestination || entry.sourceDestination;
 
       // Transform masked values in payload before sending
-      const remappedPayload = remapReplayIds(entry.payload, this.stateManager);
+      const remappedPayload = remapReplayIds(entry.payload, this.stateManager, entry.logTag);
       const transformedPayload = transformRequest(remappedPayload, entry.logTag);
 
       // Log API call before making request
@@ -241,6 +268,7 @@ export class LogProcessor {
         destination: service,
         baseUrl: this.callbacks.getServiceBaseUrl(service),
         api: api,
+        method,
         source: entry.source,
         dest: entry.destination,
         logTag: entry.logTag,
@@ -271,7 +299,7 @@ export class LogProcessor {
       response = await makeRequest(
             this.callbacks.getServiceBaseUrl(service),
             api,
-            'POST',
+            method,
             transformedPayload,
             entry.requestId,
             sourceDestinationForRequest,
@@ -340,7 +368,7 @@ export class LogProcessor {
         response = await makeRequest(
           this.callbacks.getServiceBaseUrl(service),
           api,
-          'POST',
+          method,
           transformedPayload,
           entry.requestId,
           sourceDestinationForRequest,

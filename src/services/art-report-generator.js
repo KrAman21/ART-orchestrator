@@ -3,6 +3,30 @@ import { resolve } from 'path';
 import { generateHtmlReport } from './art-html-report-generator.js';
 import { generatePdfReport } from './art-pdf-report-generator.js';
 
+function extractReadableFailureMessage(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value !== 'object') {
+    return String(value);
+  }
+
+  return (
+    value.errorMessage ||
+    value.error_message ||
+    value.description ||
+    value.message ||
+    value.error ||
+    value.code ||
+    null
+  );
+}
+
 export class ArtReportGenerator {
   constructor(config = {}) {
     this.reportPath = config.reportPath || 'report.json';
@@ -48,6 +72,7 @@ export class ArtReportGenerator {
         timeoutAt: null,
         failureAt: null,
         latestBufferFailure: null,
+        replayWarnings: [],
         failedLogs: [],
         failedLogsCount: 0,
         timeoutLogsCount: 0,
@@ -173,6 +198,16 @@ export class ArtReportGenerator {
     return order ? order.bufferFailures : [];
   }
 
+  recordReplayWarning(orderId, warningInfo) {
+    const order = this.orders.find(o => o.orderId === orderId);
+    if (!order) return;
+
+    order.diagnostics.replayWarnings.push({
+      timestamp: new Date().toISOString(),
+      ...warningInfo
+    });
+  }
+
   finalizeOrder(orderId, result) {
     const order = this.orders.find(o => o.orderId === orderId);
     if (!order) return;
@@ -231,7 +266,10 @@ export class ArtReportGenerator {
         type: 'FAILED_LOG',
         logTag: latestFailedLog.entry,
         logIndex: order.currentLogIndex,
-        message: latestFailedLog.details?.error || latestFailedLog.step || order.stopReason
+        message:
+          extractReadableFailureMessage(latestFailedLog.details)
+          || latestFailedLog.step
+          || order.stopReason
       };
     } else if (!order.diagnostics.failureAt && order.status === 'FAILED') {
       order.diagnostics.failureAt = {
@@ -239,7 +277,10 @@ export class ArtReportGenerator {
         type: 'FAILED_ORDER',
         logTag: order.currentLogTag,
         logIndex: order.currentLogIndex,
-        message: order.errorMessage || order.stopReason
+        message:
+          order.errorMessage
+          || extractReadableFailureMessage(order.bufferFailures?.[order.bufferFailures.length - 1]?.responseData)
+          || order.stopReason
       };
     }
 
@@ -273,6 +314,7 @@ export class ArtReportGenerator {
       status: order.status,
       failureReason:
         order.errorMessage ||
+        extractReadableFailureMessage(order.bufferFailures?.[order.bufferFailures.length - 1]?.responseData) ||
         failurePoint?.message ||
         failurePoint?.reason ||
         order.stopReason ||
@@ -300,6 +342,7 @@ export class ArtReportGenerator {
           null,
         reason:
           order.errorMessage ||
+          extractReadableFailureMessage(order.bufferFailures?.[order.bufferFailures.length - 1]?.responseData) ||
           order.diagnostics?.failureAt?.message ||
           order.diagnostics?.timeoutAt?.reason ||
           order.stopReason ||

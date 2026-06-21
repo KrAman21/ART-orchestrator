@@ -1,9 +1,10 @@
 import express from 'express';
 import { logger } from './utils/logger.js';
 import { getApiMapping, QAPI_CONFIG } from './config.js';
-import { fetchS3TraceLogs, fetchOrderIdsFromQAPI } from './services/http-client.js';
+import { fetchOrderIdsFromQAPI } from './services/http-client.js';
 import { writeFile } from 'fs/promises';
 import { resolve } from 'path';
+import { MultiSourceLogFetcher } from './log-fetcher/multi-source-log-fetcher.js';
 
 /**
  * Create Express server with routes for LSP and GW
@@ -207,7 +208,11 @@ export function createServer(orchestrator) {
 
       logger.info('Fetching logs from external API', { merchantId, orderId });
 
-      const result = await fetchS3TraceLogs(merchantId, orderId);
+      const fetcher = new MultiSourceLogFetcher({
+        sessionToken: process.env.SESSION_TOKEN,
+        outputPath: 'data/logs.json'
+      });
+      const result = await fetcher.fetchLogsForOrder(merchantId, orderId);
 
       if (!result.success) {
         return res.status(500).json({
@@ -224,6 +229,7 @@ export function createServer(orchestrator) {
         merchantId,
         orderId,
         logCount: result.count,
+        context: result.context,
         filePath: logsFilePath
       });
 
@@ -340,7 +346,11 @@ export function createServer(orchestrator) {
         try {
           logger.info(`[${i + 1}/${orderIds.length}] Processing order: ${orderId}`);
 
-          const logsResult = await fetchS3TraceLogs(QAPI_CONFIG.merchantId, orderId);
+          const logsFetcher = new MultiSourceLogFetcher({
+            sessionToken: process.env.SESSION_TOKEN,
+            outputPath: 'data/logs.json'
+          });
+          const logsResult = await logsFetcher.fetchLogsForOrder(QAPI_CONFIG.merchantId, orderId);
 
           if (!logsResult.success) {
             orderResultItem.status = 'failed';

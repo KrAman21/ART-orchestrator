@@ -1,5 +1,39 @@
 import { logger } from '../utils/logger.js';
 
+const IDENTIFIER_TYPE_ALIASES = Object.freeze({
+  loanApplicationId: ['loanApplicationId', 'loan_application_id', 'partnerRefNo', 'applicationid', 'ApplicationId'],
+  lineDetailId: ['lineDetailId', 'lineId'],
+  merchantUserId: ['merchantUserId'],
+  lineDetailExtensibleDataId: ['lineDetailExtensibleDataId'],
+  referenceId: ['referenceId']
+});
+
+const LOG_TAG_IDENTIFIER_TYPE_OVERRIDES = Object.freeze({
+  'POLLING API :: LINE_STATUS_REQUEST': {
+    applicationid: 'lineDetailId',
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  },
+  'CREATE APPLICATION API_REQUEST': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  },
+  'CREATE APPLICATION API_RESPONSE': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  },
+  DMI_WEBHOOK_REQUEST: {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  }
+});
+
+const NORMALIZED_IDENTIFIER_ALIAS_TO_TYPE = new Map(
+  Object.entries(IDENTIFIER_TYPE_ALIASES).flatMap(([type, aliases]) =>
+    aliases.map(alias => [alias.toLowerCase(), type])
+  )
+);
+
 /**
  * PendingRequest represents an in-flight request waiting for response
  */
@@ -76,7 +110,10 @@ export class StateManager {
     this.responseHeaders = new Map();
 
     // Maps recorded IDs to the local IDs created during replay
-    this.loanApplicationIdMappings = new Map();
+    this.identifierMappings = new Map(
+      Object.keys(IDENTIFIER_TYPE_ALIASES).map(type => [type, new Map()])
+    );
+    this.loanApplicationIdMappings = this.identifierMappings.get('loanApplicationId');
 
     this.config = {
       defaultTimeoutMs: 10000,
@@ -266,30 +303,115 @@ export class StateManager {
     return null;
   }
 
-  registerLoanApplicationIdMapping(originalLoanApplicationId, localLoanApplicationId) {
-    if (!originalLoanApplicationId || !localLoanApplicationId) return false;
-    if (originalLoanApplicationId === localLoanApplicationId) return false;
+  getTrackedIdentifierTypes() {
+    return Object.keys(IDENTIFIER_TYPE_ALIASES);
+  }
 
-    const existing = this.loanApplicationIdMappings.get(originalLoanApplicationId);
-    if (existing === localLoanApplicationId) {
+  getIdentifierTypeForKey(key) {
+    if (typeof key !== 'string') {
+      return null;
+    }
+
+    return NORMALIZED_IDENTIFIER_ALIAS_TO_TYPE.get(key.toLowerCase()) || null;
+  }
+
+  getIdentifierTypeForKeyInContext(key, context = {}) {
+    if (typeof key !== 'string') {
+      return null;
+    }
+
+    const logTag = typeof context?.logTag === 'string' ? context.logTag : null;
+    if (logTag) {
+      const logTagOverrides = LOG_TAG_IDENTIFIER_TYPE_OVERRIDES[logTag];
+      const overriddenType = logTagOverrides?.[key];
+      if (overriddenType) {
+        return overriddenType;
+      }
+    }
+
+    return this.getIdentifierTypeForKey(key);
+  }
+
+  registerIdentifierMapping(identifierType, originalValue, localValue) {
+    if (!identifierType || !originalValue || !localValue) return false;
+    if (originalValue === localValue) return false;
+
+    const mappings = this.identifierMappings.get(identifierType);
+    if (!mappings) {
       return false;
     }
 
-    this.loanApplicationIdMappings.set(originalLoanApplicationId, localLoanApplicationId);
-    logger.info('Registered loan application ID mapping', {
-      originalLoanApplicationId,
-      localLoanApplicationId
+    const existing = mappings.get(originalValue);
+    if (existing === localValue) {
+      return false;
+    }
+
+    mappings.set(originalValue, localValue);
+    logger.info('Registered identifier mapping', {
+      identifierType,
+      originalValue,
+      localValue
     });
     return true;
   }
 
+  registerLoanApplicationIdMapping(originalLoanApplicationId, localLoanApplicationId) {
+    return this.registerIdentifierMapping(
+      'loanApplicationId',
+      originalLoanApplicationId,
+      localLoanApplicationId
+    );
+  }
+
   getMappedLoanApplicationId(loanApplicationId) {
-    if (!loanApplicationId) return loanApplicationId;
-    return this.loanApplicationIdMappings.get(loanApplicationId) || loanApplicationId;
+    return this.getMappedIdentifier('loanApplicationId', loanApplicationId);
+  }
+
+  getMappedIdentifier(identifierType, value) {
+    if (!identifierType || !value) return value;
+    const mappings = this.identifierMappings.get(identifierType);
+    if (!mappings) {
+      return value;
+    }
+    return mappings.get(value) || value;
+  }
+
+  remapReplayValue(value, keyHint = null, context = {}) {
+    if (typeof value === 'string') {
+      const identifierType = this.getIdentifierTypeForKeyInContext(keyHint, context);
+      if (identifierType) {
+        return this.getMappedIdentifier(identifierType, value);
+      }
+
+      return this.getMappedLoanApplicationId(value);
+    }
+
+    if (Array.isArray(value)) {
+      return value.map(item => this.remapReplayValue(item, keyHint, context));
+    }
+
+    if (value && typeof value === 'object') {
+      const remapped = {};
+      for (const [key, nestedValue] of Object.entries(value)) {
+        remapped[key] = this.remapReplayValue(nestedValue, key, context);
+      }
+      return remapped;
+    }
+
+    return value;
   }
 
   getLoanApplicationIdMappings() {
     return Object.fromEntries(this.loanApplicationIdMappings.entries());
+  }
+
+  getIdentifierMappings() {
+    return Object.fromEntries(
+      Array.from(this.identifierMappings.entries()).map(([identifierType, mappings]) => [
+        identifierType,
+        Object.fromEntries(mappings.entries())
+      ])
+    );
   }
 
   /**
@@ -361,6 +483,23 @@ export class StateManager {
       pendingRequests: this.pendingRequests.size,
       pendingResponses: this.pendingResponses.size,
       bufferedRequests: this._bufferedRequests.size
+    });
+  }
+
+  clearReplayTransientState() {
+    for (const pending of this.pendingRequests.values()) {
+      clearTimeout(pending.timeoutHandle);
+    }
+
+    this.pendingRequests.clear();
+    this.pendingResponses.clear();
+    this._bufferedRequests.clear();
+    this.responseHeaders.clear();
+
+    logger.info('Cleared transient replay state', {
+      pendingRequests: 0,
+      pendingResponses: 0,
+      bufferedRequests: 0
     });
   }
 

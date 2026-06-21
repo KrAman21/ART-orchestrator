@@ -110,6 +110,18 @@ export const REPLAY_SPECIAL_CASES = [
     ]
   },
   {
+    logTag: 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated fetch-offer async callbacks to be skipped for the same journey context; branch-advance observations can also trigger the skip earlier.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true,
+    requireBranchAdvance: false,
+    advanceWhenSeenLogTags: [
+      'CHECK ELIGIBILITY STATUS API_REQUEST',
+      'FlipKart-HardEligibilityStatus_REQUEST'
+    ]
+  },
+  {
     logTag: 'LSP-GetKFS_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow duplicate KFS gateway requests to be skipped once replay has already advanced into the post-KFS branch for the same context.',
@@ -133,35 +145,15 @@ export const REPLAY_SPECIAL_CASES = [
     ]
   },
   {
-    logTag: 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
-    handler: 'maybeSkipOptionalRepeatedEntry',
-    description: 'Allow repeated in-progress fetch-offer callbacks to be skipped once the live replay has already advanced into the terminal hard-eligibility rejection branch.',
-    optionalAfterSeconds: 5,
-    requirePriorProcessedOccurrence: true,
-    requireBranchAdvance: true,
-    advanceWhenSeenLogTags: [
-      'FlipKart-HardEligibilityStatus_RESPONSE',
-      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
-    ],
-    skipWhenPriorProcessedEntries: [
-      {
-        logTag: 'FlipKart-HardEligibilityStatus_RESPONSE',
-        payloadPath: 'status',
-        equals: 'FAILURE'
-      }
-    ]
-  },
-  {
     logTag: 'HARD_ELIGIBILITY_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
-    description: 'Allow hard-eligibility lender calls to be skipped when the live journey has already advanced into the downstream fetch-offer/callback branch for the same context, including flows where the gateway->lender call is skipped entirely in local replay.',
+    description: 'Allow repeated hard-eligibility lender calls to be skipped when replay already advanced into profile-ingestion or fetch-offer steps for the same context.',
     optionalAfterSeconds: 5,
-    requirePriorProcessedOccurrence: false,
+    requirePriorProcessedOccurrence: true,
     advanceWhenSeenLogTags: [
       'PROFILE_INGESTION_REQUEST',
       'LSP-FetchOfferRequest_REQUEST',
-      'FlipKart-HardEligibility_RESPONSE',
-      'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
+      'FlipKart-HardEligibility_RESPONSE'
     ]
   },
   {
@@ -174,30 +166,16 @@ export const REPLAY_SPECIAL_CASES = [
       'FlipKart-GetRedirectionURL_REQUEST',
       'FlipKart-GetRedirectionURL_RESPONSE'
     ]
-  },
-  {
-    logTag: 'LenderLineStatus_REQUEST',
-    handler: 'triggerGatewayCall',
-    description:
-      'LenderLineStatus_REQUEST (CORE→GATEWAY) is no longer initiated by LSP in the new code path for standard checkout flows. ' +
-      'ART triggers the call to /gateway/v1.0/lineStatus itself after a short wait, ' +
-      'unless the preceding logs indicate a Refund or FetchLineStatus journey (in which case LSP will make the call as before).',
-    triggerAfterSeconds: 2,
-    endpoint: '/gateway/v1.0/lineStatus',
-    // If any of these logTags appear in the preceding processed entries for this
-    // order, LSP will invoke LenderLineStatus itself — do NOT trigger from ART.
-    skipIfPrecedingLogTags: [
-      'FlipKart-Refund_REQUEST',
-      'FlipKart-LineOnboarding-FetchLineStatus_REQUEST'
-    ]
-  },
-  {
-    logTag: 'GENERATE PARTNER AUTH TOKEN_REQUEST',
-    handler: 'skipAfterTimeoutFallback',
-    description: 'If the gateway does not send the GENERATE PARTNER AUTH TOKEN call to ART within 4s, skip the req/resp pair — the auth token is likely already cached. If the request does arrive within 4s it is served normally from prod logs.',
-    optionalAfterSeconds: 4
   }
 ];
+
+export const POLLING_API_LOG_TAGS = new Set([
+  'FlipKart-GetRedirectionURL_REQUEST'
+]);
+
+export const SKIPPABLE_ASYNC_API_LOG_TAGS = new Set([
+  'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
+]);
 
 export const THEMIS_ELIGIBILITY_LOG_TAG = 'Themis-Eligibility_REQUEST';
 export const THEMIS_KFS_LOG_TAG = 'Themis-KFS_REQUEST';
@@ -208,6 +186,14 @@ export function isThemisEligibilitySpecialCase(logTag) {
 
 export function isThemisKfsSpecialCase(logTag) {
   return logTag === THEMIS_KFS_LOG_TAG;
+}
+
+export function isPollingApiLogTag(logTag) {
+  return POLLING_API_LOG_TAGS.has(logTag);
+}
+
+export function isSkippableAsyncApiLogTag(logTag) {
+  return SKIPPABLE_ASYNC_API_LOG_TAGS.has(logTag);
 }
 
 export function getOptionalRepeatPolicy(config, currentEntry) {

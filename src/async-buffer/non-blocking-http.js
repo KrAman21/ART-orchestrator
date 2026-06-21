@@ -56,14 +56,6 @@ export class NonBlockingHttpClient {
       const responseBodyStr = typeof response.data === 'string' 
         ? response.data 
         : JSON.stringify(response.data);
-      logger.logOutgoing('RESPONSE', baseUrl || 'unknown', endpoint, response.data, {
-        requestId,
-        logTag,
-        sourceDestination,
-        status: response.status,
-        statusText: response.statusText,
-        responseType: 'async-http-response'
-      });
       logger.info('HTTP_RESPONSE_RECEIVED', { 
         requestId, 
         logTag,
@@ -82,6 +74,18 @@ export class NonBlockingHttpClient {
       const expectedApiFailure =
         !!apiFailure && this.shouldTreatApiFailureAsExpected(activeReq, response, apiFailure);
       const hasFailure = response.error || response.status >= 500 || (!!apiFailure && !expectedApiFailure);
+
+      if (!response.error) {
+        const [source = null, destination = null] = (sourceDestination || '').split('_');
+        logger.logFinalOutgoing(source, destination, endpoint, activeReq?.payload ?? payload, {
+          requestId,
+          logTag,
+          sourceDestination,
+          status: response.status,
+          statusText: response.statusText,
+          responseType: 'async-http-response'
+        });
+      }
       
       logger.info('Non-blocking request result', { 
         requestId, 
@@ -168,6 +172,8 @@ export class NonBlockingHttpClient {
       logger.error('Cannot record failure - orderId not set', { requestId });
     }
 
+    const derivedResponseError = this.extractResponseErrorDetails(response);
+
     const failureInfo = {
       requestId,
       logTag: activeReq.logTag,
@@ -178,8 +184,8 @@ export class NonBlockingHttpClient {
       error: response.error || !!apiFailure || true,
       errorMessage: apiFailure 
         ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`
-        : (response.message || (exception && exception.message) || 'Unknown error'),
-      errorCode: apiFailure?.error_code || apiFailure?.code || null,
+        : (derivedResponseError.message || response.message || (exception && exception.message) || 'Unknown error'),
+      errorCode: apiFailure?.error_code || apiFailure?.code || derivedResponseError.code || null,
       errorStack: exception && exception.stack,
       httpStatus: response.status,
       responseData: response.data || response,
@@ -233,6 +239,41 @@ export class NonBlockingHttpClient {
       logger.debug('checkApiFailure error', { error: e.message });
       return null;
     }
+  }
+
+  extractResponseErrorDetails(response) {
+    const data = response?.data;
+    if (!data) {
+      return { message: null, code: null };
+    }
+
+    let parsed = data;
+    if (typeof parsed === 'string') {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        return { message: parsed, code: null };
+      }
+    }
+
+    if (!parsed || typeof parsed !== 'object') {
+      return { message: null, code: null };
+    }
+
+    return {
+      message:
+        parsed.error_message ||
+        parsed.errorMessage ||
+        parsed.description ||
+        parsed.message ||
+        parsed.error ||
+        null,
+      code:
+        parsed.error_code ||
+        parsed.errorCode ||
+        parsed.code ||
+        null
+    };
   }
   
   async waitForResponse(requestId, timeoutMs = 30000) {

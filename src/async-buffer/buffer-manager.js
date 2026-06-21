@@ -1,6 +1,17 @@
 import { DeferredPromise } from './deferred-promise.js';
 import { logger } from '../utils/logger.js';
 import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
+import { compareLog } from '../services/comparator.js';
+
+const PAYLOAD_SIGNAL_WEIGHTS = [
+  ['loanApplicationStatus', 250],
+  ['status', 120],
+  ['offerType', 80],
+  ['errorCode', 70],
+  ['message', 40],
+  ['loanMetadata.isLenderApproved', 120],
+  ['result.status', 100]
+];
 
 export class BufferManager {
   constructor(config = {}) {
@@ -8,6 +19,8 @@ export class BufferManager {
     this.responseBuffer = new Map();
     this.pendingPromises = new Map();
     this.requestWaiters = new Set();
+    this.replayFallbackIncomingRequests = new Map();
+    this.replayFallbackResponses = new Map();
     this.sequenceCounter = 0;
     this.lastMatchTimeout = null;
     
@@ -16,6 +29,7 @@ export class BufferManager {
       defaultTimeoutMs: 60000,
       cleanupIntervalMs: 1000,
       completedRetentionMs: 5000,
+      preservedReplayFallbackWaitMs: 5000,
       ...config
     };
     
@@ -31,16 +45,127 @@ export class BufferManager {
     }, this.config.cleanupIntervalMs);
   }
 
+  _cancelAllWaiters() {
+    for (const waiter of Array.from(this.requestWaiters)) {
+      waiter.resolve(null);
+    }
+  }
+
+  _failBufferedIncomingRequests(message) {
+    for (const [key, entry] of this.incomingRequests.entries()) {
+      entry.state = 'failed';
+      entry.completedAt = Date.now();
+      entry.deferred.reject(new Error(message));
+      this.incomingRequests.delete(key);
+    }
+  }
+
+  _isGatewayLenderRequest(request = {}) {
+    return request?.source === 'GATEWAY' && request?.destination === 'LENDER';
+  }
+
+  _isGatewayLenderResponse(entry = {}) {
+    return entry?.metadata?.sourceDestination === 'GATEWAY_LENDER';
+  }
+
+  _buildReplayDuplicateKey(baseKey) {
+    this.sequenceCounter += 1;
+    return `${baseKey}:replay-${this.sequenceCounter}`;
+  }
+
+  _resetPreservedIncomingEntry(entry) {
+    const deferred = new DeferredPromise(this.config.defaultTimeoutMs);
+    deferred.promise.catch(() => {});
+
+    entry.deferred = deferred;
+    entry.state = 'buffered';
+    entry.claimedAt = null;
+    entry.completedAt = null;
+    entry.preservedOnRewind = true;
+    entry.preservedAt = Date.now();
+
+    return entry;
+  }
+
+  _storeIncomingReplayFallback(entry) {
+    if (!entry?.key || !entry?.request) {
+      return;
+    }
+
+    if (!this._isGatewayLenderRequest(entry.request)) {
+      return;
+    }
+
+    this.replayFallbackIncomingRequests.set(entry.key, {
+      key: entry.key,
+      request: entry.request,
+      timestamp: entry.timestamp,
+      completedAt: entry.completedAt || Date.now()
+    });
+  }
+
+  _storeResponseReplayFallback(requestId, entry) {
+    if (!requestId || !this._isGatewayLenderResponse(entry)) {
+      return;
+    }
+
+    this.replayFallbackResponses.set(requestId, {
+      response: entry.response,
+      isError: entry.isError,
+      timestamp: entry.timestamp,
+      metadata: {
+        ...(entry.metadata || {})
+      }
+    });
+  }
+
+  _rehydrateReplayFallbacks() {
+    for (const fallback of this.replayFallbackIncomingRequests.values()) {
+      if (this.incomingRequests.has(fallback.key)) {
+        continue;
+      }
+
+      const deferred = new DeferredPromise(this.config.defaultTimeoutMs);
+      deferred.promise.catch(() => {});
+
+      this.incomingRequests.set(fallback.key, {
+        request: fallback.request,
+        deferred,
+        timestamp: fallback.timestamp,
+        key: fallback.key,
+        state: 'buffered',
+        claimedAt: null,
+        completedAt: null,
+        preservedOnRewind: true,
+        preservedAt: Date.now()
+      });
+    }
+
+    for (const [requestId, fallback] of this.replayFallbackResponses.entries()) {
+      if (this.responseBuffer.has(requestId)) {
+        continue;
+      }
+
+      this.responseBuffer.set(requestId, {
+        response: fallback.response,
+        isError: fallback.isError,
+        timestamp: fallback.timestamp,
+        metadata: {
+          ...(fallback.metadata || {}),
+          preservedOnRewind: true
+        },
+        preservedOnRewind: true
+      });
+    }
+  }
+
   stop() {
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
       this.cleanupTimer = null;
     }
 
-    for (const waiter of this.requestWaiters) {
-      clearTimeout(waiter.timer);
-    }
-    this.requestWaiters.clear();
+    this._cancelAllWaiters();
   }
 
   extractCorrelationIdentifiers(request = {}) {
@@ -53,6 +178,20 @@ export class BufferManager {
       lenderOrgId: request.lenderOrgId || request.lender_org_id || request.payload?.lenderOrgId || request.payload?.lender_org_id || request.payload?.themisDetail?.lenderOrgId || null,
       orderId: request.orderId || request.order_id || request.payload?.orderId || request.payload?.order_id || null
     };
+  }
+
+  extractExpectedIdentifiers(expectedEntry = {}) {
+    return this.extractCorrelationIdentifiers({
+      requestId: expectedEntry.requestId,
+      clientRequestId: expectedEntry.clientRequestId,
+      traceId: expectedEntry.traceId,
+      sequenceId: expectedEntry.sequenceId,
+      loanApplicationId: expectedEntry.loanApplicationId,
+      lenderOrgId: expectedEntry.lenderOrgId,
+      orderId: expectedEntry.orderId,
+      payload: expectedEntry.payload,
+      headers: expectedEntry.headers
+    });
   }
   
   generateKey(request) {
@@ -78,17 +217,31 @@ export class BufferManager {
   }
   
   async addIncomingRequest(request) {
-    const key = this.generateKey(request);
+    let key = this.generateKey(request);
     const existing = this.incomingRequests.get(key);
 
     if (existing && !this._isTerminalRequestState(existing.state)) {
+      if (existing.preservedOnRewind) {
+        key = this._buildReplayDuplicateKey(key);
+      } else {
+        logger.warn('Duplicate request buffered, reusing existing wait handle', {
+          key,
+          state: existing.state,
+          requestId: request.requestId || null,
+          logTag: request.logTag
+        });
+        return existing;
+      }
+    }
+
+    if (this.incomingRequests.has(key)) {
       logger.warn('Duplicate request buffered, reusing existing wait handle', {
         key,
-        state: existing.state,
+        state: this.incomingRequests.get(key)?.state,
         requestId: request.requestId || null,
         logTag: request.logTag
       });
-      return existing;
+      return this.incomingRequests.get(key);
     }
 
     if (this.incomingRequests.size >= this.config.maxBufferSize) {
@@ -105,7 +258,9 @@ export class BufferManager {
       key,
       state: 'buffered',
       claimedAt: null,
-      completedAt: null
+      completedAt: null,
+      preservedOnRewind: false,
+      preservedAt: null
     };
     
     this.incomingRequests.set(key, entry);
@@ -127,7 +282,10 @@ export class BufferManager {
   }
 
   async waitForMatchingRequest(expectedEntry, timeoutMs = this.config.defaultTimeoutMs) {
-    const claimed = this._claimOldestMatchingRequest(expectedEntry);
+    const shouldPreferFreshGatewayLender = this._isGatewayLenderRequest(expectedEntry);
+    const claimed = this._claimOldestMatchingRequest(expectedEntry, {
+      includePreserved: !shouldPreferFreshGatewayLender
+    });
     if (claimed) {
       logger.info('Found and claimed buffered request immediately', {
         key: claimed.key,
@@ -136,12 +294,21 @@ export class BufferManager {
       return claimed;
     }
 
+    const preservedFallback = this.findMatchingRequest(expectedEntry, {
+      includePreserved: true,
+      onlyPreserved: true,
+      claim: false
+    });
+
     // Check if there's already a waiter for this expected entry
     for (const waiter of this.requestWaiters) {
-      if (this._matchesRequest(waiter.expectedEntry, expectedEntry)) {
+      const waiterMatchDetails = this._buildExpectedEntryMatchDetails(waiter.expectedEntry, expectedEntry);
+      if (waiterMatchDetails.matches) {
         logger.warn('Duplicate waiter detected, reusing existing waiter', {
           expected: expectedEntry.toString(),
-          existingWaiter: waiter.expectedEntry.toString()
+          existingWaiter: waiter.expectedEntry.toString(),
+          differenceCount: waiterMatchDetails.differenceCount,
+          exactSignals: waiterMatchDetails.exactSignals
         });
         // Return the existing waiter's promise
         return new Promise((resolve) => {
@@ -154,10 +321,19 @@ export class BufferManager {
       }
     }
 
+    const shouldFastTrackPreservedFallback =
+      !!preservedFallback && this._isGatewayLenderRequest(expectedEntry);
+    const effectiveTimeoutMs = shouldFastTrackPreservedFallback
+      ? Math.min(timeoutMs, this.config.preservedReplayFallbackWaitMs)
+      : timeoutMs;
+
     logger.info('Waiting for buffered request match', {
       expected: expectedEntry.toString(),
-      timeoutMs,
-      currentBufferSize: this.incomingRequests.size
+      timeoutMs: effectiveTimeoutMs,
+      requestedTimeoutMs: timeoutMs,
+      currentBufferSize: this.incomingRequests.size,
+      hasPreservedFallback: !!preservedFallback,
+      waitingForFreshReplayBeforeFallback: shouldFastTrackPreservedFallback
     });
 
     return new Promise(resolve => {
@@ -176,6 +352,18 @@ export class BufferManager {
 
       waiter.timer = setTimeout(() => {
         this.requestWaiters.delete(waiter);
+
+        if (preservedFallback) {
+          const replayFallback = this.claimPreservedReplayRequest(preservedFallback.key, expectedEntry);
+          if (replayFallback) {
+            logger.info('Using preserved replay request after wait timeout', {
+              key: replayFallback.key,
+              expected: expectedEntry.toString()
+            });
+            resolve(replayFallback);
+            return;
+          }
+        }
         
         // Enhanced logging to debug matching issues
         const bufferedRequests = Array.from(this.incomingRequests.entries()).map(([key, entry]) => ({
@@ -193,7 +381,7 @@ export class BufferManager {
           expectedLogTag: expectedEntry.logTag,
           expectedSource: expectedEntry.source,
           expectedDestination: expectedEntry.destination,
-          timeoutMs,
+          timeoutMs: effectiveTimeoutMs,
           bufferedRequests,
           bufferSize: this.incomingRequests.size
         };
@@ -203,12 +391,12 @@ export class BufferManager {
           expectedLogTag: expectedEntry.logTag,
           expectedSource: expectedEntry.source,
           expectedDestination: expectedEntry.destination,
-          timeoutMs,
+          timeoutMs: effectiveTimeoutMs,
           bufferedRequests,
           bufferSize: this.incomingRequests.size
         });
         resolve(null);
-      }, timeoutMs);
+      }, effectiveTimeoutMs);
 
       this.requestWaiters.add(waiter);
     });
@@ -237,12 +425,15 @@ export class BufferManager {
     entry.state = 'completed';
     entry.completedAt = Date.now();
     entry.deferred.resolve(response);
+    this._storeIncomingReplayFallback(entry);
 
     logger.info('Response delivered', {
       key,
       requestId: entry.request.requestId || null,
       logTag: entry.request.logTag
     });
+
+    this.incomingRequests.delete(key);
 
     return true;
   }
@@ -267,6 +458,8 @@ export class BufferManager {
       logTag: entry.request.logTag,
       error: error.message
     });
+
+    this.incomingRequests.delete(key);
 
     return true;
   }
@@ -321,6 +514,7 @@ export class BufferManager {
     }
 
     this.responseBuffer.delete(best.requestId);
+    this._storeResponseReplayFallback(best.requestId, best.entry);
 
     logger.info('Found buffered response by metadata', {
       logTag,
@@ -488,12 +682,18 @@ export class BufferManager {
     const entry = this.responseBuffer.get(requestId);
     if (entry) {
       this.responseBuffer.delete(requestId);
+      this._storeResponseReplayFallback(requestId, entry);
       return entry;
     }
     return null;
   }
   
-  findMatchingRequest(expectedEntry) {
+  findMatchingRequest(expectedEntry, options = {}) {
+    const {
+      includePreserved = true,
+      onlyPreserved = false,
+      claim = true
+    } = options;
     const matches = [];
     
     logger.debug('Finding matching request', {
@@ -505,8 +705,21 @@ export class BufferManager {
     });
     
     for (const [key, entry] of this.incomingRequests) {
-      if (entry.state === 'buffered' && this._matchesEntry(entry.request, expectedEntry)) {
-        matches.push({ key, entry });
+      if (entry.state !== 'buffered') {
+        continue;
+      }
+
+      if (onlyPreserved && !entry.preservedOnRewind) {
+        continue;
+      }
+
+      if (!includePreserved && entry.preservedOnRewind) {
+        continue;
+      }
+
+      const matchDetails = this._buildRequestMatchDetails(entry.request, expectedEntry);
+      if (matchDetails.matches) {
+        matches.push({ key, entry, matchDetails });
       }
     }
     
@@ -523,24 +736,91 @@ export class BufferManager {
       });
       return null;
     }
-    
-    matches.sort((a, b) => a.entry.timestamp - b.entry.timestamp);
-    const oldest = matches[0];
-    
+
+    const sequenceAlignedMatches = matches.filter(({ entry }) =>
+      this._sharesSequenceContext(entry.request, expectedEntry)
+    );
+    const shouldUseSequenceFifo = sequenceAlignedMatches.length > 1;
+    const rankedMatches = shouldUseSequenceFifo ? sequenceAlignedMatches : matches;
+
+    if (shouldUseSequenceFifo) {
+      logger.info('Using FIFO ordering for repeated same-context buffered requests', {
+        expected: expectedEntry.toString(),
+        candidateCount: rankedMatches.length
+      });
+    }
+
+    rankedMatches.sort((a, b) => {
+      if (shouldUseSequenceFifo) {
+        if (a.entry.timestamp !== b.entry.timestamp) {
+          return a.entry.timestamp - b.entry.timestamp;
+        }
+        if (a.entry.preservedOnRewind !== b.entry.preservedOnRewind) {
+          return a.entry.preservedOnRewind ? -1 : 1;
+        }
+      }
+      if (a.entry.preservedOnRewind !== b.entry.preservedOnRewind) {
+        return a.entry.preservedOnRewind ? 1 : -1;
+      }
+      if (b.matchDetails.exactMatchCount !== a.matchDetails.exactMatchCount) {
+        return b.matchDetails.exactMatchCount - a.matchDetails.exactMatchCount;
+      }
+      if (a.matchDetails.differenceCount !== b.matchDetails.differenceCount) {
+        return a.matchDetails.differenceCount - b.matchDetails.differenceCount;
+      }
+      if (b.matchDetails.score !== a.matchDetails.score) {
+        return b.matchDetails.score - a.matchDetails.score;
+      }
+      return a.entry.timestamp - b.entry.timestamp;
+    });
+    const oldest = rankedMatches[0];
+
+    if (!claim) {
+      return oldest.entry;
+    }
+
     oldest.entry.state = 'claimed';
     oldest.entry.claimedAt = Date.now();
-    
+
     logger.info('Request matched', {
       key: oldest.key,
       bufferSize: this.incomingRequests.size,
-      totalMatches: matches.length,
+      totalMatches: rankedMatches.length,
       bufferedAt: oldest.entry.timestamp,
       claimedAt: oldest.entry.claimedAt,
       waitTime: oldest.entry.claimedAt - oldest.entry.timestamp,
-      expected: expectedEntry.toString()
+      expected: expectedEntry.toString(),
+      matchScore: oldest.matchDetails.score,
+      differenceCount: oldest.matchDetails.differenceCount,
+      exactSignals: oldest.matchDetails.exactSignals,
+      preservedOnRewind: !!oldest.entry.preservedOnRewind
     });
-    
+
     return oldest.entry;
+  }
+
+  claimPreservedReplayRequest(key, expectedEntry) {
+    const entry = this.incomingRequests.get(key);
+    if (!entry || entry.state !== 'buffered' || !entry.preservedOnRewind) {
+      return null;
+    }
+
+    if (!this._matchesEntry(entry.request, expectedEntry)) {
+      return null;
+    }
+
+    entry.state = 'claimed';
+    entry.claimedAt = Date.now();
+
+    logger.info('Claimed preserved replay request', {
+      key,
+      expected: expectedEntry.toString(),
+      bufferedAt: entry.timestamp,
+      preservedAt: entry.preservedAt,
+      claimedAt: entry.claimedAt
+    });
+
+    return entry;
   }
 
   hasMatchingBufferedRequest(expectedEntry) {
@@ -585,7 +865,142 @@ export class BufferManager {
   }
   
   _matchesEntry(request, expectedEntry) {
-    return this._matchesRequest(request, expectedEntry);
+    return this._buildRequestMatchDetails(request, expectedEntry).matches;
+  }
+
+  _getNestedValue(obj, path) {
+    if (!obj || typeof obj !== 'object') {
+      return undefined;
+    }
+
+    return path.split('.').reduce((value, key) => {
+      if (value === null || value === undefined || typeof value !== 'object') {
+        return undefined;
+      }
+      return value[key];
+    }, obj);
+  }
+
+  _addPayloadSignals(expectedPayload, actualPayload, exactSignals) {
+    let score = 0;
+
+    for (const [path, weight] of PAYLOAD_SIGNAL_WEIGHTS) {
+      const expectedValue = this._getNestedValue(expectedPayload, path);
+      const actualValue = this._getNestedValue(actualPayload, path);
+
+      if (expectedValue === undefined || actualValue === undefined) {
+        continue;
+      }
+
+      if (expectedValue === actualValue) {
+        exactSignals.push(`payload:${path}`);
+        score += weight;
+      } else {
+        score -= weight * 2;
+      }
+    }
+
+    return score;
+  }
+
+  _buildExpectedEntryMatchDetails(leftExpectedEntry, rightExpectedEntry) {
+    if (!this._matchesRequest(leftExpectedEntry, rightExpectedEntry)) {
+      return {
+        matches: false,
+        score: Number.NEGATIVE_INFINITY,
+        differenceCount: Number.POSITIVE_INFINITY,
+        exactSignals: [],
+        exactMatchCount: 0
+      };
+    }
+
+    const exactSignals = [];
+    let score = 0;
+    let differenceCount = 0;
+
+    if (leftExpectedEntry.payload && rightExpectedEntry.payload) {
+      const comparison = compareLog(leftExpectedEntry.payload, rightExpectedEntry.payload, rightExpectedEntry.logTag);
+      differenceCount = comparison.differenceList?.length || 0;
+      score -= differenceCount;
+      score += this._addPayloadSignals(leftExpectedEntry.payload, rightExpectedEntry.payload, exactSignals);
+    }
+
+    return {
+      matches: differenceCount === 0 || exactSignals.length > 0,
+      score,
+      differenceCount,
+      exactSignals,
+      exactMatchCount: exactSignals.length
+    };
+  }
+
+  _buildRequestMatchDetails(incoming, expectedEntry) {
+    if (!this._matchesRequest(incoming, expectedEntry)) {
+      return {
+        matches: false,
+        score: Number.NEGATIVE_INFINITY,
+        differenceCount: Number.POSITIVE_INFINITY,
+        exactSignals: [],
+        exactMatchCount: 0
+      };
+    }
+
+    const incomingIds = this.extractCorrelationIdentifiers(incoming);
+    const expectedIds = this.extractExpectedIdentifiers(expectedEntry);
+    const exactSignals = [];
+    let score = 0;
+
+    const exactComparisons = [
+      ['requestId', 120],
+      ['clientRequestId', 90],
+      ['loanApplicationId', 80],
+      ['lenderOrgId', 60],
+      ['orderId', 50],
+      ['traceId', 40]
+    ];
+
+    for (const [field, weight] of exactComparisons) {
+      if (incomingIds[field] && expectedIds[field] && incomingIds[field] === expectedIds[field]) {
+        exactSignals.push(field);
+        score += weight;
+      }
+    }
+
+    let differenceCount = 0;
+    if (expectedEntry.payload && incoming.payload) {
+      const comparison = compareLog(expectedEntry.payload, incoming.payload, expectedEntry.logTag);
+      differenceCount = comparison.differenceList?.length || 0;
+      score -= differenceCount;
+      score += this._addPayloadSignals(expectedEntry.payload, incoming.payload, exactSignals);
+    }
+
+    return {
+      matches: true,
+      score,
+      differenceCount,
+      exactSignals,
+      exactMatchCount: exactSignals.length
+    };
+  }
+
+  _sharesSequenceContext(request, expectedEntry) {
+    const incomingIds = this.extractCorrelationIdentifiers(request);
+    const expectedIds = this.extractExpectedIdentifiers(expectedEntry);
+    const fields = ['loanApplicationId', 'lenderOrgId', 'orderId', 'clientRequestId'];
+    let hasSharedContextField = false;
+
+    for (const field of fields) {
+      if (!expectedIds[field]) {
+        continue;
+      }
+
+      hasSharedContextField = true;
+      if (incomingIds[field] !== expectedIds[field]) {
+        return false;
+      }
+    }
+
+    return hasSharedContextField;
   }
   
   onWorkAvailable(callback) {
@@ -628,6 +1043,10 @@ export class BufferManager {
     const expired = [];
     
     for (const [key, entry] of this.incomingRequests) {
+      if (entry.preservedOnRewind || this._isGatewayLenderRequest(entry.request)) {
+        continue;
+      }
+
       if (entry.state === 'buffered' && now - entry.timestamp > this.config.defaultTimeoutMs) {
         expired.push(key);
       } else if (
@@ -654,6 +1073,10 @@ export class BufferManager {
     
     const expiredResponses = [];
     for (const [key, entry] of this.responseBuffer) {
+      if (entry.preservedOnRewind || entry.metadata?.preservedOnRewind) {
+        continue;
+      }
+
       if (now - entry.timestamp > this.config.defaultTimeoutMs) {
         expiredResponses.push(key);
       }
@@ -673,12 +1096,43 @@ export class BufferManager {
       pendingPromises: this.pendingPromises.size
     };
   }
+
+  resetForReplay() {
+    this._cancelAllWaiters();
+    for (const [key, entry] of Array.from(this.incomingRequests.entries())) {
+      this._storeIncomingReplayFallback(entry);
+    }
+
+    for (const [requestId, responseEntry] of Array.from(this.responseBuffer.entries())) {
+      if (this._isGatewayLenderResponse(responseEntry)) {
+        this._storeResponseReplayFallback(requestId, responseEntry);
+        continue;
+      }
+
+      this.responseBuffer.delete(requestId);
+    }
+
+    this.incomingRequests.clear();
+    this.responseBuffer.clear();
+    this._rehydrateReplayFallbacks();
+
+    this.pendingPromises.clear();
+    this.lastMatchTimeout = null;
+    this.hasWork = false;
+
+    logger.info('Reset async buffer state for replay rewind', {
+      preservedIncomingRequests: this.replayFallbackIncomingRequests.size,
+      preservedResponses: this.replayFallbackResponses.size
+    });
+  }
   
   clear() {
     this.stop();
-    this.incomingRequests.clear();
+    this._failBufferedIncomingRequests('Buffer cleared before request completed');
     this.responseBuffer.clear();
     this.pendingPromises.clear();
+    this.replayFallbackIncomingRequests.clear();
+    this.replayFallbackResponses.clear();
   }
 
   _isTerminalRequestState(state) {
@@ -705,8 +1159,8 @@ export class BufferManager {
     return false;
   }
 
-  _claimOldestMatchingRequest(expectedEntry) {
-    return this.findMatchingRequest(expectedEntry);
+  _claimOldestMatchingRequest(expectedEntry, options = {}) {
+    return this.findMatchingRequest(expectedEntry, options);
   }
 
   _notifyMatchingWaiters(entry) {
@@ -714,35 +1168,60 @@ export class BufferManager {
       return;
     }
 
+    const matchingWaiters = [];
     for (const waiter of this.requestWaiters) {
-      if (!this._matchesEntry(entry.request, waiter.expectedEntry)) {
+      const matchDetails = this._buildRequestMatchDetails(entry.request, waiter.expectedEntry);
+      if (!matchDetails.matches) {
         continue;
       }
 
-      if (entry.state === 'buffered') {
-        entry.state = 'claimed';
-        entry.claimedAt = Date.now();
-        
-        logger.info('Request matched via notify', {
-          key: entry.key,
-          bufferSize: this.incomingRequests.size,
-          totalMatches: 1,
-          bufferedAt: entry.timestamp,
-          claimedAt: entry.claimedAt,
-          waitTime: entry.claimedAt - entry.timestamp,
-          expected: waiter.expectedEntry.toString()
-        });
-      } else {
-        logger.warn('Request already claimed, skipping notify', {
-          key: entry.key,
-          state: entry.state,
-          expected: waiter.expectedEntry.toString()
-        });
-        continue;
-      }
+      matchingWaiters.push({ waiter, matchDetails });
+    }
 
-      waiter.resolve(entry);
+    if (matchingWaiters.length === 0) {
       return;
     }
+
+    matchingWaiters.sort((a, b) => {
+      if (b.matchDetails.exactMatchCount !== a.matchDetails.exactMatchCount) {
+        return b.matchDetails.exactMatchCount - a.matchDetails.exactMatchCount;
+      }
+      if (a.matchDetails.differenceCount !== b.matchDetails.differenceCount) {
+        return a.matchDetails.differenceCount - b.matchDetails.differenceCount;
+      }
+      if (b.matchDetails.score !== a.matchDetails.score) {
+        return b.matchDetails.score - a.matchDetails.score;
+      }
+      return 0;
+    });
+
+    const bestMatch = matchingWaiters[0];
+
+    if (entry.state === 'buffered') {
+      entry.state = 'claimed';
+      entry.claimedAt = Date.now();
+      
+      logger.info('Request matched via notify', {
+        key: entry.key,
+        bufferSize: this.incomingRequests.size,
+        totalMatches: matchingWaiters.length,
+        bufferedAt: entry.timestamp,
+        claimedAt: entry.claimedAt,
+        waitTime: entry.claimedAt - entry.timestamp,
+        expected: bestMatch.waiter.expectedEntry.toString(),
+        matchScore: bestMatch.matchDetails.score,
+        differenceCount: bestMatch.matchDetails.differenceCount,
+        exactSignals: bestMatch.matchDetails.exactSignals
+      });
+    } else {
+      logger.warn('Request already claimed, skipping notify', {
+        key: entry.key,
+        state: entry.state,
+        expected: bestMatch.waiter.expectedEntry.toString()
+      });
+      return;
+    }
+
+    bestMatch.waiter.resolve(entry);
   }
 }

@@ -3,13 +3,23 @@ import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
 
+function remapReplayPayloadForEntry(stateManager, payload, entry) {
+  return stateManager?.remapReplayValue
+    ? stateManager.remapReplayValue(payload, null, { logTag: entry?.logTag })
+    : payload;
+}
+
+function transformReplayPayloadForEntry(stateManager, payload, entry) {
+  return transformRequest(remapReplayPayloadForEntry(stateManager, payload, entry), entry?.logTag);
+}
+
 /**
  * RequestForwarder - Handles request forwarding and external response management
  * 
  * Extracted from orchestrator.js, this class is responsible for:
  * - Forwarding validated requests to actual destination services
  * - Handling responses from downstream services (GW/LSP)
- * - Managing external service responses (LENDER callbacks, webhooks)
+ * - Managing external service responses
  * - Tracking pending external requests for async handling
  * 
  * Dependencies are injected via constructor for better testability and separation of concerns.
@@ -31,7 +41,6 @@ export class RequestForwarder {
    * @param {Function} dependencies.callbacks.recordFailure - Record failed step
    * @param {Function} dependencies.callbacks.getServiceBaseUrl - Get service base URL
    * @param {Function} dependencies.callbacks.processNextLogEntry - Process next log entry
-   * @param {Function} dependencies.callbacks.triggerWebhooks - Trigger webhooks
    * @param {Function} dependencies.callbacks.trackAsyncCompletion - Track async completion
    */
   constructor({ validator, stateManager, logger, config, callbacks }) {
@@ -49,9 +58,6 @@ export class RequestForwarder {
     // Map<contextKey, incoming>
     this.earlyExternalResponses = new Map();
 
-    // Track webhooks to trigger after responding to external calls
-    // Map<contextKey, Array> - webhooks to trigger after response is sent back
-    this.pendingPostResponseWebhooks = new Map();
   }
 
   shouldAutoProcessNextLogEntry() {
@@ -183,35 +189,9 @@ export class RequestForwarder {
       // Track this pending external request by context for out-of-order matching
       const contextKey = this.callbacks.getContextKey(expectedEntry);
 
-      // For LENDER calls, check for webhooks that should fire BEFORE the response
-      let webhooksBefore = [];
-      if (destination === 'LENDER') {
-        webhooksBefore = this.validator.findWebhooksForLenderCall(expectedEntry, expectedResponse, 'before');
-        if (webhooksBefore.length > 0) {
-          this.logger.info(`Found ${webhooksBefore.length} webhook(s) to trigger before LENDER response`, {
-            requestEntry: expectedEntry.toString()
-          });
-          // Trigger webhooks before responding
-          await this.callbacks.triggerWebhooks(webhooksBefore);
-        }
-      }
-
       // Log mocked request now. The replayed response for GATEWAY->LENDER is logged
       // only when sequence reaches the actual LENDER->GATEWAY response entry.
       this.logger.logApiCall(expectedEntry.source, expectedEntry.destination, api, 'REQUEST', expectedEntry.index);
-
-      // For LENDER calls, check for webhooks that should fire AFTER the response (CASE 7)
-      let webhooksAfter = [];
-      if (destination === 'LENDER') {
-        webhooksAfter = this.validator.findWebhooksAfterLenderResponse(expectedResponse, null);
-        if (webhooksAfter.length > 0) {
-          this.logger.info(`Found ${webhooksAfter.length} webhook(s) to trigger after LENDER response`, {
-            responseEntry: expectedResponse.toString()
-          });
-          // Store webhooks to trigger after we send the response back to GW
-          this.pendingPostResponseWebhooks.set(contextKey, webhooksAfter);
-        }
-      }
 
       if (destination === 'LENDER') {
         let resolveExternal, rejectExternal;
@@ -279,7 +259,7 @@ export class RequestForwarder {
           });
           return {
             success: true,
-            payload: transformRequest(expectedResponse.payload, expectedResponse.logTag),
+            payload: transformReplayPayloadForEntry(this.stateManager, expectedResponse.payload, expectedResponse),
             tracked: true,
             externalSkipped: true,
             deferredExternalResponse: true
@@ -294,71 +274,7 @@ export class RequestForwarder {
         };
       }
 
-      // Only track external call if there are webhooks to wait for
-      const totalWebhooks = webhooksBefore.length + webhooksAfter.length;
-      if (totalWebhooks > 0) {
-        // Create a promise that will resolve when the external response arrives
-        let resolveExternal, rejectExternal;
-        const externalPromise = new Promise((resolve, reject) => {
-          resolveExternal = resolve;
-          rejectExternal = reject;
-        });
-
-        // Set a timeout for the external response (default 30s)
-        const externalTimeoutMs = this.config.timeoutMs || 10000;
-        const timeoutHandle = setTimeout(() => {
-          if (this.pendingExternalRequests.has(contextKey)) {
-            this.pendingExternalRequests.delete(contextKey);
-            rejectExternal(new Error(
-              `External request ${contextKey} timed out after ${externalTimeoutMs}ms`
-            ));
-          }
-        }, externalTimeoutMs);
-
-        this.pendingExternalRequests.set(contextKey, {
-          requestEntry: expectedEntry,
-          responseEntry: expectedResponse,
-          promise: externalPromise,
-          resolve: resolveExternal,
-          reject: rejectExternal,
-          timeoutHandle
-        });
-
-        // Check if response arrived early and process it now
-        const earlyResponse = this.earlyExternalResponses.get(contextKey);
-        if (earlyResponse) {
-          this.logger.info('Processing early-arrived response now', { contextKey });
-          this.earlyExternalResponses.delete(contextKey);
-          // Process immediately (but don't return - continue with normal response)
-          this.handleExternalServiceResponse(earlyResponse).catch(err => {
-            this.logger.error('Error processing early response', { error: err.message });
-          });
-        }
-
-        this.logger.debug('Tracked pending external request', {
-          contextKey,
-          requestIndex: expectedEntry.index,
-          expectedResponseIndex: expectedResponse.index
-        });
-
-        // Track this external call so we can wait for it before returning response to caller
-        this.logger.info('Tracking external call for later wait', {
-          contextKey,
-          source: incoming.source,
-          destination: incoming.destination
-        });
-
-        // Return marker so caller knows to wait for all pending external calls
-        return {
-          success: true,
-          payload: transformRequest(expectedResponse.payload, expectedResponse.logTag),
-          tracked: true,
-          externalSkipped: true
-        };
-      }
-
-      // No webhooks expected - mark entries as processed and return immediately
-      this.logger.info('No webhooks expected for external call, completing immediately', {
+      this.logger.info('No sequence-driven lender callback expected for external call, completing immediately', {
         contextKey,
         destination
       });
@@ -377,7 +293,7 @@ export class RequestForwarder {
       // Return success immediately without tracking/waiting
       return {
         success: true,
-        payload: transformRequest(expectedResponse.payload, expectedResponse.logTag),
+        payload: transformReplayPayloadForEntry(this.stateManager, expectedResponse.payload, expectedResponse),
         tracked: false,
         externalSkipped: false,
         asyncComplete: isComplete
@@ -388,12 +304,6 @@ export class RequestForwarder {
       destination,
       api,
       requestId: incoming.requestId
-    });
-    this.logger.logOutgoing(incoming.source, incoming.destination, api, incoming.payload, {
-      requestId: incoming.requestId,
-      logTag: expectedEntry.logTag,
-      sourceDestination: expectedEntry.sourceDestination,
-      logIndex: expectedEntry.index
     });
     this.logger.info('Service invoked', {
       destination,
@@ -499,6 +409,17 @@ export class RequestForwarder {
         status: serviceResponse?.status || null,
         hasError: !!serviceResponse?.error
       });
+
+      if (serviceResponse && !serviceResponse.error) {
+        this.logger.logFinalOutgoing(incoming.source, incoming.destination, endpoint, transformedPayload, {
+          requestId: incoming.requestId,
+          logTag: expectedEntry.logTag,
+          sourceDestination: expectedEntry.sourceDestination,
+          logIndex: expectedEntry.index,
+          status: serviceResponse.status,
+          statusText: serviceResponse.statusText
+        });
+      }
 
       const apiFailure = this.checkApiFailure(serviceResponse);
 
@@ -765,7 +686,7 @@ export class RequestForwarder {
       clearTimeout(pendingInfo.timeoutHandle);
       pendingInfo.resolve({
         success: true,
-        payload: matchedResponse.payload
+        payload: remapReplayPayloadForEntry(this.stateManager, matchedResponse.payload, matchedResponse)
       });
     }
 
@@ -775,7 +696,7 @@ export class RequestForwarder {
 
     return {
       success: true,
-      payload: matchedResponse.payload
+      payload: remapReplayPayloadForEntry(this.stateManager, matchedResponse.payload, matchedResponse)
     };
   }
 
@@ -827,7 +748,7 @@ export class RequestForwarder {
 
           return {
             success: true,
-            payload: transformRequest(pendingInfo.responseEntry.payload, pendingInfo.responseEntry.logTag),
+            payload: transformReplayPayloadForEntry(this.stateManager, pendingInfo.responseEntry.payload, pendingInfo.responseEntry),
             retry: true
           };
         }
@@ -865,7 +786,6 @@ export class RequestForwarder {
     }
     this.pendingExternalRequests.clear();
     this.earlyExternalResponses.clear();
-    this.pendingPostResponseWebhooks.clear();
   }
   
   checkApiFailure(response) {

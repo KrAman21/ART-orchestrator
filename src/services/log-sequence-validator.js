@@ -1,6 +1,7 @@
 import { logger } from '../utils/logger.js';
 import { isAsyncParallelApi, normalizeSourceDestination } from '../config.js';
 import { canonicalRequestLogTag } from './log-tag-normalizer.js';
+import { extractTraceLogMethod, extractTraceLogUrl } from './replay-request-resolver.js';
 
 /**
  * LogEntry represents a parsed log entry from the trace
@@ -54,6 +55,8 @@ class LogEntry {
     this.loanApplicationId = this.message.loan_application_id;
     this.lenderOrgId = this.message.lender_org_id;
     this.orderId = this.message.order_id;
+    this.url = extractTraceLogUrl(rawLog);
+    this.httpMethod = extractTraceLogMethod(rawLog);
   }
 
   /**
@@ -652,6 +655,56 @@ export class LogSequenceValidator {
       });
     }
     return entry;
+  }
+
+  getEntryPosition(indexOrEntry) {
+    if (typeof indexOrEntry === 'number') {
+      return this.entries.findIndex(entry => entry.index === indexOrEntry);
+    }
+
+    if (!indexOrEntry) {
+      return -1;
+    }
+
+    return this.entries.findIndex(entry => entry.index === indexOrEntry.index);
+  }
+
+  rebuildSeenRequestKeys() {
+    this.seenRequestKeys.clear();
+
+    for (const position of this.processedIndices) {
+      const entry = this.entries[position];
+      if (!entry) {
+        continue;
+      }
+
+      this.markEntrySeen(entry);
+    }
+  }
+
+  rewindToIndex(targetIndex) {
+    const targetPosition = this.getEntryPosition(targetIndex);
+    if (targetPosition === -1) {
+      logger.warn('Cannot rewind validator - target index not found', { targetIndex });
+      return false;
+    }
+
+    for (const position of Array.from(this.processedIndices)) {
+      if (position >= targetPosition) {
+        this.processedIndices.delete(position);
+      }
+    }
+
+    this.currentIndex = targetPosition;
+    this.rebuildSeenRequestKeys();
+
+    logger.info('Validator rewound to replay index', {
+      targetIndex,
+      targetPosition,
+      processedCount: this.processedIndices.size
+    });
+
+    return true;
   }
 
   /**

@@ -7,6 +7,53 @@ function getCreatedAtTime(log) {
   return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp;
 }
 
+function getLogDirectionPriority(log) {
+  const logTag = (log?.message?.log_tag || '').trim().toUpperCase();
+
+  if (logTag.endsWith('_REQUEST') || logTag.endsWith('REQUEST')) {
+    return 0;
+  }
+
+  if (logTag.endsWith('_RESPONSE') || logTag.endsWith('RESPONSE')) {
+    return 1;
+  }
+
+  return 2;
+}
+
+function getMessageNumber(log) {
+  const messageNumber = Number(log?.messageNumber);
+  return Number.isFinite(messageNumber) ? messageNumber : Number.POSITIVE_INFINITY;
+}
+
+export function compareLogsForReplay(left, right) {
+  const createdAtDiff = getCreatedAtTime(left) - getCreatedAtTime(right);
+  if (createdAtDiff !== 0) {
+    return createdAtDiff;
+  }
+
+  const directionDiff = getLogDirectionPriority(left) - getLogDirectionPriority(right);
+  if (directionDiff !== 0) {
+    return directionDiff;
+  }
+
+  const messageNumberDiff = getMessageNumber(left) - getMessageNumber(right);
+  if (messageNumberDiff !== 0) {
+    return messageNumberDiff;
+  }
+
+  const leftTag = (left?.message?.log_tag || '').trim();
+  const rightTag = (right?.message?.log_tag || '').trim();
+  const tagDiff = leftTag.localeCompare(rightTag);
+  if (tagDiff !== 0) {
+    return tagDiff;
+  }
+
+  const leftRoute = left?.message?.trace_route || '';
+  const rightRoute = right?.message?.trace_route || '';
+  return leftRoute.localeCompare(rightRoute);
+}
+
 function getPairingGroupKey(tagInfo, traceRoute) {
   // Some Themis flows log requests and responses on different trace routes,
   // but they are still one logical replay pair.
@@ -341,11 +388,7 @@ export async function fetchLogsFromJSONFile(filePath) {
     }
 
     // Sort logs by messageNumber
-    const sortedLogs = data.sort((a, b) => {
-      const timeA = a.message?.created_at || '';
-      const timeB = b.message?.created_at || '';
-      return new Date(timeA) - new Date(timeB);
-    });
+    const sortedLogs = data.sort(compareLogsForReplay);
 
     console.log(`Loaded ${sortedLogs.length} logs from ${filePath}`);
     return sortedLogs;
@@ -374,7 +417,7 @@ export async function filterAndSortLogs(logs, outputPath = null) {
     return [];
   }
 
-  const sortedByTime = [...logs].sort((a, b) => getCreatedAtTime(a) - getCreatedAtTime(b));
+  const sortedByTime = [...logs].sort(compareLogsForReplay);
   const seen = new Set();
   const duplicates = [];
   const missingPayloadLogs = [];

@@ -110,6 +110,293 @@ test('reuses the existing buffered entry for duplicate requests', async () => {
   }
 });
 
+test('preserves gateway lender request as rewind fallback and uses it after short rewind wait', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    const preserved = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'THEMIS_ELIGIBILITY_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: 'gw-lender-old',
+      lenderOrgId: 'lender-1'
+    }));
+
+    manager.resetForReplay();
+
+    assert.equal(manager.incomingRequests.size, 1);
+    const rehydrated = manager.incomingRequests.get(preserved.key);
+    assert.ok(rehydrated);
+    assert.equal(rehydrated.preservedOnRewind, true);
+    assert.equal(rehydrated.state, 'buffered');
+
+    const claimed = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'THEMIS_ELIGIBILITY_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: 'gw-lender-log',
+      lenderOrgId: 'lender-1'
+    }), 30);
+
+    assert.ok(claimed);
+    assert.equal(claimed.key, preserved.key);
+    assert.equal(claimed.preservedOnRewind, true);
+    assert.equal(claimed.request.requestId, 'gw-lender-old');
+  } finally {
+    manager.stop();
+  }
+});
+
+test('completed gateway lender request is retained as rewind-only fallback', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    const original = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'FK SCORE API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: 'gw-lender-completed',
+      lenderOrgId: 'DMI'
+    }));
+
+    manager.completeIncomingRequest(original.key, { success: true, payload: { ok: true } });
+    await original.deferred.promise;
+
+    assert.equal(manager.incomingRequests.size, 0);
+    assert.equal(manager.replayFallbackIncomingRequests.size, 1);
+
+    manager.resetForReplay();
+
+    const claimed = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'FK SCORE API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: 'gw-lender-log',
+      lenderOrgId: 'DMI'
+    }), 30);
+
+    assert.ok(claimed);
+    assert.equal(claimed.request.requestId, 'gw-lender-completed');
+    assert.equal(claimed.preservedOnRewind, true);
+  } finally {
+    manager.stop();
+  }
+});
+
+test('preserved gateway lender fallback does not expire during cleanup', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 40,
+    cleanupIntervalMs: 10,
+    preservedReplayFallbackWaitMs: 15
+  });
+
+  try {
+    const original = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'FK SCORE API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: 'gw-lender-preserve',
+      lenderOrgId: 'DMI'
+    }));
+
+    manager.completeIncomingRequest(original.key, { success: true });
+    await original.deferred.promise;
+    manager.resetForReplay();
+
+    await new Promise(resolve => setTimeout(resolve, 90));
+
+    const preserved = manager.incomingRequests.get(original.key);
+    assert.ok(preserved);
+    assert.equal(preserved.preservedOnRewind, true);
+    assert.equal(preserved.state, 'buffered');
+  } finally {
+    manager.stop();
+  }
+});
+
+test('live gateway lender future request does not expire before replay reaches it', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 40,
+    cleanupIntervalMs: 10
+  });
+
+  try {
+    const original = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'DECISION API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: null,
+      lenderOrgId: 'DMI',
+      payload: {
+        body: {
+          ReadyForDecision: 'Yes',
+          LeadId: '00QOW00000ozdz32AA',
+          type: 'decide',
+          leadsource: 'Flipkart'
+        }
+      }
+    }));
+
+    await new Promise(resolve => setTimeout(resolve, 90));
+
+    const stillBuffered = manager.incomingRequests.get(original.key);
+    assert.ok(stillBuffered);
+    assert.equal(stillBuffered.state, 'buffered');
+
+    const claimed = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'DECISION API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: 'gw-lender-log',
+      lenderOrgId: 'DMI',
+      payload: {
+        body: {
+          ReadyForDecision: 'Yes',
+          LeadId: '00QOW00000ozdz32AA',
+          type: 'decide',
+          leadsource: 'Flipkart'
+        }
+      }
+    }), 30);
+
+    assert.ok(claimed);
+    assert.equal(claimed.key, original.key);
+  } finally {
+    manager.stop();
+  }
+});
+
+test('completed non-gateway-lender request is not retained as rewind fallback', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    const original = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'fetch-offer-old',
+      loanApplicationId: 'loan-1',
+      payload: {
+        loanApplicationId: 'loan-1',
+        loanApplicationStatus: 'INITIATED',
+        offerType: 'REAL_TIME'
+      }
+    }));
+
+    manager.completeIncomingRequest(original.key, { success: true });
+    await original.deferred.promise;
+    manager.resetForReplay();
+
+    const claimed = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'fetch-offer-log',
+      loanApplicationId: 'loan-1',
+      payload: {
+        loanApplicationId: 'loan-1',
+        loanApplicationStatus: 'INITIATED',
+        offerType: 'REAL_TIME'
+      }
+    }), 30);
+
+    assert.equal(claimed, null);
+  } finally {
+    manager.stop();
+  }
+});
+
+test('preserved gateway lender fallback is used after short rewind wait instead of long timeout', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25,
+    preservedReplayFallbackWaitMs: 20
+  });
+
+  try {
+    const original = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'FK SCORE API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: 'gw-lender-fast-fallback',
+      lenderOrgId: 'DMI'
+    }));
+
+    manager.completeIncomingRequest(original.key, { success: true });
+    await original.deferred.promise;
+    manager.resetForReplay();
+
+    const startedAt = Date.now();
+    const claimed = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'FK SCORE API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: 'gw-lender-log',
+      lenderOrgId: 'DMI'
+    }), 50000);
+
+    assert.ok(claimed);
+    assert.equal(claimed.request.requestId, 'gw-lender-fast-fallback');
+    assert.ok(Date.now() - startedAt < 200);
+  } finally {
+    manager.stop();
+  }
+});
+
+test('fresh gateway lender request is preferred over preserved rewind fallback', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'THEMIS_ELIGIBILITY_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: 'gw-lender-old',
+      lenderOrgId: 'lender-1'
+    }));
+
+    manager.resetForReplay();
+
+    const waiter = manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'THEMIS_ELIGIBILITY_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      requestId: 'gw-lender-log',
+      lenderOrgId: 'lender-1'
+    }), 100);
+
+    setTimeout(() => {
+      void manager.addIncomingRequest(createIncomingRequest({
+        logTag: 'THEMIS_ELIGIBILITY_REQUEST',
+        source: 'GATEWAY',
+        destination: 'LENDER',
+        requestId: 'gw-lender-fresh',
+        lenderOrgId: 'lender-1'
+      }));
+    }, 20);
+
+    const claimed = await waiter;
+    assert.ok(claimed);
+    assert.equal(claimed.request.requestId, 'gw-lender-fresh');
+    assert.equal(claimed.preservedOnRewind, false);
+    assert.equal(manager.incomingRequests.size, 2);
+  } finally {
+    manager.stop();
+  }
+});
+
 test('matches buffered requests even when correlation ids differ', async () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,
@@ -138,6 +425,89 @@ test('matches buffered requests even when correlation ids differ', async () => {
   }
 });
 
+test('prefers payload-compatible callback over older same-route buffered request', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    const initiated = await manager.addIncomingRequest(createIncomingRequest({
+      requestId: 'live-initiated',
+      payload: {
+        loanApplicationStatus: 'INITIATED',
+        loanApplicationId: 'loan-live'
+      }
+    }));
+
+    const offered = await manager.addIncomingRequest(createIncomingRequest({
+      requestId: 'live-offered',
+      payload: {
+        loanApplicationStatus: 'OFFERED',
+        loanApplicationId: 'loan-live'
+      }
+    }));
+
+    const claimed = await manager.waitForMatchingRequest(
+      createExpectedEntry({
+        requestId: 'log-offered',
+        payload: {
+          loanApplicationStatus: 'OFFERED',
+          loanApplicationId: 'loan-from-log'
+        }
+      }),
+      50
+    );
+
+    assert.equal(claimed?.key, offered.key);
+    assert.equal(claimed?.request.requestId, 'live-offered');
+    assert.equal(claimed?.request.payload.loanApplicationStatus, 'OFFERED');
+    assert.equal(initiated.state, 'buffered');
+  } finally {
+    manager.stop();
+  }
+});
+
+test('does not reuse waiter for same route when expected payload branch differs', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    const initiatedWaiter = manager.waitForMatchingRequest(
+      createExpectedEntry({
+        requestId: 'log-initiated',
+        payload: { loanApplicationStatus: 'INITIATED' }
+      }),
+      100
+    );
+
+    const offeredWaiter = manager.waitForMatchingRequest(
+      createExpectedEntry({
+        requestId: 'log-offered',
+        payload: { loanApplicationStatus: 'OFFERED' }
+      }),
+      100
+    );
+
+    setTimeout(() => {
+      void manager.addIncomingRequest(createIncomingRequest({
+        requestId: 'live-offered',
+        payload: { loanApplicationStatus: 'OFFERED' }
+      }));
+    }, 20);
+
+    const [initiatedClaimed, offeredClaimed] = await Promise.all([initiatedWaiter, offeredWaiter]);
+
+    assert.equal(initiatedClaimed, null);
+    assert.equal(offeredClaimed?.request.requestId, 'live-offered');
+    assert.equal(offeredClaimed?.request.payload.loanApplicationStatus, 'OFFERED');
+  } finally {
+    manager.stop();
+  }
+});
+
 test('getResponseByMetadata finds response with inverted sourceDestination', () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,
@@ -158,6 +528,64 @@ test('getResponseByMetadata finds response with inverted sourceDestination', () 
     assert.ok(found);
     assert.deepEqual(found.response.data, { token: 'abc' });
     assert.equal(manager.responseBuffer.size, 0);
+  } finally {
+    manager.stop();
+  }
+});
+
+test('resetForReplay preserves gateway lender responses in buffer', () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    manager.addResponse('resp-preserved', { data: { token: 'keep' } }, false, {
+      logTag: 'GENERATE_PARTNER_AUTH_TOKEN_REQUEST',
+      sourceDestination: 'GATEWAY_LENDER'
+    });
+    manager.addResponse('resp-dropped', { data: { token: 'drop' } }, false, {
+      logTag: 'FETCH_STATUS_REQUEST',
+      sourceDestination: 'APP_LSP'
+    });
+
+    manager.resetForReplay();
+
+    assert.equal(manager.responseBuffer.size, 1);
+    const preserved = manager.responseBuffer.get('resp-preserved');
+    assert.ok(preserved);
+    assert.equal(preserved.preservedOnRewind, true);
+    assert.equal(manager.responseBuffer.has('resp-dropped'), false);
+  } finally {
+    manager.stop();
+  }
+});
+
+test('consumed gateway lender response is retained as rewind-only fallback', () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    manager.addResponse('resp-preserved', { data: { token: 'keep' } }, false, {
+      logTag: 'GENERATE_PARTNER_AUTH_TOKEN_REQUEST',
+      sourceDestination: 'GATEWAY_LENDER'
+    });
+
+    const consumed = manager.getResponseByMetadata(
+      'GENERATE_PARTNER_AUTH_TOKEN_RESPONSE',
+      'LENDER_GATEWAY'
+    );
+
+    assert.ok(consumed);
+    assert.equal(manager.responseBuffer.size, 0);
+    assert.equal(manager.replayFallbackResponses.size, 1);
+
+    manager.resetForReplay();
+
+    assert.equal(manager.responseBuffer.size, 1);
+    assert.ok(manager.responseBuffer.get('resp-preserved'));
   } finally {
     manager.stop();
   }
