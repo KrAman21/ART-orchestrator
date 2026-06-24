@@ -816,38 +816,63 @@ function findLastProcessedPollingEntry(orchestrator) {
   return lastPollingEntry;
 }
 
-function buildPollingReplayRestartPlan(orchestrator, completionResult, attemptedReplayStartIndices) {
-  if (!completionResult?.timedOut) {
-    return null;
+function isBufferWaitFailure(completionResult, waitReason) {
+  if (completionResult?.timedOut) {
+    return true;
   }
 
-  const stuckEntry = completionResult.stuckEntry || orchestrator.validator?.getCurrentEntry?.() || null;
-  if (
-    stuckEntry?.logTag === 'KYC SERVICE API_REQUEST' &&
-    stuckEntry?.source === 'GATEWAY' &&
-    stuckEntry?.destination === 'LENDER' &&
-    typeof orchestrator?.findLookaheadUpdateKycTrigger === 'function' &&
-    orchestrator.findLookaheadUpdateKycTrigger(stuckEntry, 4)
-  ) {
-    logger.info('Skipping polling rewind plan for out-of-order KYC batch recovery scenario', {
-      stuckEntry: stuckEntry.toString(),
-      reason: 'special_batch_recovery_should_handle_without_rewind'
+  if (waitReason) {
+    return true;
+  }
+
+  const errorText = completionResult?.error || '';
+  return typeof errorText === 'string'
+    && (
+      errorText.includes('Timed out waiting for matching request')
+      || errorText.includes('Timed out while waiting on pending request')
+    );
+}
+
+function buildPollingReplayRestartPlan(orchestrator, completionResult, attemptedReplayStartIndices) {
+  const waitReason = resolveBufferWaitReason(orchestrator);
+  if (!isBufferWaitFailure(completionResult, waitReason)) {
+    logger.info('Skipping polling rewind plan because failure was not caused by buffered-request wait exhaustion', {
+      completionTimedOut: completionResult?.timedOut === true,
+      completionFailed: completionResult?.failed === true,
+      completionError: completionResult?.error || null,
+      waitReason: waitReason || null
     });
     return null;
   }
 
-  const waitReason = resolveBufferWaitReason(orchestrator);
+  const stuckEntry = completionResult.stuckEntry || orchestrator.validator?.getCurrentEntry?.() || null;
+
   if (!waitReason) {
+    logger.info('Skipping polling rewind plan because no buffered-request wait diagnostics were available', {
+      stuckEntry: stuckEntry?.toString?.() || null,
+      completionTimedOut: completionResult?.timedOut === true,
+      completionFailed: completionResult?.failed === true,
+      completionError: completionResult?.error || null
+    });
     return null;
   }
 
   const lastPollingEntry = findLastProcessedPollingEntry(orchestrator);
   if (!lastPollingEntry) {
+    logger.info('Skipping polling rewind plan because no processed polling API was found before the stuck entry', {
+      stuckEntry: stuckEntry?.toString?.() || null,
+      waitReason
+    });
     return null;
   }
 
   const restartIndexAbsolute = lastPollingEntry.index;
   if (attemptedReplayStartIndices.has(restartIndexAbsolute)) {
+    logger.info('Skipping polling rewind plan because this polling restart index was already attempted', {
+      restartIndexAbsolute,
+      restartFromLogTag: lastPollingEntry.logTag,
+      waitReason
+    });
     return null;
   }
 
@@ -1158,6 +1183,17 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
   const branchAdvancedObserved = hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
   const priorAlternateProcessed = hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy);
   const hasAnyAdvanceSignal = branchAdvanced || branchAdvancedObserved || priorAlternateProcessed;
+  const hasBufferedMatch = orchestrator?.bufferManager?.hasMatchingBufferedRequest?.(currentEntry) || false;
+
+  if (hasBufferedMatch) {
+    logger.info('Optional repeated entry has a live buffered match; deferring skip', {
+      entry: currentEntry.toString(),
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      optionalAfterSeconds: optionalRepeatPolicy.optionalAfterSeconds
+    });
+    return false;
+  }
 
   if (optionalRepeatPolicy.requirePriorProcessedOccurrence && priorReplayOccurrences.length < 1) {
     return false;

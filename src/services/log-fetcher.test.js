@@ -106,3 +106,297 @@ test('filterOrchestratorSkippableLogs keeps GATEWAY_LSP loan status async pair a
     ]
   );
 });
+
+test('filterOrchestratorSkippableLogs reorders out-of-order UpdateKYC and KYC flow into request-then-kyc-pair-then-response order', async () => {
+  const logs = [
+    buildLog({
+      messageNumber: 1,
+      createdAt: '2026-06-24T09:00:00.000Z',
+      logTag: 'KYC SERVICE API_REQUEST',
+      traceRoute: 'GATEWAY_LENDER',
+      requestId: 'kyc-req',
+      payloadField: 'trace_request'
+    }),
+    buildLog({
+      messageNumber: 2,
+      createdAt: '2026-06-24T09:00:01.000Z',
+      logTag: 'KYC SERVICE API_RESPONSE',
+      traceRoute: 'LENDER_GATEWAY',
+      requestId: 'kyc-res',
+      payloadField: 'trace_response'
+    }),
+    {
+      messageNumber: 3,
+      message: {
+        created_at: '2026-06-24T09:00:02.000Z',
+        log_tag: 'UpdateKYCRequest-LSP_REQUEST',
+        trace_route: 'CORE_GATEWAY',
+        request_id: 'update-req',
+        order_id: 'order-1',
+        trace_request: {
+          loanApplicationId: 'loan-1'
+        }
+      }
+    },
+    {
+      messageNumber: 4,
+      message: {
+        created_at: '2026-06-24T09:00:03.000Z',
+        log_tag: 'UpdateKYCRequest-LSP_RESPONSE',
+        trace_route: 'GATEWAY_CORE',
+        request_id: 'update-res',
+        order_id: 'order-1',
+        trace_response: {
+          loanApplicationId: 'loan-1'
+        }
+      }
+    }
+  ].map(log => ({
+    ...log,
+    message: {
+      ...log.message,
+      order_id: log.message.order_id || 'order-1',
+      loan_application_id: log.message.loan_application_id || 'loan-1'
+    }
+  }));
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  assert.deepEqual(
+    filtered.map(log => log.message.log_tag),
+    [
+      'UpdateKYCRequest-LSP_REQUEST',
+      'KYC SERVICE API_REQUEST',
+      'KYC SERVICE API_RESPONSE',
+      'UpdateKYCRequest-LSP_RESPONSE'
+    ]
+  );
+});
+
+test('filterOrchestratorSkippableLogs leaves correctly ordered UpdateKYC request, KYC pair, and UpdateKYC response unchanged', async () => {
+  const logs = [
+    buildLog({
+      messageNumber: 1,
+      createdAt: '2026-06-24T09:00:00.000Z',
+      logTag: 'UpdateKYCRequest-LSP_REQUEST',
+      traceRoute: 'CORE_GATEWAY',
+      requestId: 'update-req'
+    }),
+    buildLog({
+      messageNumber: 2,
+      createdAt: '2026-06-24T09:00:01.000Z',
+      logTag: 'KYC SERVICE API_REQUEST',
+      traceRoute: 'GATEWAY_LENDER',
+      requestId: 'kyc-req'
+    }),
+    buildLog({
+      messageNumber: 3,
+      createdAt: '2026-06-24T09:00:02.000Z',
+      logTag: 'KYC SERVICE API_RESPONSE',
+      traceRoute: 'LENDER_GATEWAY',
+      requestId: 'kyc-res',
+      payloadField: 'trace_response'
+    }),
+    buildLog({
+      messageNumber: 4,
+      createdAt: '2026-06-24T09:00:03.000Z',
+      logTag: 'UpdateKYCRequest-LSP_RESPONSE',
+      traceRoute: 'GATEWAY_CORE',
+      requestId: 'update-res',
+      payloadField: 'trace_response'
+    })
+  ].map(log => ({
+    ...log,
+    message: {
+      ...log.message,
+      order_id: 'order-1',
+      loan_application_id: 'loan-1'
+    }
+  }));
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  assert.deepEqual(
+    filtered.map(log => log.message.log_tag),
+    [
+      'UpdateKYCRequest-LSP_REQUEST',
+      'KYC SERVICE API_REQUEST',
+      'KYC SERVICE API_RESPONSE',
+      'UpdateKYCRequest-LSP_RESPONSE'
+    ]
+  );
+});
+
+test('filterOrchestratorSkippableLogs removes orphaned CORE->GATEWAY loan status requests without a fresh APP->CORE trigger', async () => {
+  const logs = [
+    buildLog({
+      messageNumber: 1,
+      createdAt: '2026-06-24T09:00:00.000Z',
+      logTag: 'LSP-LoanStatus_REQUEST',
+      traceRoute: 'APP_CORE',
+      requestId: 'app-core-1'
+    }),
+    buildLog({
+      messageNumber: 2,
+      createdAt: '2026-06-24T09:00:00.500Z',
+      logTag: 'LSP-LoanStatus_RESPONSE',
+      traceRoute: 'CORE_APP',
+      requestId: 'app-core-1',
+      payloadField: 'trace_response'
+    }),
+    buildLog({
+      messageNumber: 3,
+      createdAt: '2026-06-24T09:00:01.000Z',
+      logTag: 'Lsp-LoanStatusRequest_REQUEST',
+      traceRoute: 'CORE_GATEWAY',
+      requestId: 'core-gateway-1'
+    }),
+    buildLog({
+      messageNumber: 4,
+      createdAt: '2026-06-24T09:00:02.000Z',
+      logTag: 'Lsp-LoanStatusRequest_RESPONSE',
+      traceRoute: 'GATEWAY_CORE',
+      requestId: 'core-gateway-1',
+      payloadField: 'trace_response'
+    }),
+    buildLog({
+      messageNumber: 5,
+      createdAt: '2026-06-24T09:00:03.000Z',
+      logTag: 'Lsp-LoanStatusRequest_REQUEST',
+      traceRoute: 'CORE_GATEWAY',
+      requestId: 'core-gateway-2'
+    }),
+    buildLog({
+      messageNumber: 6,
+      createdAt: '2026-06-24T09:00:04.000Z',
+      logTag: 'Lsp-LoanStatusRequest_RESPONSE',
+      traceRoute: 'GATEWAY_CORE',
+      requestId: 'core-gateway-2',
+      payloadField: 'trace_response'
+    })
+  ].map(log => ({
+    ...log,
+    message: {
+      ...log.message,
+      order_id: 'order-1',
+      loan_application_id: 'loan-1'
+    }
+  }));
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  assert.deepEqual(
+    filtered.map(log => [log.message.trace_route, log.message.log_tag]),
+    [
+      ['APP_CORE', 'LSP-LoanStatus_REQUEST'],
+      ['CORE_APP', 'LSP-LoanStatus_RESPONSE'],
+      ['CORE_GATEWAY', 'Lsp-LoanStatusRequest_REQUEST'],
+      ['GATEWAY_CORE', 'Lsp-LoanStatusRequest_RESPONSE']
+    ]
+  );
+});
+
+test('filterOrchestratorSkippableLogs keeps extra APP->CORE loan status triggers and only consumes one per CORE->GATEWAY request', async () => {
+  const logs = [
+    buildLog({
+      messageNumber: 1,
+      createdAt: '2026-06-24T09:00:00.000Z',
+      logTag: 'LSP-LoanStatus_REQUEST',
+      traceRoute: 'APP_CORE',
+      requestId: 'app-core-1'
+    }),
+    buildLog({
+      messageNumber: 2,
+      createdAt: '2026-06-24T09:00:00.300Z',
+      logTag: 'LSP-LoanStatus_RESPONSE',
+      traceRoute: 'CORE_APP',
+      requestId: 'app-core-1',
+      payloadField: 'trace_response'
+    }),
+    buildLog({
+      messageNumber: 3,
+      createdAt: '2026-06-24T09:00:01.000Z',
+      logTag: 'LSP-LoanStatus_REQUEST',
+      traceRoute: 'APP_CORE',
+      requestId: 'app-core-2'
+    }),
+    buildLog({
+      messageNumber: 4,
+      createdAt: '2026-06-24T09:00:01.300Z',
+      logTag: 'LSP-LoanStatus_RESPONSE',
+      traceRoute: 'CORE_APP',
+      requestId: 'app-core-2',
+      payloadField: 'trace_response'
+    }),
+    buildLog({
+      messageNumber: 5,
+      createdAt: '2026-06-24T09:00:02.000Z',
+      logTag: 'Lsp-LoanStatusRequest_REQUEST',
+      traceRoute: 'CORE_GATEWAY',
+      requestId: 'core-gateway-1'
+    }),
+    buildLog({
+      messageNumber: 6,
+      createdAt: '2026-06-24T09:00:03.000Z',
+      logTag: 'Lsp-LoanStatusRequest_RESPONSE',
+      traceRoute: 'GATEWAY_CORE',
+      requestId: 'core-gateway-1',
+      payloadField: 'trace_response'
+    }),
+    buildLog({
+      messageNumber: 7,
+      createdAt: '2026-06-24T09:00:04.000Z',
+      logTag: 'LSP-LoanStatus_REQUEST',
+      traceRoute: 'APP_CORE',
+      requestId: 'app-core-3'
+    }),
+    buildLog({
+      messageNumber: 8,
+      createdAt: '2026-06-24T09:00:04.300Z',
+      logTag: 'LSP-LoanStatus_RESPONSE',
+      traceRoute: 'CORE_APP',
+      requestId: 'app-core-3',
+      payloadField: 'trace_response'
+    }),
+    buildLog({
+      messageNumber: 9,
+      createdAt: '2026-06-24T09:00:05.000Z',
+      logTag: 'Lsp-LoanStatusRequest_REQUEST',
+      traceRoute: 'CORE_GATEWAY',
+      requestId: 'core-gateway-2'
+    }),
+    buildLog({
+      messageNumber: 10,
+      createdAt: '2026-06-24T09:00:06.000Z',
+      logTag: 'Lsp-LoanStatusRequest_RESPONSE',
+      traceRoute: 'GATEWAY_CORE',
+      requestId: 'core-gateway-2',
+      payloadField: 'trace_response'
+    })
+  ].map(log => ({
+    ...log,
+    message: {
+      ...log.message,
+      order_id: 'order-1',
+      loan_application_id: 'loan-1'
+    }
+  }));
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  assert.deepEqual(
+    filtered.map(log => [log.message.trace_route, log.message.log_tag]),
+    [
+      ['APP_CORE', 'LSP-LoanStatus_REQUEST'],
+      ['CORE_APP', 'LSP-LoanStatus_RESPONSE'],
+      ['APP_CORE', 'LSP-LoanStatus_REQUEST'],
+      ['CORE_APP', 'LSP-LoanStatus_RESPONSE'],
+      ['CORE_GATEWAY', 'Lsp-LoanStatusRequest_REQUEST'],
+      ['GATEWAY_CORE', 'Lsp-LoanStatusRequest_RESPONSE'],
+      ['APP_CORE', 'LSP-LoanStatus_REQUEST'],
+      ['CORE_APP', 'LSP-LoanStatus_RESPONSE'],
+      ['CORE_GATEWAY', 'Lsp-LoanStatusRequest_REQUEST'],
+      ['GATEWAY_CORE', 'Lsp-LoanStatusRequest_RESPONSE']
+    ]
+  );
+});

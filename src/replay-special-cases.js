@@ -170,7 +170,8 @@ export const REPLAY_SPECIAL_CASES = [
 ];
 
 export const POLLING_API_LOG_TAGS = new Set([
-  'FlipKart-con', 'LSP-LoanStatus_REQUEST'
+  'LSP-LoanStatus_REQUEST',
+  'FlipKart-GetRedirectionURL_REQUEST'
 ]);
 
 export const SKIPPABLE_ASYNC_API_LOG_TAGS = new Set([

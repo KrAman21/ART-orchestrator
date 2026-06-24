@@ -385,8 +385,11 @@ export class RequestForwarder {
         this.config.timeoutMs ||
         10000;
 
-      this.logger.logOutgoing(incoming.source, incoming.destination, endpoint, transformedPayload, {
+      this.logger.info('Preparing outgoing request forward', {
         event: 'forward_attempt',
+        source: incoming.source,
+        destination: incoming.destination,
+        api: endpoint,
         requestId: incoming.requestId,
         logTag: expectedEntry.logTag,
         sourceDestination: expectedEntry.sourceDestination,

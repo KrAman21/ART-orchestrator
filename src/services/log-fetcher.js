@@ -57,7 +57,14 @@ export function compareLogsForReplay(left, right) {
 function getPairingGroupKey(tagInfo, traceRoute) {
   // Some Themis flows log requests and responses on different trace routes,
   // but they are still one logical replay pair.
-  if (tagInfo.baseTag === 'Themis-Eligibility' || tagInfo.baseTag === 'Themis-KFS') {
+  if (
+    tagInfo.baseTag === 'Themis-Eligibility' ||
+    tagInfo.baseTag === 'Themis-KFS' ||
+    tagInfo.baseTag === 'UpdateKYCRequest-LSP' ||
+    tagInfo.baseTag === 'KYC SERVICE API' ||
+    tagInfo.baseTag === 'LSP-LoanStatus' ||
+    tagInfo.baseTag === 'Lsp-LoanStatusRequest'
+  ) {
     return tagInfo.baseTag;
   }
 
@@ -251,6 +258,183 @@ function balanceRequestResponsePairs(logs) {
   return pruneOrphanedSelectOfferDependents(logs, keptAfterHardEligibilityPrune);
 }
 
+function extractReplayContextKey(log) {
+  const msg = log?.message || {};
+  const payload =
+    msg.trace_request ||
+    msg.trace_response ||
+    msg.trace_payload ||
+    {};
+
+  return [
+    msg.loan_application_id,
+    payload.loanApplicationId,
+    payload.loan_application_id,
+    payload.applicationId,
+    payload.applicationid,
+    msg.order_id,
+    payload.lineDetailId,
+    payload.line_detail_id
+  ].find(value => typeof value === 'string' && value.trim() !== '') || 'GLOBAL';
+}
+
+function findPairRanges(logs, requestTag, responseTag) {
+  const pendingByContext = new Map();
+  const pairs = [];
+
+  logs.forEach((log, index) => {
+    const logTag = (log?.message?.log_tag || '').trim();
+    const contextKey = extractReplayContextKey(log);
+
+    if (logTag === requestTag) {
+      const pending = pendingByContext.get(contextKey) || [];
+      pending.push(index);
+      pendingByContext.set(contextKey, pending);
+      return;
+    }
+
+    if (logTag !== responseTag) {
+      return;
+    }
+
+    const pending = pendingByContext.get(contextKey) || [];
+    if (pending.length === 0) {
+      return;
+    }
+
+    const requestIndex = pending.shift();
+    pendingByContext.set(contextKey, pending);
+    pairs.push({
+      contextKey,
+      requestIndex,
+      responseIndex: index
+    });
+  });
+
+  return pairs;
+}
+
+function reorderOutOfOrderKycPairs(logs) {
+  const reordered = [...logs];
+  const updatePairs = findPairRanges(
+    reordered,
+    'UpdateKYCRequest-LSP_REQUEST',
+    'UpdateKYCRequest-LSP_RESPONSE'
+  );
+  const kycPairs = findPairRanges(
+    reordered,
+    'KYC SERVICE API_REQUEST',
+    'KYC SERVICE API_RESPONSE'
+  );
+
+  if (updatePairs.length === 0 || kycPairs.length === 0) {
+    return reordered;
+  }
+
+  let changed = false;
+
+  for (const kycPair of kycPairs) {
+    const updatePair = updatePairs.find(candidate =>
+      candidate.contextKey === kycPair.contextKey &&
+      candidate.requestIndex > kycPair.responseIndex &&
+      candidate.responseIndex > candidate.requestIndex
+    );
+
+    if (!updatePair) {
+      continue;
+    }
+
+    console.log(
+      `Second-level filter: detected out-of-order UpdateKYC/KYC blocks for context ${kycPair.contextKey}. KYC pair=[${kycPair.requestIndex}-${kycPair.responseIndex}] UpdateKYC pair=[${updatePair.requestIndex}-${updatePair.responseIndex}]`
+    );
+
+    const before = reordered.slice(0, kycPair.requestIndex);
+    const kycRequest = reordered[kycPair.requestIndex];
+    const kycResponse = reordered[kycPair.responseIndex];
+    const middle = reordered.slice(kycPair.responseIndex + 1, updatePair.requestIndex);
+    const updateRequest = reordered[updatePair.requestIndex];
+    const updateResponse = reordered[updatePair.responseIndex];
+    const after = reordered.slice(updatePair.responseIndex + 1);
+
+    reordered.splice(
+      0,
+      reordered.length,
+      ...before,
+      updateRequest,
+      ...middle,
+      kycRequest,
+      kycResponse,
+      updateResponse,
+      ...after
+    );
+
+    console.log(
+      `Second-level filter: reordered out-of-order UpdateKYC/KYC blocks for context ${kycPair.contextKey} into sequence UpdateKYCRequest-LSP_REQUEST -> KYC SERVICE API_REQUEST -> KYC SERVICE API_RESPONSE -> UpdateKYCRequest-LSP_RESPONSE`
+    );
+
+    const finalKycRequestIndex = reordered.findIndex(log => (log?.message?.log_tag || '').trim() === 'KYC SERVICE API_REQUEST');
+    const finalKycResponseIndex = reordered.findIndex(log => (log?.message?.log_tag || '').trim() === 'KYC SERVICE API_RESPONSE');
+    const finalUpdateRequestIndex = reordered.findIndex(log => (log?.message?.log_tag || '').trim() === 'UpdateKYCRequest-LSP_REQUEST');
+    const finalUpdateResponseIndex = reordered.findIndex(log => (log?.message?.log_tag || '').trim() === 'UpdateKYCRequest-LSP_RESPONSE');
+
+    console.log(
+      `Second-level filter: final UpdateKYC/KYC order for context ${kycPair.contextKey}. UpdateKYC pair=[${finalUpdateRequestIndex}-${finalUpdateResponseIndex}] KYC pair=[${finalKycRequestIndex}-${finalKycResponseIndex}]`
+    );
+    changed = true;
+    break;
+  }
+
+  if (!changed) {
+    console.log('Second-level filter: no out-of-order UpdateKYC/KYC block detected');
+  }
+
+  return changed ? reordered : logs;
+}
+
+function pruneOrphanedGatewayLoanStatusRequests(logs) {
+  const availableTriggersByContext = new Map();
+  const filtered = [];
+  let removedCount = 0;
+
+  for (const log of logs) {
+    const msg = log?.message || {};
+    const logTag = (msg.log_tag || '').trim();
+    const contextKey = extractReplayContextKey(log);
+
+    if (logTag === 'LSP-LoanStatus_REQUEST') {
+      const available = availableTriggersByContext.get(contextKey) || 0;
+      availableTriggersByContext.set(contextKey, available + 1);
+      filtered.push(log);
+      continue;
+    }
+
+    if (logTag === 'Lsp-LoanStatusRequest_REQUEST') {
+      const available = availableTriggersByContext.get(contextKey) || 0;
+
+      if (available > 0) {
+        availableTriggersByContext.set(contextKey, available - 1);
+        filtered.push(log);
+      } else {
+        removedCount += 1;
+        console.log(
+          `Second-level filter: removing orphaned CORE->GATEWAY loan status request for context ${contextKey}, request_id: ${msg.request_id || ''}`
+        );
+      }
+      continue;
+    }
+
+    filtered.push(log);
+  }
+
+  if (removedCount > 0) {
+    console.log(
+      `Second-level filter: removed ${removedCount} orphaned Lsp-LoanStatusRequest_REQUEST entr${removedCount === 1 ? 'y' : 'ies'} based on missing prior LSP-LoanStatus_REQUEST trigger`
+    );
+  }
+
+  return filtered;
+}
+
 function shouldSkipLog(log) {
   const msg = log?.message || {};
   const traceRoute = msg.trace_route || '';
@@ -315,7 +499,9 @@ export async function filterOrchestratorSkippableLogs(logs, outputPath = null) {
 
   console.log(`Second-level filtering: ${logs.length} -> ${filtered.length} (removed ${logs.length - filtered.length} orchestrator-skipped entries)`);
 
-  const balanced = balanceRequestResponsePairs(filtered);
+  const reordered = reorderOutOfOrderKycPairs(filtered);
+  const triggerPruned = pruneOrphanedGatewayLoanStatusRequests(reordered);
+  const balanced = balanceRequestResponsePairs(triggerPruned);
   
   // Save final filtered logs to file if outputPath provided
   if (outputPath) {
