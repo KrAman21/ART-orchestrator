@@ -383,6 +383,7 @@ export class ReplayOrchestrator {
     }
 
     this.recordObservedIncomingRequest(incoming);
+    this.stateManager.recordForwardedFor(incoming);
 
     logger.info('ORCH_RECEIVING', {
       source: incoming.source,
@@ -1112,21 +1113,29 @@ export class ReplayOrchestrator {
       return incoming;
     }
 
+    const remapContext = {
+      logTag: incoming.logTag || null
+    };
+
     return {
       ...incoming,
       loanApplicationId: this.stateManager.getMappedIdentifier(
         'loanApplicationId',
         incoming.loanApplicationId
       ),
-      payload: this.stateManager.remapReplayValue(incoming.payload),
-      message: this.stateManager.remapReplayValue(incoming.message)
+      payload: this.stateManager.remapReplayValue(incoming.payload, null, remapContext),
+      message: this.stateManager.remapReplayValue(incoming.message, null, remapContext)
     };
   }
 
   registerReplayIdentifierMappings(expectedEntry, incoming) {
+    const identifierContext = {
+      logTag: expectedEntry?.logTag || incoming?.logTag || null
+    };
+
     for (const identifierType of this.stateManager.getTrackedIdentifierTypes()) {
-      const expectedIds = this.collectReplayIdentifiers(expectedEntry, identifierType);
-      const actualIds = this.collectReplayIdentifiers(incoming, identifierType);
+      const expectedIds = this.collectReplayIdentifiers(expectedEntry, identifierType, identifierContext);
+      const actualIds = this.collectReplayIdentifiers(incoming, identifierType, identifierContext);
 
       for (let index = 0; index < Math.min(expectedIds.length, actualIds.length); index += 1) {
         const originalValue = expectedIds[index];
@@ -1153,7 +1162,7 @@ export class ReplayOrchestrator {
     }
   }
 
-  collectReplayIdentifiers(source, identifierType) {
+  collectReplayIdentifiers(source, identifierType, context = {}) {
     const ids = [];
     const seen = new Set();
 
@@ -1169,7 +1178,7 @@ export class ReplayOrchestrator {
 
       for (const [key, nestedValue] of Object.entries(value)) {
         if (
-          this.stateManager.getIdentifierTypeForKey(key) === identifierType &&
+          this.stateManager.getIdentifierTypeForKeyInContext(key, context) === identifierType &&
           typeof nestedValue === 'string' &&
           !seen.has(nestedValue)
         ) {

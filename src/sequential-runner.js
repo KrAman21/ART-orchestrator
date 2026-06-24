@@ -478,6 +478,11 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     const attemptedReplayStartIndices = new Set([0]);
     let replayAttempt = 1;
     let finalAttemptResult = null;
+    logger.setDirectionLogReplayContext({
+      orderId,
+      replayAttempt,
+      rewind: false
+    });
     logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 3: Starting ART replay`, {
       orderId,
       orderIndex,
@@ -614,6 +619,11 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         attemptedReplayStartIndices.add(restartPlan.restartIndexAbsolute);
         orchestrator.rewindToReplayIndex(restartPlan.restartIndexAbsolute);
         replayAttempt += 1;
+        logger.setDirectionLogReplayContext({
+          orderId,
+          replayAttempt,
+          rewind: true
+        });
         continue;
       }
 
@@ -732,6 +742,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       error: error.message
     };
   } finally {
+    logger.clearDirectionLogReplayContext();
     if (shouldCleanupOrderTempFiles(config)) {
       await cleanupOrderTempFiles(orderId, orderIndex, [
         logsFilePath,
@@ -762,6 +773,27 @@ function resolveBufferWaitReason(orchestrator) {
   return null;
 }
 
+function getEffectiveEntryRetryMs(orchestrator, currentEntry, fallbackRetryMs) {
+  const replayWaitMs = typeof orchestrator?.getRequestWaitTimeoutMs === 'function' && currentEntry?.isRequest
+    ? orchestrator.getRequestWaitTimeoutMs(currentEntry)
+    : 0;
+
+  if (!replayWaitMs) {
+    return fallbackRetryMs;
+  }
+
+  const effectiveRetryMs = Math.max(fallbackRetryMs, replayWaitMs + 5_000);
+
+  logger.info('Adjusted outer entry timeout to respect replay wait window', {
+    entry: currentEntry?.toString?.() || null,
+    fallbackRetryMs,
+    replayWaitMs,
+    effectiveRetryMs
+  });
+
+  return effectiveRetryMs;
+}
+
 function findLastProcessedPollingEntry(orchestrator) {
   const entries = orchestrator?.validator?.entries || [];
   const processedIndices = orchestrator?.validator?.processedIndices || new Set();
@@ -786,6 +818,21 @@ function findLastProcessedPollingEntry(orchestrator) {
 
 function buildPollingReplayRestartPlan(orchestrator, completionResult, attemptedReplayStartIndices) {
   if (!completionResult?.timedOut) {
+    return null;
+  }
+
+  const stuckEntry = completionResult.stuckEntry || orchestrator.validator?.getCurrentEntry?.() || null;
+  if (
+    stuckEntry?.logTag === 'KYC SERVICE API_REQUEST' &&
+    stuckEntry?.source === 'GATEWAY' &&
+    stuckEntry?.destination === 'LENDER' &&
+    typeof orchestrator?.findLookaheadUpdateKycTrigger === 'function' &&
+    orchestrator.findLookaheadUpdateKycTrigger(stuckEntry, 4)
+  ) {
+    logger.info('Skipping polling rewind plan for out-of-order KYC batch recovery scenario', {
+      stuckEntry: stuckEntry.toString(),
+      reason: 'special_batch_recovery_should_handle_without_rewind'
+    });
     return null;
   }
 
@@ -1217,10 +1264,28 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
     const currentEntry = orchestrator.validator?.getCurrentEntry();
     const currentIndex = currentEntry?.index ?? null;
 
+    if (stuckEntryIndex !== null && typeof orchestrator?.consumeResolvedStuckEntrySignal === 'function') {
+      if (orchestrator.consumeResolvedStuckEntrySignal(stuckEntryIndex)) {
+        logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Clearing stale stuck marker after orchestrator-side recovery`, {
+          orderId,
+          orderIndex,
+          totalOrders,
+          clearedStuckIndex: stuckEntryIndex,
+          currentLogTag: currentEntry?.logTag,
+          currentLogIndex: currentIndex,
+          phase: 'STUCK_MARKER_CLEARED'
+        });
+        stuckEntryIndex = null;
+        stuckSince = null;
+        continue;
+      }
+    }
+
     // Track how long we've been stuck on the same entry
     if (currentIndex !== null && currentIndex === stuckEntryIndex) {
       const currentMaxRetrySeconds = getMaxRetrySeconds(currentEntry?.logTag);
-      const currentMaxRetryMs = currentMaxRetrySeconds * 1000;
+      const configuredRetryMs = currentMaxRetrySeconds * 1000;
+      const currentMaxRetryMs = getEffectiveEntryRetryMs(orchestrator, currentEntry, configuredRetryMs);
       const stuckDurationMs = Date.now() - stuckSince;
 
       if (maybeSkipGatewayLenderAuthFallback(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
@@ -1243,6 +1308,7 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
           currentLogTag: currentEntry?.logTag,
           currentLogIndex: currentIndex,
           maxRetrySeconds: currentMaxRetrySeconds,
+          effectiveRetryMs: currentMaxRetryMs,
           retryIntervalMs,
           phase: 'ENTRY_TIMEOUT'
         });

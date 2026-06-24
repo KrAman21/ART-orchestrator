@@ -287,6 +287,7 @@ export class BufferManager {
       includePreserved: !shouldPreferFreshGatewayLender
     });
     if (claimed) {
+      this.clearWaitDiagnostics(expectedEntry, 'immediate_buffer_match');
       logger.info('Found and claimed buffered request immediately', {
         key: claimed.key,
         expected: expectedEntry.toString()
@@ -342,6 +343,9 @@ export class BufferManager {
         resolve: entry => {
           clearTimeout(waiter.timer);
           this.requestWaiters.delete(waiter);
+          if (entry) {
+            this.clearWaitDiagnostics(expectedEntry, 'waiter_resolved_with_match');
+          }
           logger.info('Waiter resolved', {
             expected: expectedEntry.toString(),
             found: !!entry
@@ -406,6 +410,20 @@ export class BufferManager {
     return this.lastMatchTimeout;
   }
 
+  clearWaitDiagnostics(expectedEntry = null, reason = 'manual_clear') {
+    const expected = expectedEntry?.toString?.() || null;
+
+    if (this.lastMatchTimeout) {
+      logger.info('Clearing buffered request wait diagnostics', {
+        reason,
+        expected,
+        previousExpected: this.lastMatchTimeout.expected || null
+      });
+    }
+
+    this.lastMatchTimeout = null;
+  }
+
   getPendingRequestWaiters() {
     return Array.from(this.requestWaiters).map((waiter) => ({
       expected: waiter.expectedEntry?.toString?.() || null,
@@ -426,6 +444,7 @@ export class BufferManager {
     entry.completedAt = Date.now();
     entry.deferred.resolve(response);
     this._storeIncomingReplayFallback(entry);
+    this.clearWaitDiagnostics(entry.request, 'incoming_request_completed');
 
     logger.info('Response delivered', {
       key,

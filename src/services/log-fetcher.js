@@ -272,6 +272,16 @@ function shouldSkipLog(log) {
   if (logTag === 'LSP-FetchOfferResponse_RESPONSE') {
     return true;
   }
+
+  // Loan status async callback is logged twice in the journey:
+  // once as the actionable GATEWAY_LSP pair and again as a redundant
+  // GATEWAY_CORE LoanStatusResponse request/response echo.
+  if (
+    traceRoute === 'GATEWAY_CORE' &&
+    (logTag === 'LoanStatusResponse_REQUEST' || logTag === 'LoanStatusResponse_RESPONSE')
+  ) {
+    return true;
+  }
   
   if (!logTag || logTag === '') {
     return true;

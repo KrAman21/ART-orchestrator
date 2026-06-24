@@ -3,6 +3,7 @@ import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
+import { getAppCoreRequestId } from '../services/app-core-request-id.js';
 import { resolveReplayEndpoint } from '../services/replay-request-resolver.js';
 
 function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
@@ -231,9 +232,11 @@ export class LogProcessor {
 
       const customHeaders = {
         ...(endpointConfig?.headers || {}),
-        ...buildAppCoreAuthHeaders(entry, this.validator.entries)
+        ...buildAppCoreAuthHeaders(entry, this.validator.entries, this.stateManager)
       };
-      await ensureAppCorePreconditions(entry, customHeaders);
+      await ensureAppCorePreconditions(entry, customHeaders, this.stateManager);
+      const { requestId: outboundRequestId, originalRequestId, normalized } =
+        getAppCoreRequestId(entry);
       const service = endpointConfig?.service || entry.destination;
       const method = entry.httpMethod || endpointConfig?.method || 'POST';
 
@@ -272,7 +275,9 @@ export class LogProcessor {
         source: entry.source,
         dest: entry.destination,
         logTag: entry.logTag,
-        requestId: entry.requestId,
+        requestId: outboundRequestId,
+        originalRequestId,
+        requestIdNormalizedForAppCore: normalized,
         headers: customHeaders,
         payload: transformedPayload,
         timestamp: new Date().toISOString()
@@ -301,7 +306,7 @@ export class LogProcessor {
             api,
             method,
             transformedPayload,
-            entry.requestId,
+            outboundRequestId,
             sourceDestinationForRequest,
             entry.logTag,
             null,
@@ -370,7 +375,7 @@ export class LogProcessor {
           api,
           method,
           transformedPayload,
-          entry.requestId,
+          outboundRequestId,
           sourceDestinationForRequest,
           entry.logTag,
           null,
@@ -391,7 +396,8 @@ export class LogProcessor {
         dataKeys: response?.data ? Object.keys(response.data) : [],
         hasError: !!response?.error,
         errorMessage: response?.error ? response.message : null,
-        requestId: entry.requestId,
+        requestId: outboundRequestId,
+        originalRequestId,
         timestamp: new Date().toISOString()
       });
 
@@ -415,6 +421,11 @@ export class LogProcessor {
             differences: comparison.differences
           });
         } else {
+          this.stateManager.registerMappingsFromPayloadPair(
+            expectedResponse.payload,
+            response.data,
+            { logTag: expectedResponse.logTag }
+          );
           this.logger.info('External request response validated', {
             request: entry.toString(),
             response: expectedResponse.toString(),

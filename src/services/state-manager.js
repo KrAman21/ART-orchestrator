@@ -5,12 +5,16 @@ const IDENTIFIER_TYPE_ALIASES = Object.freeze({
   lineDetailId: ['lineDetailId', 'lineId'],
   merchantUserId: ['merchantUserId'],
   lineDetailExtensibleDataId: ['lineDetailExtensibleDataId'],
-  referenceId: ['referenceId']
+  referenceId: ['referenceId'],
+  actionRequiredId: ['actionId']
 });
 
 const LOG_TAG_IDENTIFIER_TYPE_OVERRIDES = Object.freeze({
   'POLLING API :: LINE_STATUS_REQUEST': {
     applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  },
+  'POLLING API :: LINE_STATUS_RESPONSE': {
     applicationid: 'lineDetailId',
     ApplicationId: 'lineDetailId'
   },
@@ -25,6 +29,17 @@ const LOG_TAG_IDENTIFIER_TYPE_OVERRIDES = Object.freeze({
   DMI_WEBHOOK_REQUEST: {
     applicationid: 'lineDetailId',
     ApplicationId: 'lineDetailId'
+  },
+  'KYC SERVICE API_REQUEST': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  },
+  'KYC SERVICE API_RESPONSE': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  },
+  UpdateKYCRequest_REQUEST: {
+    id: 'actionRequiredId'
   }
 });
 
@@ -108,6 +123,7 @@ export class StateManager {
 
     // Map to store response headers per correlation key
     this.responseHeaders = new Map();
+    this.forwardedForByContext = new Map();
 
     // Maps recorded IDs to the local IDs created during replay
     this.identifierMappings = new Map(
@@ -376,6 +392,67 @@ export class StateManager {
     return mappings.get(value) || value;
   }
 
+  collectIdentifiersByType(source, identifierType, context = {}) {
+    const ids = [];
+    const seen = new Set();
+
+    const visit = value => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+
+      for (const [key, nestedValue] of Object.entries(value)) {
+        if (
+          this.getIdentifierTypeForKeyInContext(key, context) === identifierType &&
+          typeof nestedValue === 'string' &&
+          !seen.has(nestedValue)
+        ) {
+          seen.add(nestedValue);
+          ids.push(nestedValue);
+          continue;
+        }
+
+        visit(nestedValue);
+      }
+    };
+
+    visit(source);
+    return ids;
+  }
+
+  registerMappingsFromPayloadPair(expectedPayload, actualPayload, context = {}) {
+    if (!expectedPayload || !actualPayload) {
+      return 0;
+    }
+
+    let totalRegistered = 0;
+
+    for (const identifierType of this.getTrackedIdentifierTypes()) {
+      const expectedIds = this.collectIdentifiersByType(expectedPayload, identifierType, context);
+      const actualIds = this.collectIdentifiersByType(actualPayload, identifierType, context);
+
+      for (let index = 0; index < Math.min(expectedIds.length, actualIds.length); index += 1) {
+        if (this.registerIdentifierMapping(identifierType, expectedIds[index], actualIds[index])) {
+          totalRegistered += 1;
+        }
+      }
+    }
+
+    if (totalRegistered > 0) {
+      logger.info('Registered identifier mappings from payload pair', {
+        logTag: context?.logTag || null,
+        totalRegistered
+      });
+    }
+
+    return totalRegistered;
+  }
+
   remapReplayValue(value, keyHint = null, context = {}) {
     if (typeof value === 'string') {
       const identifierType = this.getIdentifierTypeForKeyInContext(keyHint, context);
@@ -412,6 +489,64 @@ export class StateManager {
         Object.fromEntries(mappings.entries())
       ])
     );
+  }
+
+  buildReplayContextKeys(context = {}) {
+    const keys = [];
+    const loanApplicationId = context.loanApplicationId || context.payload?.loanApplicationId || context.payload?.loan_application_id;
+    const orderId = context.orderId || context.headers?.['x-order-id'] || context.headers?.['X-Order-Id'];
+    const requestId = context.requestId || context.headers?.['x-request-id'] || context.headers?.['X-Request-Id'];
+
+    if (loanApplicationId) {
+      keys.push(`loanApplicationId:${loanApplicationId}`);
+    }
+    if (orderId) {
+      keys.push(`orderId:${orderId}`);
+    }
+    if (requestId) {
+      keys.push(`requestId:${requestId}`);
+    }
+
+    return keys;
+  }
+
+  recordForwardedFor(context = {}) {
+    const headers = context.headers || {};
+    const forwardedFor =
+      headers['x-forwarded-for'] ||
+      headers['X-Forwarded-For'] ||
+      headers['x_forwarded_for'];
+
+    if (!forwardedFor) {
+      return false;
+    }
+
+    const keys = this.buildReplayContextKeys(context);
+    if (keys.length === 0) {
+      return false;
+    }
+
+    for (const key of keys) {
+      this.forwardedForByContext.set(key, forwardedFor);
+    }
+
+    logger.info('Recorded x-forwarded-for for replay context', {
+      keys,
+      forwardedFor
+    });
+    return true;
+  }
+
+  resolveForwardedFor(context = {}) {
+    const keys = this.buildReplayContextKeys(context);
+    for (const key of keys) {
+      const forwardedFor = this.forwardedForByContext.get(key);
+      if (forwardedFor) {
+        return forwardedFor;
+      }
+    }
+
+    return null;
   }
 
   /**

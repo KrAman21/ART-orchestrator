@@ -7,7 +7,9 @@ import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEO
 import { getOptionalRepeatPolicy, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
+import { getAppCoreRequestId } from '../services/app-core-request-id.js';
 import { resolveReplayEndpoint } from '../services/replay-request-resolver.js';
+import { makeRequest } from '../services/http-client.js';
 
 function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
   if (!entry || entry.sourceDestination !== 'APP_WRAPPER') {
@@ -171,10 +173,48 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.pollIntervalMs = config.pollIntervalMs || 800;
     this.shouldStop = false;
     this.orderId = config.orderId;
+    this.resolvedStuckEntrySignals = new Set();
     if (this.requestForwarder?.callbacks) {
       this.requestForwarder.callbacks.shouldAutoProcessNextLogEntry = () => false;
       this.requestForwarder.callbacks.shouldBlockOnHeldExternalRequest = () => false;
     }
+  }
+
+  markStuckEntryResolved(entryOrIndex, reason = 'explicit_resolution') {
+    const resolvedIndex = typeof entryOrIndex === 'number'
+      ? entryOrIndex
+      : entryOrIndex?.index;
+
+    if (resolvedIndex === null || resolvedIndex === undefined) {
+      return false;
+    }
+
+    this.resolvedStuckEntrySignals.add(resolvedIndex);
+    logger.info('Marked stuck entry as resolved for outer watcher', {
+      resolvedIndex,
+      reason
+    });
+    return true;
+  }
+
+  consumeResolvedStuckEntrySignal(entryOrIndex) {
+    const resolvedIndex = typeof entryOrIndex === 'number'
+      ? entryOrIndex
+      : entryOrIndex?.index;
+
+    if (resolvedIndex === null || resolvedIndex === undefined) {
+      return false;
+    }
+
+    if (!this.resolvedStuckEntrySignals.has(resolvedIndex)) {
+      return false;
+    }
+
+    this.resolvedStuckEntrySignals.delete(resolvedIndex);
+    logger.info('Consumed resolved stuck entry signal', {
+      resolvedIndex
+    });
+    return true;
   }
   
   async start() {
@@ -567,45 +607,51 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       currentEntry.destination === 'GATEWAY' &&
       this.validator.processedIndices.has(requestEntry.index)
     ) {
-      const responseContextKey = this.getContextKey(currentEntry);
-      const requestContextKey = this.getContextKey(requestEntry);
-      const contextKey = this.pendingExternalRequests.has(responseContextKey)
-        ? responseContextKey
-        : requestContextKey;
-      const pendingExternal = this.pendingExternalRequests.get(contextKey);
-
-      if (pendingExternal) {
-        clearTimeout(pendingExternal.timeoutHandle);
-        this.pendingExternalRequests.delete(contextKey);
-        pendingExternal.resolve({
-          success: true,
-          payload: transformRequest(currentEntry.payload, currentEntry.logTag)
-        });
-      }
-
-      logger.logApiCall(
-        currentEntry.source,
-        currentEntry.destination,
-        getEndpointConfig(requestEntry.sourceDestination, requestEntry.logTag)?.endpoint || requestEntry.api || null,
-        'RESPONSE',
-        currentEntry.index
-      );
-
-      this.validator.advance();
-      this.recordSuccess('gateway_lender_response_replay', currentEntry);
-
-      logger.info('Replayed GATEWAY->LENDER response directly from logs', {
-        requestEntry: requestEntry.toString(),
-        responseEntry: currentEntry.toString(),
-        responseContextKey,
-        requestContextKey,
-        resolvedContextKey: contextKey
-      });
-
-      return true;
+      return this.replayGatewayLenderResponseFromLogs(requestEntry, currentEntry);
     }
     
     return this.tryConsumeBufferedResponse(currentEntry, requestEntry);
+  }
+
+  replayGatewayLenderResponseFromLogs(requestEntry, responseEntry) {
+    this.bufferManager?.clearWaitDiagnostics?.(requestEntry, 'gateway_lender_response_replay');
+    this.markStuckEntryResolved(requestEntry, 'gateway_lender_response_replayed_from_logs');
+    const responseContextKey = this.getContextKey(responseEntry);
+    const requestContextKey = this.getContextKey(requestEntry);
+    const contextKey = this.pendingExternalRequests.has(responseContextKey)
+      ? responseContextKey
+      : requestContextKey;
+    const pendingExternal = this.pendingExternalRequests.get(contextKey);
+
+    if (pendingExternal) {
+      clearTimeout(pendingExternal.timeoutHandle);
+      this.pendingExternalRequests.delete(contextKey);
+      pendingExternal.resolve({
+        success: true,
+        payload: transformRequest(responseEntry.payload, responseEntry.logTag)
+      });
+    }
+
+    logger.logApiCall(
+      responseEntry.source,
+      responseEntry.destination,
+      getEndpointConfig(requestEntry.sourceDestination, requestEntry.logTag)?.endpoint || requestEntry.api || null,
+      'RESPONSE',
+      responseEntry.index
+    );
+
+    this.validator.advance();
+    this.recordSuccess('gateway_lender_response_replay', responseEntry);
+
+    logger.info('Replayed GATEWAY->LENDER response directly from logs', {
+      requestEntry: requestEntry.toString(),
+      responseEntry: responseEntry.toString(),
+      responseContextKey,
+      requestContextKey,
+      resolvedContextKey: contextKey
+    });
+
+    return true;
   }
 
   async tryConsumeBufferedResponse(currentEntry, requestEntry = null) {
@@ -704,6 +750,12 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         logTag: currentEntry.logTag,
         differences: comparison.differences
       });
+    } else {
+      this.stateManager.registerMappingsFromPayloadPair(
+        currentEntry.payload,
+        buffered.response.data,
+        { logTag: currentEntry.logTag }
+      );
     }
 
     this.recordObservedProcessedResponse(currentEntry, buffered.response.data);
@@ -777,12 +829,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         isSkippableAsync
       });
 
-      if (
-        !isSkippableAsync &&
-        shouldPreWaitSkip &&
-        !hasBufferedMatch
-      ) {
-        return this.skipOptionalReplayRequest(entry, 'pre_wait_optional_skip');
+      if (!isSkippableAsync && shouldPreWaitSkip && !hasBufferedMatch) {
+        logger.info('Deferring optional replay skip until after request wait window', {
+          entry: entry.toString(),
+          reason: 'pre_wait_skip_disabled_wait_first'
+        });
       }
 
       const effectiveTimeoutMs = this.getRequestWaitTimeoutMs(entry);
@@ -835,6 +886,60 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
           return this.skipMissingThemisEligibilityReplayRequest(entry, 'timed_out_missing_lender_call');
         }
 
+        if (await this.maybeRecoverKycServiceFromOutOfOrderUpdateKyc(entry, effectiveTimeoutMs)) {
+          const entryAlreadyRecovered =
+            this.validator.processedIndices.has(entry.index) ||
+            this.validator.currentIndex > entry.index;
+
+          if (entryAlreadyRecovered) {
+            const currentEntryAfterRecovery = this.validator.getCurrentEntry();
+
+            if (
+              currentEntryAfterRecovery?.isResponse &&
+              currentEntryAfterRecovery.source === 'LENDER' &&
+              currentEntryAfterRecovery.destination === 'GATEWAY'
+            ) {
+              logger.info('KYC batch recovery reached lender response entry; replaying response immediately', {
+                requestEntry: entry.toString(),
+                responseEntry: currentEntryAfterRecovery.toString(),
+                currentIndex: this.validator.currentIndex
+              });
+
+              this.replayGatewayLenderResponseFromLogs(entry, currentEntryAfterRecovery);
+            }
+
+            logger.info('KYC batch recovery already satisfied the waiting lender request; skipping redundant re-wait', {
+              entry: entry.toString(),
+              currentIndex: this.validator.currentIndex,
+              nextEntry: currentEntryAfterRecovery?.toString?.() || null
+            });
+            logger.info('Resuming normal replay sequence after KYC batch recovery', {
+              recoveredRequestEntry: entry.toString(),
+              nextEntry: this.validator.getCurrentEntry()?.toString?.() || null,
+              currentIndex: this.validator.currentIndex
+            });
+            return true;
+          }
+
+          const recoveredBuffered = await this.bufferManager.waitForMatchingRequest(entry, 10_000);
+
+          if (recoveredBuffered) {
+            try {
+              const response = await super.handleIncomingRequest(recoveredBuffered.request);
+              this.bufferManager.completeIncomingRequest(recoveredBuffered.key, response);
+              return true;
+            } catch (error) {
+              this.bufferManager.failIncomingRequest(recoveredBuffered.key, error);
+              throw error;
+            }
+          }
+
+          logger.warn('KYC batch recovery trigger completed, but lender request is still missing', {
+            entry: entry.toString(),
+            recoveryWaitMs: 10_000
+          });
+        }
+
         logger.warn('Replay request still missing after buffer wait timeout; keeping entry pending', {
           entry: entry.toString(),
           timeoutMs: effectiveTimeoutMs
@@ -860,6 +965,227 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     }
     
     return false;
+  }
+
+  findLookaheadUpdateKycTrigger(entry, maxLookaheadEntries = 4) {
+    if (!entry) {
+      return null;
+    }
+
+    const candidates = [];
+    for (let index = entry.index + 1; index < this.validator.entries.length; index += 1) {
+      const candidate = this.validator.entries[index];
+      if (this.validator.processedIndices.has(candidate.index) || candidate.shouldSkip()) {
+        continue;
+      }
+
+      candidates.push(candidate);
+      if (candidates.length >= maxLookaheadEntries) {
+        break;
+      }
+    }
+
+    return candidates.find(candidate =>
+      candidate.isRequest &&
+      candidate.source === 'CORE' &&
+      candidate.destination === 'GATEWAY' &&
+      candidate.logTag === 'UpdateKYCRequest-LSP_REQUEST' &&
+      sharesReplayContext(entry, candidate)
+    ) || null;
+  }
+
+  async processLookaheadReplayRequestDirectly(incoming, expectedEntry) {
+    if (!incoming || !expectedEntry) {
+      return null;
+    }
+
+    const normalizedSourceDestination = normalizeSourceDestination(
+      `${incoming.source}_${incoming.destination}`,
+      incoming.logTag
+    );
+    const [source, destination] = normalizedSourceDestination.split('_');
+
+    let normalizedIncoming = {
+      ...incoming,
+      source,
+      destination
+    };
+
+    normalizedIncoming = this.maybeNormalizeRejectedFibeFetchOfferCallback(normalizedIncoming, expectedEntry);
+    normalizedIncoming = this.normalizeIncomingReplayIdentifiers(normalizedIncoming);
+
+    this.registerReplayIdentifierMappings(expectedEntry, normalizedIncoming);
+    logger.logApiCall(
+      normalizedIncoming.source,
+      normalizedIncoming.destination,
+      normalizedIncoming.api,
+      'REQUEST',
+      expectedEntry.index
+    );
+
+    const comparison = this.comparePayloads(
+      expectedEntry.payload,
+      normalizedIncoming.payload,
+      normalizedIncoming.logTag
+    );
+
+    if (!comparison.match) {
+      logger.warn('Lookahead replay request payload mismatch tolerated during direct trigger', {
+        expected: expectedEntry.toString(),
+        incoming: `${normalizedIncoming.source}→${normalizedIncoming.destination} ${normalizedIncoming.logTag}`,
+        differences: comparison.differences
+      });
+    }
+
+    if (expectedEntry.source === 'CORE' && expectedEntry.destination === 'GATEWAY') {
+      const contextKey = this.getContextKey(expectedEntry);
+      const existingTracker = this.asyncCallTracker.get(contextKey);
+      if (!existingTracker) {
+        this.asyncTracker.initializeAsyncTracking(expectedEntry);
+      }
+    }
+
+    this.validator.markProcessed(expectedEntry);
+    this.recordSuccess('request_validation', expectedEntry);
+
+    return await this.forwardToDestination(normalizedIncoming, expectedEntry);
+  }
+
+  async maybeRecoverKycServiceFromOutOfOrderUpdateKyc(entry, timeoutMs) {
+    if (
+      !entry ||
+      entry.logTag !== 'KYC SERVICE API_REQUEST' ||
+      entry.source !== 'GATEWAY' ||
+      entry.destination !== 'LENDER'
+    ) {
+      return false;
+    }
+
+    const triggerEntry = this.findLookaheadUpdateKycTrigger(entry, 4);
+    if (!triggerEntry) {
+      return false;
+    }
+
+    const bufferedTrigger = this.bufferManager?.findMatchingRequest?.(triggerEntry, {
+      includePreserved: false,
+      claim: true
+    }) || null;
+
+    if (bufferedTrigger) {
+      logger.warn('Detected out-of-order KYC trigger already buffered; processing live CORE_GATEWAY request before lender KYC wait', {
+        waitingEntry: entry.toString(),
+        triggerEntry: triggerEntry.toString(),
+        bufferedKey: bufferedTrigger.key,
+        timeoutMs
+      });
+
+      try {
+        const response = await this.processLookaheadReplayRequestDirectly(
+          bufferedTrigger.request,
+          triggerEntry
+        );
+        this.bufferManager.completeIncomingRequest(bufferedTrigger.key, response);
+
+        logger.info('Processed buffered out-of-order UpdateKYC trigger successfully while recovering KYC SERVICE wait', {
+          waitingEntry: entry.toString(),
+          triggerEntry: triggerEntry.toString(),
+          bufferedKey: bufferedTrigger.key
+        });
+
+        this.bufferManager?.clearWaitDiagnostics?.(entry, 'kyc_special_recovery_buffered_trigger_completed');
+        this.markStuckEntryResolved(entry, 'kyc_special_recovery_buffered_trigger_completed');
+
+        return true;
+      } catch (error) {
+        this.bufferManager.failIncomingRequest(bufferedTrigger.key, error);
+        logger.error('Failed buffered out-of-order UpdateKYC trigger recovery for KYC SERVICE wait', {
+          waitingEntry: entry.toString(),
+          triggerEntry: triggerEntry.toString(),
+          bufferedKey: bufferedTrigger.key,
+          error: error.message
+        });
+        return false;
+      }
+    }
+
+    logger.warn('Detected out-of-order KYC trigger; replaying CORE_GATEWAY UpdateKYC batch ahead of lender call', {
+      waitingEntry: entry.toString(),
+      triggerEntry: triggerEntry.toString(),
+      timeoutMs
+    });
+
+    const endpointConfig = getEndpointConfig(triggerEntry.sourceDestination, triggerEntry.logTag);
+    const api =
+      resolveReplayEndpoint(triggerEntry.url) ||
+      endpointConfig?.endpoint ||
+      this.getApiForLogTag(triggerEntry.logTag);
+    const service = endpointConfig?.service || triggerEntry.destination;
+    const method = triggerEntry.httpMethod || endpointConfig?.method || 'POST';
+    const merchantId =
+      triggerEntry.message?.merchant_id ||
+      triggerEntry.payload?.merchantId ||
+      triggerEntry.payload?.merchant_id ||
+      null;
+    const remappedPayload = remapReplayIds(triggerEntry.payload, this.stateManager, triggerEntry.logTag);
+    const transformedPayload = transformRequest(remappedPayload, triggerEntry.logTag);
+    const expectedResponse = this.findCorrespondingResponse(triggerEntry, true);
+
+    try {
+      const response = await makeRequest(
+        this.getServiceBaseUrl(service),
+        api,
+        method,
+        transformedPayload,
+        triggerEntry.requestId,
+        triggerEntry.sourceDestination,
+        triggerEntry.logTag,
+        merchantId,
+        endpointConfig?.headers || {},
+        triggerEntry.index,
+        this.getServiceUnixSocket(service),
+        Math.max(timeoutMs, 10_000)
+      );
+
+      if (expectedResponse) {
+        const comparison = this.comparePayloads(
+          expectedResponse.payload,
+          response.data,
+          expectedResponse.logTag
+        );
+
+        if (!comparison.match) {
+          logger.warn('Out-of-order UpdateKYC batch response mismatch tolerated', {
+            triggerEntry: triggerEntry.toString(),
+            responseEntry: expectedResponse.toString(),
+            differences: comparison.differences
+          });
+        } else {
+          this.recordSuccess('out_of_order_update_kyc_response_validation', expectedResponse);
+        }
+
+        this.validator.markProcessed(expectedResponse);
+      }
+
+      this.validator.markProcessed(triggerEntry);
+      this.recordSuccess('out_of_order_update_kyc_request_trigger', triggerEntry);
+      this.bufferManager?.clearWaitDiagnostics?.(entry, 'kyc_special_recovery_direct_trigger_completed');
+      this.markStuckEntryResolved(entry, 'kyc_special_recovery_direct_trigger_completed');
+
+      logger.info('Replayed out-of-order UpdateKYC trigger successfully while recovering KYC SERVICE wait', {
+        waitingEntry: entry.toString(),
+        triggerEntry: triggerEntry.toString(),
+        responseEntry: expectedResponse?.toString?.() || null
+      });
+
+      return true;
+    } catch (error) {
+      logger.error('Failed out-of-order UpdateKYC recovery trigger for KYC SERVICE wait', {
+        waitingEntry: entry.toString(),
+        triggerEntry: triggerEntry.toString(),
+        error: error.message
+      });
+      return false;
+    }
   }
 
   getRequestWaitTimeoutMs(entry) {
@@ -895,9 +1221,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       }
       const customHeaders = {
         ...(endpointConfig?.headers || {}),
-        ...buildAppCoreAuthHeaders(entry, this.validator.entries)
+        ...buildAppCoreAuthHeaders(entry, this.validator.entries, this.stateManager)
       };
-      await ensureAppCorePreconditions(entry, customHeaders);
+      await ensureAppCorePreconditions(entry, customHeaders, this.stateManager);
+      const { requestId: outboundRequestId, originalRequestId, normalized } =
+        getAppCoreRequestId(entry);
       const service = endpointConfig?.service || entry.destination;
       const method = entry.httpMethod || endpointConfig?.method || 'POST';
       
@@ -909,7 +1237,9 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         api,
         method,
         logTag: entry.logTag,
-        requestId: entry.requestId
+        requestId: outboundRequestId,
+        originalRequestId,
+        requestIdNormalizedForAppCore: normalized
       });
       
       this.httpClient.send(
@@ -917,7 +1247,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         api,
         method,
         transformedPayload,
-        entry.requestId,
+        outboundRequestId,
         entry.sourceDestination,
         entry.logTag,
         null,
@@ -932,7 +1262,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       this.validator.advance();
       
       logger.info('Async request sent, main thread continuing', {
-        requestId: entry.requestId,
+        requestId: outboundRequestId,
+        originalRequestId,
         logTag: entry.logTag
       });
       
@@ -1614,6 +1945,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.httpClient.failedRequests = [];
     this.shouldStop = false;
     this.isRunning = true;
+    this.resolvedStuckEntrySignals.clear();
 
     logger.info('Rewound async orchestrator replay state in place', {
       orderId: this.orderId,

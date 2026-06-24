@@ -385,6 +385,15 @@ export class RequestForwarder {
         this.config.timeoutMs ||
         10000;
 
+      this.logger.logOutgoing(incoming.source, incoming.destination, endpoint, transformedPayload, {
+        event: 'forward_attempt',
+        requestId: incoming.requestId,
+        logTag: expectedEntry.logTag,
+        sourceDestination: expectedEntry.sourceDestination,
+        logIndex: expectedEntry.index,
+        timeoutMs: requestTimeoutMs
+      });
+
       // Make actual HTTP request to destination
       const serviceResponse = await makeRequest(
         this.callbacks.getServiceBaseUrl(destination),
@@ -424,6 +433,18 @@ export class RequestForwarder {
       const apiFailure = this.checkApiFailure(serviceResponse);
 
       if (serviceResponse && (serviceResponse.error || serviceResponse.status !== 200 || apiFailure)) {
+        this.logger.logOutgoing(incoming.source, incoming.destination, endpoint, transformedPayload, {
+          event: 'forward_failed',
+          requestId: incoming.requestId,
+          logTag: expectedEntry.logTag,
+          sourceDestination: expectedEntry.sourceDestination,
+          logIndex: expectedEntry.index,
+          status: serviceResponse?.status || null,
+          statusText: serviceResponse?.statusText || null,
+          error: serviceResponse?.message || null,
+          hasError: !!serviceResponse?.error
+        });
+
         let errorMsg;
         if (apiFailure) {
           errorMsg = `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`;
@@ -503,6 +524,11 @@ export class RequestForwarder {
               differences: comparison.differences
             });
           } else {
+            this.stateManager.registerMappingsFromPayloadPair(
+              expectedResponse.payload,
+              serviceResponse.data,
+              { logTag: expectedResponse.logTag }
+            );
             this.logger.info('Downstream response validated', {
               request: expectedEntry.toString(),
               response: expectedResponse.toString()

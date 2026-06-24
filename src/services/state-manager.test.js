@@ -51,3 +51,99 @@ test('remapReplayValue honors DMI applicationid context as line detail id', () =
   assert.equal(remapped.applicationid, 'local-line');
   assert.equal(remapped.nested.ApplicationId, 'local-line');
 });
+
+test('registerMappingsFromPayloadPair learns identifier mappings from matched response payloads', () => {
+  const stateManager = new StateManager();
+
+  const registered = stateManager.registerMappingsFromPayloadPair(
+    {
+      payload: {
+        loanApplicationId: 'replay-la',
+        lineId: 'replay-line'
+      }
+    },
+    {
+      payload: {
+        loanApplicationId: 'local-la',
+        lineId: 'local-line'
+      }
+    }
+  );
+
+  assert.equal(registered, 2);
+  assert.equal(stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
+  assert.equal(stateManager.getMappedIdentifier('lineDetailId', 'replay-line'), 'local-line');
+});
+
+test('registerMappingsFromPayloadPair honors log-tag-specific identifier overrides', () => {
+  const stateManager = new StateManager();
+
+  const registered = stateManager.registerMappingsFromPayloadPair(
+    {
+      actionsRequired: [
+        { id: 'replay-action-id' }
+      ]
+    },
+    {
+      actionsRequired: [
+        { id: 'local-action-id' }
+      ]
+    },
+    { logTag: 'UpdateKYCRequest_REQUEST' }
+  );
+
+  assert.equal(registered, 1);
+  assert.equal(stateManager.getMappedIdentifier('actionRequiredId', 'replay-action-id'), 'local-action-id');
+});
+
+test('registerMappingsFromPayloadPair does not let KYC service applicationid overwrite loan application mapping', () => {
+  const stateManager = new StateManager();
+
+  stateManager.registerIdentifierMapping('loanApplicationId', 'replay-la', 'local-la');
+
+  const registered = stateManager.registerMappingsFromPayloadPair(
+    {
+      redirectionurl: 'https://example.test/KYC/replay-la/DMI/flipkart',
+      leadid: 'lead-1',
+      applicationid: 'replay-line-detail-id',
+      type: 'kyc'
+    },
+    {
+      redirectionurl: 'https://example.test/KYC/local-la/DMI/flipkart',
+      leadid: 'lead-1',
+      applicationid: 'local-line-detail-id',
+      type: 'kyc'
+    },
+    { logTag: 'KYC SERVICE API_REQUEST' }
+  );
+
+  assert.equal(registered, 1);
+  assert.equal(stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
+  assert.equal(
+    stateManager.getMappedIdentifier('lineDetailId', 'replay-line-detail-id'),
+    'local-line-detail-id'
+  );
+});
+
+test('recordForwardedFor stores and resolves x-forwarded-for by replay context', () => {
+  const stateManager = new StateManager();
+
+  const stored = stateManager.recordForwardedFor({
+    requestId: 'req-1',
+    loanApplicationId: 'loan-1',
+    orderId: 'order-1',
+    headers: {
+      'x-forwarded-for': '10.10.10.10, 127.0.0.1'
+    }
+  });
+
+  assert.equal(stored, true);
+  assert.equal(
+    stateManager.resolveForwardedFor({ loanApplicationId: 'loan-1' }),
+    '10.10.10.10, 127.0.0.1'
+  );
+  assert.equal(
+    stateManager.resolveForwardedFor({ orderId: 'order-1' }),
+    '10.10.10.10, 127.0.0.1'
+  );
+});

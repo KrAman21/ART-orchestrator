@@ -74,7 +74,178 @@ function getPsqlBinary() {
   }
 }
 
-async function seedLoanStatusSession(sessionToken, userId, entry) {
+function extractJsonFromRealmString(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const marker = '::';
+  const markerIndex = value.indexOf(marker);
+  const candidate = markerIndex >= 0 ? value.slice(markerIndex + marker.length).trim() : value.trim();
+  if (!candidate) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return null;
+  }
+}
+
+function collectActionRequiredCandidates(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+
+  const candidates = [];
+  const individualActionId = payload?.kyc?.individualKYC?.actionId;
+  if (individualActionId) {
+    candidates.push({
+      id: individualActionId,
+      action: payload?.kyc?.individualKYC?.actionsRequired?.[0]?.action || null,
+      actionType: payload?.kyc?.individualKYC?.actionsRequired?.[0]?.actionType || null,
+      parentAction: payload?.kyc?.individualKYC?.actionsRequired?.[0]?.parentAction || null
+    });
+  }
+
+  for (const item of payload?.kyc?.individualKYC?.actionsRequired || []) {
+    candidates.push({
+      id: item?.id || null,
+      action: item?.action || null,
+      actionType: item?.actionType || null,
+      parentAction: item?.parentAction || null
+    });
+  }
+
+  for (const item of payload?.kyc?.actionsRequired || []) {
+    candidates.push({
+      id: item?.id || null,
+      action: item?.action || null,
+      actionType: item?.actionType || null,
+      parentAction: item?.parentAction || null
+    });
+  }
+
+  return candidates.filter(candidate => candidate.id);
+}
+
+function findMappedActionRequiredId(appResponse, replayCandidates) {
+  const liveActions = [
+    ...(appResponse?.kyc?.individualKYC?.actionsRequired || []),
+    ...(appResponse?.kyc?.actionsRequired || [])
+  ].filter(action => action?.id);
+
+  if (liveActions.length === 0 || replayCandidates.length === 0) {
+    return null;
+  }
+
+  for (const replayCandidate of replayCandidates) {
+    const exactMatch = liveActions.find(liveAction =>
+      liveAction.action === replayCandidate.action &&
+      liveAction.actionType === replayCandidate.actionType &&
+      liveAction.parentAction === replayCandidate.parentAction
+    );
+    if (exactMatch?.id) {
+      return {
+        originalActionId: replayCandidate.id,
+        liveActionId: exactMatch.id
+      };
+    }
+  }
+
+  if (liveActions[0]?.id && replayCandidates[0]?.id) {
+    return {
+      originalActionId: replayCandidates[0].id,
+      liveActionId: liveActions[0].id
+    };
+  }
+
+  return null;
+}
+
+async function syncUpdateKycActionRequiredMapping(entry, stateManager) {
+  if (!stateManager || entry?.logTag !== 'UpdateKYCRequest_REQUEST') {
+    return;
+  }
+
+  const replayCandidates = collectActionRequiredCandidates(entry?.payload);
+  if (replayCandidates.length === 0) {
+    logger.info('Skipping UpdateKYC actionRequired mapping sync: no replay action ids found', {
+      logTag: entry?.logTag
+    });
+    return;
+  }
+
+  const mappedLoanApplicationId = stateManager.getMappedIdentifier(
+    'loanApplicationId',
+    entry.loanApplicationId || entry?.payload?.loanApplicationId
+  );
+  if (!mappedLoanApplicationId) {
+    logger.info('Skipping UpdateKYC actionRequired mapping sync: no mapped loanApplicationId', {
+      logTag: entry?.logTag
+    });
+    return;
+  }
+
+  const psqlBinary = getPsqlBinary();
+  if (!psqlBinary) {
+    logger.warn('Unable to sync UpdateKYC actionRequired mapping: psql binary not found', {
+      logTag: entry?.logTag
+    });
+    return;
+  }
+
+  const sql = `
+    SELECT app_response_enc
+    FROM public.first_stage_request_data
+    WHERE loan_app_id = '${sqlEscape(mappedLoanApplicationId)}'
+      AND api_name = 'TriggerKYC'
+    ORDER BY created_at DESC
+    LIMIT 1;
+  `;
+
+  try {
+    const { stdout } = await execFileAsync(
+      psqlBinary,
+      ['-v', 'ON_ERROR_STOP=1', '-t', '-A', '-c', sql],
+      { env: buildPsqlEnv() }
+    );
+
+    const appResponse = extractJsonFromRealmString(stdout.trim());
+    const mappedAction = findMappedActionRequiredId(appResponse, replayCandidates);
+
+    if (!mappedAction?.originalActionId || !mappedAction?.liveActionId) {
+      logger.warn('UpdateKYC actionRequired mapping sync could not find live action id', {
+        logTag: entry?.logTag,
+        mappedLoanApplicationId,
+        replayActionIds: replayCandidates.map(candidate => candidate.id)
+      });
+      return;
+    }
+
+    stateManager.registerIdentifierMapping(
+      'actionRequiredId',
+      mappedAction.originalActionId,
+      mappedAction.liveActionId
+    );
+
+    logger.info('Synced UpdateKYC actionRequired replay mapping', {
+      logTag: entry?.logTag,
+      mappedLoanApplicationId,
+      originalActionId: mappedAction.originalActionId,
+      liveActionId: mappedAction.liveActionId
+    });
+  } catch (error) {
+    logger.warn('Failed to sync UpdateKYC actionRequired mapping', {
+      logTag: entry?.logTag,
+      mappedLoanApplicationId,
+      error: error.message
+    });
+  }
+}
+
+async function seedLoanStatusSession(sessionToken, userId, deviceTokenId, entry) {
   const psqlBinary = getPsqlBinary();
   if (!psqlBinary) {
     logger.warn('Unable to seed LSP session: psql binary not found', {
@@ -89,6 +260,7 @@ async function seedLoanStatusSession(sessionToken, userId, entry) {
   const requestId = entry?.requestId || buildLspStyleId();
   const merchantId = entry?.message?.merchant_id || 'flipkart';
   const orderId = entry?.message?.order_id || entry?.orderId || '';
+  const sessionId = deviceTokenId || buildLspStyleId();
 
   const sql = `
     INSERT INTO public.session (
@@ -103,10 +275,11 @@ async function seedLoanStatusSession(sessionToken, userId, entry) {
       order_id,
       merchant_user_profile_id,
       txn_intent_id,
+      device_token_id,
       merchant_id,
       metadata
     ) VALUES (
-      '${sqlEscape(buildLspStyleId())}',
+      '${sqlEscape(sessionId)}',
       '${sqlEscape(requestId)}',
       '${sqlEscape(userId)}',
       '${sqlEscape(sessionToken)}',
@@ -117,6 +290,7 @@ async function seedLoanStatusSession(sessionToken, userId, entry) {
       ${orderId ? `'${sqlEscape(orderId)}'` : 'NULL'},
       '',
       NULL,
+      ${deviceTokenId ? `'${sqlEscape(deviceTokenId)}'` : 'NULL'},
       '${sqlEscape(merchantId)}',
       '${UNENCRYPTED_SESSION_METADATA_BASE64}'
     )
@@ -129,7 +303,9 @@ async function seedLoanStatusSession(sessionToken, userId, entry) {
     logTag: entry?.logTag,
     sessionToken,
     userId,
-    orderId
+    orderId,
+    sessionId,
+    deviceTokenId
   });
 }
 
@@ -267,7 +443,7 @@ async function seedClientAuthTokenForGetLenderFlows(entry) {
   });
 }
 
-export async function ensureAppCorePreconditions(entry, customHeaders = {}) {
+export async function ensureAppCorePreconditions(entry, customHeaders = {}, stateManager = null) {
   if (!entry || entry.sourceDestination !== 'APP_CORE') {
     return;
   }
@@ -284,18 +460,18 @@ export async function ensureAppCorePreconditions(entry, customHeaders = {}) {
     return;
   }
 
-  if (entry.logTag !== 'LSP-LoanStatus_REQUEST') {
-    return;
-  }
-
   const sessionToken = customHeaders['x-session-token'];
   const userId = customHeaders['x-user-id'];
+  const deviceTokenId = customHeaders['x-device-token-id'];
+
+  await syncUpdateKycActionRequiredMapping(entry, stateManager);
 
   if (!sessionToken || !userId) {
-    logger.warn('Skipping LSP session seeding due to missing auth headers', {
+    logger.info('Skipping APP_CORE session seeding due to missing auth headers', {
       logTag: entry.logTag,
       hasSessionToken: Boolean(sessionToken),
-      hasUserId: Boolean(userId)
+      hasUserId: Boolean(userId),
+      hasDeviceTokenId: Boolean(deviceTokenId)
     });
     return;
   }
@@ -311,14 +487,15 @@ export async function ensureAppCorePreconditions(entry, customHeaders = {}) {
     }
 
     if (!SEEDED_SESSION_TOKENS.has(sessionToken)) {
-      await seedLoanStatusSession(sessionToken, userId, entry);
+      await seedLoanStatusSession(sessionToken, userId, deviceTokenId, entry);
       SEEDED_SESSION_TOKENS.add(sessionToken);
     }
   } catch (error) {
-    logger.warn('Failed to seed LSP auth preconditions for loan status replay', {
+    logger.warn('Failed to seed APP_CORE auth preconditions for replay', {
       logTag: entry.logTag,
       sessionToken,
       userId,
+      deviceTokenId,
       error: error.message
     });
   }

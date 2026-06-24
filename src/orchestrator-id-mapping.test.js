@@ -77,3 +77,61 @@ test('state manager remaps DMI applicationid to local line detail id when log ta
 
   assert.equal(remapped.applicationid, 'local-line');
 });
+
+test('KYC service applicationid does not corrupt later APP_CORE loanApplicationId remap', () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.config = {};
+  orchestrator.orderId = 'order-1';
+
+  orchestrator.registerReplayIdentifierMappings(
+    {
+      logTag: 'LSP-LoanStatus_REQUEST',
+      message: {
+        trace_request: {
+          loanApplicationId: 'replay-la',
+          loanStatusOrigin: 'SDK'
+        }
+      }
+    },
+    {
+      logTag: 'LSP-LoanStatus_REQUEST',
+      payload: {
+        loanApplicationId: 'local-la',
+        loanStatusOrigin: 'SDK'
+      }
+    }
+  );
+
+  orchestrator.registerReplayIdentifierMappings(
+    {
+      logTag: 'KYC SERVICE API_REQUEST',
+      payload: {
+        redirectionurl: 'https://example.test/KYC/replay-la/DMI/flipkart',
+        applicationid: 'replay-line',
+        type: 'kyc'
+      }
+    },
+    {
+      logTag: 'KYC SERVICE API_REQUEST',
+      payload: {
+        redirectionurl: 'https://example.test/KYC/local-la/DMI/flipkart',
+        applicationid: 'local-line',
+        type: 'kyc'
+      }
+    }
+  );
+
+  const normalized = orchestrator.normalizeIncomingReplayIdentifiers({
+    logTag: 'LSP-LoanStatus_REQUEST',
+    loanApplicationId: 'replay-la',
+    payload: {
+      loanApplicationId: 'replay-la',
+      loanStatusOrigin: 'SDK'
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
+  assert.equal(orchestrator.stateManager.getMappedIdentifier('lineDetailId', 'replay-line'), 'local-line');
+  assert.equal(normalized.payload.loanApplicationId, 'local-la');
+});

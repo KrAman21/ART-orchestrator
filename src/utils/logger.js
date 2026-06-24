@@ -80,6 +80,7 @@ if ((LOG_TO_FILE || DIRECTION_LOGS_TO_FILE) && !global[GLOBAL_KEY]) {
 }
 
 const sessionContext = new AsyncLocalStorage();
+let directionLogReplayContext = null;
 
 const subscribers = new Map();
 let subscriberCounter = 0;
@@ -101,7 +102,14 @@ function logToDirectionFile(direction, logEntry) {
   if (!DIRECTION_LOGS_TO_FILE) return;
   const filePath = direction === 'incoming' ? INCOMING_LOG_FILE : OUTGOING_LOG_FILE;
   try {
-    const entry = { ...logEntry, _direction: direction, _timestamp: formatTimestamp() };
+    const replayMeta = directionLogReplayContext
+      ? {
+          replayAttempt: directionLogReplayContext.replayAttempt,
+          rewind: directionLogReplayContext.rewind,
+          replayOrderId: directionLogReplayContext.orderId || null
+        }
+      : {};
+    const entry = { ...logEntry, ...replayMeta, _direction: direction, _timestamp: formatTimestamp() };
     const line = JSON.stringify(entry) + '\n';
     appendFileSync(filePath, line, { encoding: 'utf-8' });
   } catch (_) {}
@@ -157,6 +165,18 @@ export function runInSession(sessionId, fn) {
   return sessionContext.run({ sessionId }, fn);
 }
 
+export function setDirectionLogReplayContext(context = {}) {
+  directionLogReplayContext = {
+    orderId: context.orderId || null,
+    replayAttempt: Number.isInteger(context.replayAttempt) ? context.replayAttempt : 1,
+    rewind: Boolean(context.rewind)
+  };
+}
+
+export function clearDirectionLogReplayContext() {
+  directionLogReplayContext = null;
+}
+
 export const logger = {
   debug: (msg, meta) => log('DEBUG', msg, meta),
   info: (msg, meta) => log('INFO', msg, meta),
@@ -166,6 +186,8 @@ export const logger = {
   subscribe,
   unsubscribe,
   runInSession,
+  setDirectionLogReplayContext,
+  clearDirectionLogReplayContext,
 
   logStart: (totalLogs) => log('INFO', 'Starting ART replay', { totalLogs }),
   logComplete: (summary) => log('INFO', 'ART replay completed', summary),

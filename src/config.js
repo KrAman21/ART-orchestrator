@@ -317,6 +317,9 @@ export const API_TO_ENDPOINT_MAP = {
   'APP_CORE|LSP-ListTicket_INCOMING': { endpoint: '/api/v5.0/ticket/list', method: 'POST', service: 'LSP', headers: {} },
   'APP_CORE|LSP-VerifyCustomer_INCOMING': { endpoint: '/api/v3.3/verifyCustomer', method: 'POST', service: 'LSP', headers: {} },
   'APP_CORE|LSP-Rules_INCOMING': { endpoint: '/api/themis/rules', method: 'POST', service: 'LSP', headers: {} },
+  'APP_CORE|GetKYCRequest_REQUEST': { endpoint: '/api/v4.0/kyc/getKYC', method: 'POST', service: 'LSP', headers: {} },
+  'APP_CORE|TriggerKYCRequest_REQUEST': { endpoint: '/api/v4.0/kyc/trigger', method: 'POST', service: 'LSP', headers: {} },
+  'APP_CORE|UpdateKYCRequest_REQUEST':{ endpoint: '/api/v3.3/kyc/updateKYC/trigger', method: 'POST', service: 'LSP', headers: {} },
   
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing/REQUEST) ====================
   // REQUEST variants (used by logs.json)
@@ -400,6 +403,9 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_GATEWAY|CreateLoanApplication_V4_1-LSP_RESPONSE': { endpoint: '/gateway/v1.0/createLoanApplication', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|TriggerRefund-LSP_REQUEST': { endpoint: '/gateway/v1.0/refund', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|TriggerRefund-LSP_RESPONSE': { endpoint: '/gateway/v1.0/refund', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|UpdateKYCRequest-LSP_REQUEST' : {endpoint: '/gateway/v3.3/kyc/updateKYCRequest', service: 'GW', method: 'POST', headers: {}},
+  'CORE_GATEWAY|ProcessStatus_REQUEST' : {endpoint: '/v1.0/processStatus', method: 'POST', service: 'GW', headers: {}}
+  ,
   
   // ==================== GATEWAY_CORE (Gateway to Core - Responses/Callbacks) ====================
   'GATEWAY_CORE|LSP-Eligibility_INCOMING': { endpoint: '/v1/themis/eligibility/callback', method: 'POST', service: 'LSP', headers: {} },
@@ -502,6 +508,7 @@ export const API_TO_ENDPOINT_MAP = {
   // LIQUILOANS LENDER APIs
   // ============================================================================
   'GATEWAY_LENDER|CHECK ELIGIBILITY API_REQUEST': { endpoint: '/base/flipkart/fk/checkEligibility', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|KYC SERVICE API_REQUEST': { endpoint: '/prod/MOCK_DATA', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|HDB_TOKEN_API_REQUEST': { endpoint: '/api/hdb/token', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|LiquiLoans-GetSchemeList Request': { endpoint: '/api/dealer/schemes', method: 'GET', service: 'LIQUILOANS', headers: {} },
   'GATEWAY_LENDER|LiquiLoans-GetSchemeList_REQUEST': { endpoint: '/api/dealer/schemes', method: 'GET', service: 'LIQUILOANS', headers: {} },
@@ -1460,6 +1467,8 @@ export const API_TO_LOGTAG_MAP = {
   '/gateway/webhook': { logTag: 'WEBHOOK Request', api: '/gateway/webhook', sourceDestination: 'LENDER_GATEWAY', headers: {} },
   '/v4.1/gateway/credit/webhooks': { logTag: 'WEBHOOK_REQUEST', api: '/v4.1/gateway/credit/webhooks', sourceDestination: 'GATEWAY_LSP', headers: {} },
   '/gateway/v1.0/triggerActionRequired': { logTag: 'LSP-TriggerActionRequired_REQUEST', api: '/gateway/v1.0/triggerActionRequired', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/v3.3/kyc/updateKYCRequest': { logTag: 'UpdateKYCRequest-LSP_REQUEST', api: '/gateway/v3.3/kyc/updateKYCRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v3.3/kyc/updateKYCRequest': { logTag: 'UpdateKYCRequest-LSP_REQUEST', api: '/gateway/v3.3/kyc/updateKYCRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/v1/themis/gateway/response': { logTag: 'Themis-Eligibility Response', api: '/v1/themis/gateway/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
   '/v1/themis/grantLoan/response': { logTag: 'Themis-GrantLoan Response', api: '/v1/themis/grantLoan/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
   '/v1/themis/disbursement/response': { logTag: 'Themis-Disbursement Response', api: '/v1/themis/disbursement/response', sourceDestination: 'LENDER_GATEWAY', headers: {} },
@@ -1538,6 +1547,7 @@ export const API_TO_LOGTAG_MAP = {
   '/updateapplication':{logTag: 'DECISION API_REQUEST', api: '/updateapplication', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/prod/updateapplication':{logTag: 'DECISION API_REQUEST', api: '/prod/updateapplication', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/MOCK_DATA/updateapplication':{logTag: 'DECISION API_REQUEST', api: '/MOCK_DATA/updateapplication', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/prod/MOCK_DATA': { logTag: 'KYC SERVICE API_REQUEST', api: '/prod/MOCK_DATA', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/merchant-score':{logTag:'FK SCORE API_REQUEST', api: '/merchant-score', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/prod/merchant-score':{logTag:'FK SCORE API_REQUEST', api: '/prod/merchant-score', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/MOCK_DATA/merchant-score':{logTag:'FK SCORE API_REQUEST', api: '/MOCK_DATA/merchant-score', sourceDestination: 'GATEWAY_LENDER', headers: {} },
