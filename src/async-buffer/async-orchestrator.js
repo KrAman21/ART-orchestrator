@@ -4,7 +4,7 @@ import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES } from '../config.js';
-import { getOptionalRepeatPolicy, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
+import { getOptionalRepeatPolicy, isSelfTriggerFallbackApiLogTag, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, SELF_TRIGGER_FALLBACK_API_LOG_TAGS, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
 import { getAppCoreRequestId } from '../services/app-core-request-id.js';
@@ -886,6 +886,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
           return this.skipMissingThemisEligibilityReplayRequest(entry, 'timed_out_missing_lender_call');
         }
 
+        if (isSelfTriggerFallbackApiLogTag(entry.logTag)) {
+          logger.warn('Buffered request wait expired for configured self-trigger fallback API; triggering service directly and continuing replay', {
+            entry: entry.toString(),
+            timeoutMs: effectiveTimeoutMs,
+            configuredFallbackApis: Array.from(SELF_TRIGGER_FALLBACK_API_LOG_TAGS)
+          });
+          return this.triggerMissingExpectedRequestFallback(entry, effectiveTimeoutMs);
+        }
+
         logger.warn('Replay request still missing after buffer wait timeout; keeping entry pending', {
           entry: entry.toString(),
           timeoutMs: effectiveTimeoutMs
@@ -924,6 +933,16 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return 40_000;
     }
 
+    if (isSelfTriggerFallbackApiLogTag(entry.logTag)) {
+      logger.info('Using short wait timeout for self-trigger fallback API', {
+        entry: entry?.toString?.(),
+        logTag: entry?.logTag,
+        timeoutMs: 9_000,
+        configuredFallbackApis: Array.from(SELF_TRIGGER_FALLBACK_API_LOG_TAGS)
+      });
+      return 9_000;
+    }
+
     const baseTimeoutMs = this.config.timeoutMs;
     const perLogTagOverrideMs = RETRY_TIMEOUT_OVERRIDES[entry.logTag]
       ? RETRY_TIMEOUT_OVERRIDES[entry.logTag] * 1000
@@ -934,6 +953,16 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   }
   
   async triggerExternalRequestAsync(entry) {
+    return this.triggerExternalRequestAsyncWithOptions(entry);
+  }
+
+  async triggerExternalRequestAsyncWithOptions(entry, options = {}) {
+    const {
+      advanceValidator = true,
+      tolerateFailure = false,
+      fallbackReason = null
+    } = options;
+
     try {
       const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
       const resolvedEndpoint = resolveWrapperEndpointForMerchant(entry, endpointConfig);
@@ -984,15 +1013,47 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         entry.clientRequestId
       );
 
-      this.validator.advance();
+      if (advanceValidator) {
+        this.validator.advance();
+      }
       
       logger.info('Async request sent, main thread continuing', {
         requestId: outboundRequestId,
         originalRequestId,
-        logTag: entry.logTag
+        logTag: entry.logTag,
+        advanceValidator,
+        tolerateFailure,
+        fallbackReason
       });
-      
+
+      return {
+        success: true,
+        requestId: outboundRequestId,
+        originalRequestId
+      };
     } catch (error) {
+      if (tolerateFailure) {
+        logger.warn('Failed to trigger async external request fallback; continuing replay', {
+          entry: entry.toString(),
+          logTag: entry.logTag,
+          error: error.message,
+          fallbackReason
+        });
+        if (this.reportGenerator && this.orderId) {
+          this.reportGenerator.recordReplayWarning(this.orderId, {
+            type: 'SELF_TRIGGER_FALLBACK_SEND_FAILED',
+            logTag: entry.logTag,
+            logIndex: entry.index,
+            error: error.message,
+            fallbackReason
+          });
+        }
+        return {
+          success: false,
+          error: error.message
+        };
+      }
+
       logger.error('Failed to trigger async external request', {
         entry: entry.toString(),
         error: error.message
@@ -1000,6 +1061,64 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       this.recordFailure('async_external_request_trigger', entry, error.message);
       await this.fail('Failed to trigger async external request for ' + entry.logTag + ': ' + error.message);
     }
+  }
+
+  async triggerMissingExpectedRequestFallback(entry, timeoutMs) {
+    const responseEntry = this.findCorrespondingResponse(entry, true);
+    const recoveryInfo = {
+      type: 'SELF_TRIGGER_FALLBACK',
+      logTag: entry.logTag,
+      logIndex: entry.index,
+      responseLogTag: responseEntry?.logTag || null,
+      responseLogIndex: responseEntry?.index ?? null,
+      timeoutMs,
+      sourceDestination: entry.sourceDestination,
+      fallbackMode: 'async_fire_and_forget'
+    };
+
+    if (this.reportGenerator && this.orderId) {
+      this.reportGenerator.recordReplayWarning(this.orderId, {
+        ...recoveryInfo,
+        message: 'Missing expected request was self-triggered after replay buffer wait timeout'
+      });
+    }
+
+    const triggerResult = await this.triggerExternalRequestAsyncWithOptions(entry, {
+      advanceValidator: false,
+      tolerateFailure: true,
+      fallbackReason: 'missing_expected_request_after_wait_timeout'
+    });
+
+    if (this.reportGenerator && this.orderId) {
+      this.reportGenerator.recordFallbackRecovery(this.orderId, {
+        ...recoveryInfo,
+        triggerStatus: triggerResult.success ? 'TRIGGERED' : 'FAILED_TO_TRIGGER',
+        error: triggerResult.error || null
+      });
+    }
+
+    this.validator.markProcessed(entry);
+    if (responseEntry) {
+      this.validator.markProcessed(responseEntry);
+    }
+
+    this.bufferManager?.skipWaiter?.(entry);
+    this.bufferManager?.clearWaitDiagnostics?.(entry, 'self_trigger_fallback_processed');
+    this.markStuckEntryResolved(entry, 'self_trigger_fallback_processed');
+
+    this.recordSuccess('missing_expected_request_fallback', entry);
+    if (responseEntry) {
+      this.recordSuccess('missing_expected_request_fallback_response', responseEntry);
+    }
+
+    logger.info('Self-trigger fallback processed replay pair', {
+      entry: entry.toString(),
+      responseEntry: responseEntry?.toString?.() || null,
+      timeoutMs,
+      triggerStatus: triggerResult.success ? 'TRIGGERED' : 'FAILED_TO_TRIGGER'
+    });
+
+    return true;
   }
 
   shouldTreatApiFailureAsExpected(activeReq, response, apiFailure) {

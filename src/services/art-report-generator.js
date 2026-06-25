@@ -67,6 +67,7 @@ export class ArtReportGenerator {
       },
       timeline: [],
       bufferFailures: [],
+      fallbackRecoveries: [],
       diagnostics: {
         lastProcessedLog: null,
         timeoutAt: null,
@@ -205,6 +206,16 @@ export class ArtReportGenerator {
     order.diagnostics.replayWarnings.push({
       timestamp: new Date().toISOString(),
       ...warningInfo
+    });
+  }
+
+  recordFallbackRecovery(orderId, recoveryInfo) {
+    const order = this.orders.find(o => o.orderId === orderId);
+    if (!order) return;
+
+    order.fallbackRecoveries.push({
+      timestamp: new Date().toISOString(),
+      ...recoveryInfo
     });
   }
 
@@ -401,6 +412,7 @@ export class ArtReportGenerator {
       (acc, order) => acc + (order.artResults?.payloadComparisons?.filter((comparison) => (comparison.differenceCount || 0) > 0).length || 0),
       0
     );
+    const totalFallbackRecoveries = this.orders.reduce((acc, order) => acc + (order.fallbackRecoveries?.length || 0), 0);
 
     const orderOutcomes = this.orders.map((order) => this.buildOrderOutcome(order));
     const requestDetails = this.orders
@@ -430,6 +442,7 @@ export class ArtReportGenerator {
         totalTimeoutLogs,
         totalBufferFailures,
         ordersWithBufferFailures,
+        totalFallbackRecoveries,
         totalPayloadComparisons,
         totalPayloadMismatches
       },

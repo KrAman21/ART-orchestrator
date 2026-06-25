@@ -8,7 +8,7 @@ import { ArtReportGenerator } from './services/art-report-generator.js';
 import { logger } from './utils/logger.js';
 import { basename, dirname, extname, join } from 'path';
 import { unlink } from 'fs/promises';
-import { REPLAY_SPECIAL_CASES, getOptionalRepeatPolicy, isPollingApiLogTag } from './replay-special-cases.js';
+import { REPLAY_SPECIAL_CASES, getOptionalRepeatPolicy, isPollingApiLogTag, isSelfTriggerFallbackApiLogTag } from './replay-special-cases.js';
 import { findCorrespondingResponseEntry } from './services/response-matcher.js';
 
 function extractReadableFailureMessage(value) {
@@ -847,6 +847,15 @@ function buildPollingReplayRestartPlan(orchestrator, completionResult, attempted
 
   const stuckEntry = completionResult.stuckEntry || orchestrator.validator?.getCurrentEntry?.() || null;
 
+  if (isSelfTriggerFallbackApiLogTag(stuckEntry?.logTag)) {
+    logger.info('Skipping polling rewind plan because current stuck entry is configured for self-trigger fallback', {
+      stuckEntry: stuckEntry?.toString?.() || null,
+      stuckLogTag: stuckEntry?.logTag || null,
+      waitReason: waitReason || null
+    });
+    return null;
+  }
+
   if (!waitReason) {
     logger.info('Skipping polling rewind plan because no buffered-request wait diagnostics were available', {
       stuckEntry: stuckEntry?.toString?.() || null,
@@ -1258,6 +1267,7 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
 
 async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal) {
   const startTime = Date.now();
+  let timeoutDeadline = startTime + timeoutMs;
   let lastLoggedMinute = 0;
   const { retryIntervalMs, maxRetrySeconds } = RETRY_CONFIG;
 
@@ -1266,8 +1276,9 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
 
   let stuckEntryIndex = null;
   let stuckSince = null;
+  let lastGlobalTimeoutDeferralEntryIndex = null;
 
-  while (Date.now() - startTime < timeoutMs) {
+  while (Date.now() < timeoutDeadline) {
     if (stopSignal?.requested) {
       const currentEntry = orchestrator.validator?.getCurrentEntry();
       logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Stop requested by user - Current: ${currentEntry?.logTag || 'N/A'}`, {
@@ -1299,6 +1310,9 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
 
     const currentEntry = orchestrator.validator?.getCurrentEntry();
     const currentIndex = currentEntry?.index ?? null;
+    const replayWaitMs = typeof orchestrator?.getRequestWaitTimeoutMs === 'function' && currentEntry?.isRequest
+      ? orchestrator.getRequestWaitTimeoutMs(currentEntry)
+      : 0;
 
     if (stuckEntryIndex !== null && typeof orchestrator?.consumeResolvedStuckEntrySignal === 'function') {
       if (orchestrator.consumeResolvedStuckEntrySignal(stuckEntryIndex)) {
@@ -1317,6 +1331,10 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
       }
     }
 
+    if (currentIndex !== lastGlobalTimeoutDeferralEntryIndex && currentIndex !== null) {
+      lastGlobalTimeoutDeferralEntryIndex = null;
+    }
+
     // Track how long we've been stuck on the same entry
     if (currentIndex !== null && currentIndex === stuckEntryIndex) {
       const currentMaxRetrySeconds = getMaxRetrySeconds(currentEntry?.logTag);
@@ -1333,6 +1351,23 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
       if (maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
         stuckEntryIndex = null;
         stuckSince = null;
+        continue;
+      }
+
+      if (stuckDurationMs >= currentMaxRetryMs && isSelfTriggerFallbackApiLogTag(currentEntry?.logTag)) {
+        logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Deferring outer timeout because current entry uses self-trigger fallback - Current: ${currentEntry?.logTag || 'unknown'}`, {
+          orderId,
+          orderIndex,
+          totalOrders,
+          currentLogTag: currentEntry?.logTag,
+          currentLogIndex: currentIndex,
+          maxRetrySeconds: currentMaxRetrySeconds,
+          effectiveRetryMs: currentMaxRetryMs,
+          retryIntervalMs,
+          phase: 'SELF_TRIGGER_FALLBACK_TIMEOUT_DEFERRED'
+        });
+        stuckSince = Date.now();
+        await sleep(retryIntervalMs);
         continue;
       }
 
@@ -1356,11 +1391,35 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
     }
 
     const elapsedMs = Date.now() - startTime;
+    const remainingMs = timeoutDeadline - Date.now();
     const elapsedMinutes = Math.floor(elapsedMs / 60000);
+
+    if (
+      isSelfTriggerFallbackApiLogTag(currentEntry?.logTag) &&
+      replayWaitMs > 0 &&
+      currentIndex !== null &&
+      currentIndex !== lastGlobalTimeoutDeferralEntryIndex &&
+      remainingMs <= replayWaitMs + retryIntervalMs
+    ) {
+      const extensionMs = replayWaitMs + 5_000;
+      timeoutDeadline = Date.now() + extensionMs;
+      lastGlobalTimeoutDeferralEntryIndex = currentIndex;
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Deferring global replay timeout because current entry uses self-trigger fallback - Current: ${currentEntry?.logTag || 'unknown'}`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        currentLogTag: currentEntry?.logTag,
+        currentLogIndex: currentIndex,
+        replayWaitMs,
+        extendedByMs: extensionMs,
+        newRemainingMs: timeoutDeadline - Date.now(),
+        phase: 'GLOBAL_TIMEOUT_DEFERRED_FOR_SELF_TRIGGER'
+      });
+    }
 
     if (elapsedMinutes > lastLoggedMinute) {
       lastLoggedMinute = elapsedMinutes;
-      const remainingMinutes = Math.ceil((timeoutMs - elapsedMs) / 60000);
+      const remainingMinutes = Math.ceil(Math.max(0, timeoutDeadline - Date.now()) / 60000);
 
       logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Running for ${elapsedMinutes} minute(s), ${remainingMinutes} minute(s) remaining - Current: ${currentEntry?.logTag || 'N/A'}`, {
         orderId,
@@ -1378,7 +1437,7 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
   }
 
   const currentEntry = orchestrator.validator?.getCurrentEntry();
-  logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - TIMEOUT after ${Math.round(timeoutMs / 1000 / 60)} minutes - Stuck at: ${currentEntry?.logTag || 'unknown'}`, {
+  logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - TIMEOUT after ${Math.round((Date.now() - startTime) / 1000 / 60)} minutes - Stuck at: ${currentEntry?.logTag || 'unknown'}`, {
     orderId,
     orderIndex,
     totalOrders,

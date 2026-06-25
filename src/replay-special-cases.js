@@ -178,6 +178,10 @@ export const SKIPPABLE_ASYNC_API_LOG_TAGS = new Set([
   'FETCH_OFFER_ASYNC_RESPONSE_REQUEST'
 ]);
 
+export const SELF_TRIGGER_FALLBACK_API_LOG_TAGS = new Set([
+  'LOAN_STATUS_ASYNC_RESPONSE_REQUEST', 'WEBHOOK_REQUEST'
+]);
+
 export const THEMIS_ELIGIBILITY_LOG_TAG = 'Themis-Eligibility_REQUEST';
 export const THEMIS_KFS_LOG_TAG = 'Themis-KFS_REQUEST';
 
@@ -195,6 +199,10 @@ export function isPollingApiLogTag(logTag) {
 
 export function isSkippableAsyncApiLogTag(logTag) {
   return SKIPPABLE_ASYNC_API_LOG_TAGS.has(logTag);
+}
+
+export function isSelfTriggerFallbackApiLogTag(logTag) {
+  return SELF_TRIGGER_FALLBACK_API_LOG_TAGS.has(logTag);
 }
 
 export function getOptionalRepeatPolicy(config, currentEntry) {
