@@ -227,6 +227,408 @@ test('filterOrchestratorSkippableLogs leaves correctly ordered UpdateKYC request
   );
 });
 
+test('filterOrchestratorSkippableLogs removes order-status pair that appears before FlipKart-FetchStatus trigger in same order context', async () => {
+  const logs = [
+    {
+      messageNumber: 1,
+      message: {
+        created_at: '2026-06-25T11:20:09.779Z',
+        log_tag: 'ORDER_STATUS_API_LS_REQUEST',
+        trace_route: 'GATEWAY_LENDER',
+        request_id: 'order-status-early-req',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        trace_request: {
+          merchant_order_placement_id: 'OD4379241627771351',
+          merchant_order_id: 'PZT26062516499XLEN01'
+        }
+      }
+    },
+    {
+      messageNumber: 2,
+      message: {
+        created_at: '2026-06-25T11:20:09.933Z',
+        log_tag: 'ORDER_STATUS_API_LS_RESPONSE',
+        trace_route: 'LENDER_GATEWAY',
+        request_id: 'order-status-early-res',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        trace_response: {
+          order_status: 'IN_PROGRESS'
+        },
+        trace_request: {
+          merchant_order_placement_id: 'OD4379241627771351',
+          merchant_order_id: 'PZT26062516499XLEN01'
+        }
+      }
+    },
+    {
+      messageNumber: 3,
+      message: {
+        created_at: '2026-06-25T11:21:48.885Z',
+        log_tag: 'FlipKart-FetchStatus_REQUEST',
+        trace_route: 'APP_WRAPPER',
+        request_id: 'fetch-status-1',
+        merchant_id: 'flipkartSM',
+        order_id: 'OD4379241627771351',
+        trace_request: {
+          order_id: 'OD4379241627771351',
+          txn_id: 'PZT26062516499XLEN01'
+        }
+      }
+    },
+    {
+      messageNumber: 4,
+      message: {
+        created_at: '2026-06-25T11:21:48.901Z',
+        log_tag: 'FlipKart-FetchStatus_RESPONSE',
+        trace_route: 'APP_WRAPPER',
+        request_id: 'fetch-status-1-res',
+        merchant_id: 'flipkartSM',
+        order_id: 'OD4379241627771351',
+        trace_response: {
+          order_status: 'PENDING'
+        }
+      }
+    },
+    {
+      messageNumber: 5,
+      message: {
+        created_at: '2026-06-25T11:21:48.997Z',
+        log_tag: 'ORDER_STATUS_API_LS_REQUEST',
+        trace_route: 'GATEWAY_LENDER',
+        request_id: 'order-status-late-req',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_request: {
+          merchant_order_placement_id: 'OD4379241627771351',
+          merchant_order_id: 'PZT26062516499XLEN01'
+        }
+      }
+    },
+    {
+      messageNumber: 6,
+      message: {
+        created_at: '2026-06-25T11:21:49.095Z',
+        log_tag: 'ORDER_STATUS_API_LS_RESPONSE',
+        trace_route: 'LENDER_GATEWAY',
+        request_id: 'order-status-late-res',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_response: {
+          order_status: 'SUCCESS'
+        }
+      }
+    }
+  ];
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  assert.deepEqual(
+    filtered.map(log => log.message.log_tag),
+    [
+      'FlipKart-FetchStatus_REQUEST',
+      'FlipKart-FetchStatus_RESPONSE',
+      'ORDER_STATUS_API_LS_REQUEST',
+      'ORDER_STATUS_API_LS_RESPONSE'
+    ]
+  );
+});
+
+test('filterOrchestratorSkippableLogs keeps CORE->GATEWAY loan status request when fetch-status flow already triggered the same order context', async () => {
+  const logs = [
+    {
+      messageNumber: 1,
+      message: {
+        created_at: '2026-06-25T11:21:48.885Z',
+        log_tag: 'FlipKart-FetchStatus_REQUEST',
+        trace_route: 'APP_WRAPPER',
+        request_id: 'fetch-status-1',
+        merchant_id: 'flipkartSM',
+        order_id: 'OD4379241627771351',
+        trace_request: {
+          order_id: 'OD4379241627771351',
+          txn_id: 'PZT26062516499XLEN01'
+        }
+      }
+    },
+    {
+      messageNumber: 2,
+      message: {
+        created_at: '2026-06-25T11:21:48.901Z',
+        log_tag: 'FlipKart-FetchStatus_RESPONSE',
+        trace_route: 'APP_WRAPPER',
+        request_id: 'fetch-status-1-res',
+        merchant_id: 'flipkartSM',
+        order_id: 'OD4379241627771351',
+        trace_response: {
+          order_status: 'PENDING'
+        }
+      }
+    },
+    {
+      messageNumber: 3,
+      message: {
+        created_at: '2026-06-25T11:21:48.997Z',
+        log_tag: 'ORDER_STATUS_API_LS_REQUEST',
+        trace_route: 'GATEWAY_LENDER',
+        request_id: 'order-status-req',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_request: {
+          merchant_order_placement_id: 'OD4379241627771351',
+          merchant_order_id: 'PZT26062516499XLEN01'
+        }
+      }
+    },
+    {
+      messageNumber: 4,
+      message: {
+        created_at: '2026-06-25T11:21:49.095Z',
+        log_tag: 'ORDER_STATUS_API_LS_RESPONSE',
+        trace_route: 'LENDER_GATEWAY',
+        request_id: 'order-status-res',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_response: {
+          order_status: 'SUCCESS'
+        }
+      }
+    },
+    {
+      messageNumber: 5,
+      message: {
+        created_at: '2026-06-25T11:21:49.185Z',
+        log_tag: 'Lsp-LoanStatusRequest_REQUEST',
+        trace_route: 'CORE_GATEWAY',
+        request_id: 'core-gateway-1',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_request: {
+          forwardTxnId: 'PZT26062516499XLEN01',
+          loanApplicationId: 'loan-1'
+        }
+      }
+    },
+    {
+      messageNumber: 6,
+      message: {
+        created_at: '2026-06-25T11:21:49.285Z',
+        log_tag: 'Lsp-LoanStatusRequest_RESPONSE',
+        trace_route: 'GATEWAY_CORE',
+        request_id: 'core-gateway-1',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_response: {
+          orderStatus: 'SUCCESS'
+        }
+      }
+    }
+  ];
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  assert.deepEqual(
+    filtered.map(log => log.message.log_tag),
+    [
+      'FlipKart-FetchStatus_REQUEST',
+      'FlipKart-FetchStatus_RESPONSE',
+      'ORDER_STATUS_API_LS_REQUEST',
+      'ORDER_STATUS_API_LS_RESPONSE',
+      'Lsp-LoanStatusRequest_REQUEST',
+      'Lsp-LoanStatusRequest_RESPONSE'
+    ]
+  );
+});
+
+test('filterOrchestratorSkippableLogs forcibly reorders flipkartSM fetch-status progression when raw sort order is wrong', async () => {
+  const logs = [
+    {
+      messageNumber: 1,
+      message: {
+        created_at: '2026-06-25T11:21:48.885Z',
+        log_tag: 'FlipKart-FetchStatus_REQUEST',
+        trace_route: 'APP_WRAPPER',
+        request_id: 'fetch-status-1',
+        merchant_id: 'flipkartSM',
+        order_id: 'OD4379241627771351',
+        trace_request: {
+          order_id: 'OD4379241627771351',
+          txn_id: 'PZT26062516499XLEN01'
+        }
+      }
+    },
+    {
+      messageNumber: 2,
+      message: {
+        created_at: '2026-06-25T11:21:48.901Z',
+        log_tag: 'FlipKart-FetchStatus_RESPONSE',
+        trace_route: 'APP_WRAPPER',
+        request_id: 'fetch-status-1-res',
+        merchant_id: 'flipkartSM',
+        order_id: 'OD4379241627771351',
+        trace_response: {
+          order_status: 'PENDING'
+        }
+      }
+    },
+    {
+      messageNumber: 3,
+      message: {
+        created_at: '2026-06-25T11:21:48.997Z',
+        log_tag: 'ORDER_STATUS_API_LS_REQUEST',
+        trace_route: 'GATEWAY_LENDER',
+        request_id: 'order-status-req',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_request: {
+          merchant_order_placement_id: 'OD4379241627771351',
+          merchant_order_id: 'PZT26062516499XLEN01'
+        }
+      }
+    },
+    {
+      messageNumber: 4,
+      message: {
+        created_at: '2026-06-25T11:21:49.020Z',
+        log_tag: 'ORDER_STATUS_API_LS_RESPONSE',
+        trace_route: 'LENDER_GATEWAY',
+        request_id: 'order-status-res',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_response: {
+          order_status: 'SUCCESS'
+        }
+      }
+    },
+    {
+      messageNumber: 5,
+      message: {
+        created_at: '2026-06-25T11:21:49.101Z',
+        log_tag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+        trace_route: 'GATEWAY_LSP',
+        request_id: 'fetch-la-req',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_request: {
+          loanApplicationId: 'loan-1',
+          order_id: 'OD4379241627771351'
+        }
+      }
+    },
+    {
+      messageNumber: 6,
+      message: {
+        created_at: '2026-06-25T11:21:49.120Z',
+        log_tag: 'FECTH_LOAN_APPLICATION_DATA_API_RESPONSE',
+        trace_route: 'GATEWAY_LSP',
+        request_id: 'fetch-la-res',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_response: {
+          loanApplicationId: 'loan-1'
+        }
+      }
+    },
+    {
+      messageNumber: 7,
+      message: {
+        created_at: '2026-06-25T11:21:49.152Z',
+        log_tag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+        trace_route: 'GATEWAY_LSP',
+        request_id: 'loan-status-async-req',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_request: {
+          loanDetails: {
+            loanApplicationId: 'loan-1'
+          },
+          merchant_order_id: 'PZT26062516499XLEN01'
+        }
+      }
+    },
+    {
+      messageNumber: 8,
+      message: {
+        created_at: '2026-06-25T11:21:49.170Z',
+        log_tag: 'LOAN_STATUS_ASYNC_RESPONSE_RESPONSE',
+        trace_route: 'GATEWAY_LSP',
+        request_id: 'loan-status-async-res',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_response: {
+          ack: {
+            error: '0'
+          }
+        }
+      }
+    },
+    {
+      messageNumber: 9,
+      message: {
+        created_at: '2026-06-25T11:21:49.185Z',
+        log_tag: 'Lsp-LoanStatusRequest_REQUEST',
+        trace_route: 'CORE_GATEWAY',
+        request_id: 'core-gateway-1',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_request: {
+          forwardTxnId: 'PZT26062516499XLEN01',
+          loanApplicationId: 'loan-1'
+        }
+      }
+    },
+    {
+      messageNumber: 10,
+      message: {
+        created_at: '2026-06-25T11:21:49.200Z',
+        log_tag: 'Lsp-LoanStatusRequest_RESPONSE',
+        trace_route: 'GATEWAY_CORE',
+        request_id: 'core-gateway-1',
+        merchant_id: 'flipkartSM',
+        loan_application_id: 'loan-1',
+        order_id: 'OD4379241627771351',
+        trace_response: {
+          orderStatus: 'SUCCESS'
+        }
+      }
+    }
+  ];
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  const tags = filtered.map(log => log.message.log_tag);
+  const flipKartFetchStatusIndex = tags.indexOf('FlipKart-FetchStatus_REQUEST');
+  const coreGatewayLoanStatusIndex = tags.indexOf('Lsp-LoanStatusRequest_REQUEST');
+  const orderStatusIndex = tags.indexOf('ORDER_STATUS_API_LS_REQUEST');
+  const fetchLoanApplicationIndex = tags.indexOf('FECTH_LOAN_APPLICATION_DATA_API_REQUEST');
+  const loanStatusAsyncIndex = tags.indexOf('LOAN_STATUS_ASYNC_RESPONSE_REQUEST');
+
+  assert.notEqual(flipKartFetchStatusIndex, -1);
+  assert.notEqual(coreGatewayLoanStatusIndex, -1);
+  assert.notEqual(orderStatusIndex, -1);
+  assert.notEqual(fetchLoanApplicationIndex, -1);
+  assert.notEqual(loanStatusAsyncIndex, -1);
+
+  assert.ok(coreGatewayLoanStatusIndex > flipKartFetchStatusIndex);
+  assert.ok(orderStatusIndex > coreGatewayLoanStatusIndex);
+  assert.ok(fetchLoanApplicationIndex > orderStatusIndex);
+  assert.ok(loanStatusAsyncIndex > fetchLoanApplicationIndex);
+});
+
 test('filterOrchestratorSkippableLogs removes orphaned CORE->GATEWAY loan status requests without a fresh APP->CORE trigger', async () => {
   const logs = [
     buildLog({
@@ -278,8 +680,8 @@ test('filterOrchestratorSkippableLogs removes orphaned CORE->GATEWAY loan status
     ...log,
     message: {
       ...log.message,
-      order_id: 'order-1',
-      loan_application_id: 'loan-1'
+      order_id: log.message.request_id === 'core-gateway-2' ? 'order-2' : 'order-1',
+      loan_application_id: log.message.request_id === 'core-gateway-2' ? 'loan-2' : 'loan-1'
     }
   }));
 

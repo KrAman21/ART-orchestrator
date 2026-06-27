@@ -759,25 +759,22 @@ export class BufferManager {
     const sequenceAlignedMatches = matches.filter(({ entry }) =>
       this._sharesSequenceContext(entry.request, expectedEntry)
     );
-    const shouldUseSequenceFifo = sequenceAlignedMatches.length > 1;
-    const rankedMatches = shouldUseSequenceFifo ? sequenceAlignedMatches : matches;
+    const rankedMatches = sequenceAlignedMatches.length > 0 ? sequenceAlignedMatches : matches;
+    const shouldUseSequenceFifo = this._shouldUseSequenceFifoForMatches(rankedMatches);
 
-    if (shouldUseSequenceFifo) {
-      logger.info('Using FIFO ordering for repeated same-context buffered requests', {
-        expected: expectedEntry.toString(),
-        candidateCount: rankedMatches.length
-      });
+    if (sequenceAlignedMatches.length > 1) {
+      logger.info(
+        shouldUseSequenceFifo
+          ? 'Using FIFO ordering for repeated same-context buffered requests'
+          : 'Using payload-quality ordering for repeated same-context buffered requests',
+        {
+          expected: expectedEntry.toString(),
+          candidateCount: rankedMatches.length
+        }
+      );
     }
 
     rankedMatches.sort((a, b) => {
-      if (shouldUseSequenceFifo) {
-        if (a.entry.timestamp !== b.entry.timestamp) {
-          return a.entry.timestamp - b.entry.timestamp;
-        }
-        if (a.entry.preservedOnRewind !== b.entry.preservedOnRewind) {
-          return a.entry.preservedOnRewind ? -1 : 1;
-        }
-      }
       if (a.entry.preservedOnRewind !== b.entry.preservedOnRewind) {
         return a.entry.preservedOnRewind ? 1 : -1;
       }
@@ -789,6 +786,9 @@ export class BufferManager {
       }
       if (b.matchDetails.score !== a.matchDetails.score) {
         return b.matchDetails.score - a.matchDetails.score;
+      }
+      if (shouldUseSequenceFifo && a.entry.timestamp !== b.entry.timestamp) {
+        return a.entry.timestamp - b.entry.timestamp;
       }
       return a.entry.timestamp - b.entry.timestamp;
     });
@@ -1020,6 +1020,37 @@ export class BufferManager {
     }
 
     return hasSharedContextField;
+  }
+
+  _shouldUseSequenceFifoForMatches(matches = []) {
+    if (matches.length <= 1) {
+      return false;
+    }
+
+    const ranked = [...matches].sort((a, b) => {
+      if (a.entry.preservedOnRewind !== b.entry.preservedOnRewind) {
+        return a.entry.preservedOnRewind ? 1 : -1;
+      }
+      if (b.matchDetails.exactMatchCount !== a.matchDetails.exactMatchCount) {
+        return b.matchDetails.exactMatchCount - a.matchDetails.exactMatchCount;
+      }
+      if (a.matchDetails.differenceCount !== b.matchDetails.differenceCount) {
+        return a.matchDetails.differenceCount - b.matchDetails.differenceCount;
+      }
+      if (b.matchDetails.score !== a.matchDetails.score) {
+        return b.matchDetails.score - a.matchDetails.score;
+      }
+      return a.entry.timestamp - b.entry.timestamp;
+    });
+
+    const best = ranked[0];
+
+    return matches.every(({ entry, matchDetails }) =>
+      !!entry.preservedOnRewind === !!best.entry.preservedOnRewind &&
+      matchDetails.exactMatchCount === best.matchDetails.exactMatchCount &&
+      matchDetails.differenceCount === best.matchDetails.differenceCount &&
+      matchDetails.score === best.matchDetails.score
+    );
   }
   
   onWorkAvailable(callback) {

@@ -63,7 +63,8 @@ function getPairingGroupKey(tagInfo, traceRoute) {
     tagInfo.baseTag === 'UpdateKYCRequest-LSP' ||
     tagInfo.baseTag === 'KYC SERVICE API' ||
     tagInfo.baseTag === 'LSP-LoanStatus' ||
-    tagInfo.baseTag === 'Lsp-LoanStatusRequest'
+    tagInfo.baseTag === 'Lsp-LoanStatusRequest' ||
+    tagInfo.baseTag === 'ORDER_STATUS_API_LS'
   ) {
     return tagInfo.baseTag;
   }
@@ -278,6 +279,91 @@ function extractReplayContextKey(log) {
   ].find(value => typeof value === 'string' && value.trim() !== '') || 'GLOBAL';
 }
 
+function extractFetchStatusOrderContextKey(log) {
+  const msg = log?.message || {};
+  const payload =
+    msg.trace_request ||
+    msg.trace_response ||
+    msg.trace_payload ||
+    {};
+
+  const orderId =
+    msg.order_id ||
+    payload.order_id ||
+    payload.orderId ||
+    payload.merchant_order_placement_id ||
+    payload.merchantOrderPlacementId ||
+    null;
+
+  const txnId =
+    msg.txn_id ||
+    payload.txn_id ||
+    payload.txnId ||
+    payload.merchant_order_id ||
+    payload.merchantOrderId ||
+    null;
+
+  const merchantId = msg.merchant_id || payload.merchant_id || payload.merchantId || null;
+
+  return [merchantId, orderId, txnId]
+    .filter(value => typeof value === 'string' && value.trim() !== '')
+    .join('::') || 'GLOBAL';
+}
+
+function resolvePendingOrderStatusResponseContext(contextKey, pendingResponsesByContext) {
+  const exactPending = pendingResponsesByContext.get(contextKey) || 0;
+  if (exactPending > 0) {
+    return contextKey;
+  }
+
+  const [merchantId = '', orderId = ''] = contextKey.split('::');
+  if (!merchantId || !orderId) {
+    return null;
+  }
+
+  const prefix = `${merchantId}::${orderId}::`;
+  for (const [candidateKey, pendingCount] of pendingResponsesByContext.entries()) {
+    if (pendingCount > 0 && candidateKey.startsWith(prefix)) {
+      return candidateKey;
+    }
+  }
+
+  return null;
+}
+
+function fetchStatusContextKeysMatch(leftContextKey, rightContextKey) {
+  if (leftContextKey === rightContextKey) {
+    return true;
+  }
+
+  const [leftMerchantId = '', leftOrderId = ''] = (leftContextKey || '').split('::');
+  const [rightMerchantId = '', rightOrderId = ''] = (rightContextKey || '').split('::');
+
+  return Boolean(
+    leftMerchantId &&
+      leftOrderId &&
+      rightMerchantId &&
+      rightOrderId &&
+      leftMerchantId === rightMerchantId &&
+      leftOrderId === rightOrderId
+  );
+}
+
+function getFetchStatusContextAliases(contextKey) {
+  const aliases = new Set();
+  if (!contextKey) {
+    return aliases;
+  }
+
+  aliases.add(contextKey);
+  const [merchantId = '', orderId = ''] = contextKey.split('::');
+  if (merchantId && orderId) {
+    aliases.add(`${merchantId}::${orderId}`);
+  }
+
+  return aliases;
+}
+
 function findPairRanges(logs, requestTag, responseTag) {
   const pendingByContext = new Map();
   const pairs = [];
@@ -391,6 +477,165 @@ function reorderOutOfOrderKycPairs(logs) {
   return changed ? reordered : logs;
 }
 
+function findNextLogIndex(logs, startIndex, predicate) {
+  for (let index = startIndex; index < logs.length; index += 1) {
+    if (predicate(logs[index])) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function reorderFlipkartSmFetchStatusSequence(logs) {
+  const reordered = [...logs];
+  let changed = false;
+
+  for (let index = 0; index < reordered.length; index += 1) {
+    const current = reordered[index];
+    const currentMessage = current?.message || {};
+    const currentTag = (currentMessage.log_tag || '').trim();
+    const currentMerchantId = currentMessage.merchant_id || null;
+
+    if (currentTag !== 'FlipKart-FetchStatus_REQUEST' || currentMerchantId !== 'flipkartSM') {
+      continue;
+    }
+
+    const contextKey = extractFetchStatusOrderContextKey(current);
+    const fetchStatusResponseIndex = findNextLogIndex(
+      reordered,
+      index + 1,
+      log => {
+        const message = log?.message || {};
+        return (
+          (message.log_tag || '').trim() === 'FlipKart-FetchStatus_RESPONSE' &&
+          fetchStatusContextKeysMatch(extractFetchStatusOrderContextKey(log), contextKey)
+        );
+      }
+    );
+
+    if (fetchStatusResponseIndex === -1) {
+      continue;
+    }
+
+    const coreGatewayIndex = findNextLogIndex(
+      reordered,
+      fetchStatusResponseIndex + 1,
+      log => {
+        const message = log?.message || {};
+        return (
+          (message.log_tag || '').trim() === 'Lsp-LoanStatusRequest_REQUEST' &&
+          fetchStatusContextKeysMatch(extractFetchStatusOrderContextKey(log), contextKey)
+        );
+      }
+    );
+
+    const orderStatusRequestIndex = findNextLogIndex(
+      reordered,
+      fetchStatusResponseIndex + 1,
+      log => {
+        const message = log?.message || {};
+        return (
+          (message.log_tag || '').trim() === 'ORDER_STATUS_API_LS_REQUEST' &&
+          fetchStatusContextKeysMatch(extractFetchStatusOrderContextKey(log), contextKey)
+        );
+      }
+    );
+
+    const fetchLoanApplicationDataIndex = findNextLogIndex(
+      reordered,
+      fetchStatusResponseIndex + 1,
+      log => {
+        const message = log?.message || {};
+        return (
+          (message.log_tag || '').trim() === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' &&
+          fetchStatusContextKeysMatch(extractFetchStatusOrderContextKey(log), contextKey)
+        );
+      }
+    );
+
+    const loanStatusAsyncIndex = findNextLogIndex(
+      reordered,
+      fetchStatusResponseIndex + 1,
+      log => {
+        const message = log?.message || {};
+        return (
+          (message.log_tag || '').trim() === 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST' &&
+          fetchStatusContextKeysMatch(extractFetchStatusOrderContextKey(log), contextKey)
+        );
+      }
+    );
+
+    const requiredIndexes = [
+      coreGatewayIndex,
+      orderStatusRequestIndex,
+      fetchLoanApplicationDataIndex,
+      loanStatusAsyncIndex
+    ];
+
+    if (requiredIndexes.some(candidateIndex => candidateIndex === -1)) {
+      continue;
+    }
+
+    const currentSequence = [coreGatewayIndex, orderStatusRequestIndex, fetchLoanApplicationDataIndex, loanStatusAsyncIndex];
+    const expectedSortedSequence = [...currentSequence].sort((left, right) => left - right);
+    const alreadyOrdered = currentSequence.every((value, sequenceIndex) => value === expectedSortedSequence[sequenceIndex]);
+
+    if (alreadyOrdered) {
+      console.log(`Second-level filter: flipkartSM fetch-status sequence already ordered for context ${contextKey}`);
+      continue;
+    }
+
+    const entryGroups = [
+      {
+        label: 'Lsp-LoanStatusRequest_REQUEST',
+        items: reordered.splice(coreGatewayIndex, 1)
+      },
+      {
+        label: 'ORDER_STATUS_API_LS_REQUEST',
+        items: reordered.splice(orderStatusRequestIndex - (orderStatusRequestIndex > coreGatewayIndex ? 1 : 0), 1)
+      },
+      {
+        label: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+        items: reordered.splice(
+          fetchLoanApplicationDataIndex -
+            (fetchLoanApplicationDataIndex > coreGatewayIndex ? 1 : 0) -
+            (fetchLoanApplicationDataIndex > orderStatusRequestIndex ? 1 : 0),
+          1
+        )
+      },
+      {
+        label: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+        items: reordered.splice(
+          loanStatusAsyncIndex -
+            (loanStatusAsyncIndex > coreGatewayIndex ? 1 : 0) -
+            (loanStatusAsyncIndex > orderStatusRequestIndex ? 1 : 0) -
+            (loanStatusAsyncIndex > fetchLoanApplicationDataIndex ? 1 : 0),
+          1
+        )
+      }
+    ];
+
+    const insertionIndex = fetchStatusResponseIndex + 1;
+    reordered.splice(
+      insertionIndex,
+      0,
+      ...entryGroups[0].items,
+      ...entryGroups[1].items,
+      ...entryGroups[2].items,
+      ...entryGroups[3].items
+    );
+
+    console.log(
+      `Second-level filter: forcibly reordered flipkartSM fetch-status sequence for context ${contextKey} into FlipKart-FetchStatus_REQUEST -> Lsp-LoanStatusRequest_REQUEST -> ORDER_STATUS_API_LS_REQUEST -> FECTH_LOAN_APPLICATION_DATA_API_REQUEST -> LOAN_STATUS_ASYNC_RESPONSE_REQUEST`
+    );
+
+    changed = true;
+  }
+
+  return changed ? reordered : logs;
+}
+
 function pruneOrphanedGatewayLoanStatusRequests(logs) {
   const availableTriggersByContext = new Map();
   const filtered = [];
@@ -400,19 +645,36 @@ function pruneOrphanedGatewayLoanStatusRequests(logs) {
     const msg = log?.message || {};
     const logTag = (msg.log_tag || '').trim();
     const contextKey = extractReplayContextKey(log);
+    const orderStatusContextKey = extractFetchStatusOrderContextKey(log);
 
-    if (logTag === 'LSP-LoanStatus_REQUEST') {
+    if (
+      logTag === 'LSP-LoanStatus_REQUEST' ||
+      logTag === 'FlipKart-FetchStatus_REQUEST' ||
+      logTag === 'ORDER_STATUS_API_LS_REQUEST'
+    ) {
       const available = availableTriggersByContext.get(contextKey) || 0;
       availableTriggersByContext.set(contextKey, available + 1);
+      for (const aliasKey of getFetchStatusContextAliases(orderStatusContextKey)) {
+        if (aliasKey === contextKey) {
+          continue;
+        }
+        const orderContextAvailable = availableTriggersByContext.get(aliasKey) || 0;
+        availableTriggersByContext.set(aliasKey, orderContextAvailable + 1);
+      }
       filtered.push(log);
       continue;
     }
 
     if (logTag === 'Lsp-LoanStatusRequest_REQUEST') {
-      const available = availableTriggersByContext.get(contextKey) || 0;
+      const candidateKeys = [
+        contextKey,
+        ...Array.from(getFetchStatusContextAliases(orderStatusContextKey))
+      ];
+      const consumeFromKey = candidateKeys.find(candidateKey => (availableTriggersByContext.get(candidateKey) || 0) > 0);
+      const available = consumeFromKey ? (availableTriggersByContext.get(consumeFromKey) || 0) : 0;
 
       if (available > 0) {
-        availableTriggersByContext.set(contextKey, available - 1);
+        availableTriggersByContext.set(consumeFromKey, available - 1);
         filtered.push(log);
       } else {
         removedCount += 1;
@@ -429,6 +691,69 @@ function pruneOrphanedGatewayLoanStatusRequests(logs) {
   if (removedCount > 0) {
     console.log(
       `Second-level filter: removed ${removedCount} orphaned Lsp-LoanStatusRequest_REQUEST entr${removedCount === 1 ? 'y' : 'ies'} based on missing prior LSP-LoanStatus_REQUEST trigger`
+    );
+  }
+
+  return filtered;
+}
+
+function pruneOrphanedOrderStatusAfterFetchStatus(logs) {
+  const availableTriggersByContext = new Map();
+  const pendingResponsesByContext = new Map();
+  const filtered = [];
+  let removedRequests = 0;
+  let removedResponses = 0;
+
+  for (const log of logs) {
+    const msg = log?.message || {};
+    const logTag = (msg.log_tag || '').trim();
+    const contextKey = extractFetchStatusOrderContextKey(log);
+
+    if (logTag === 'FlipKart-FetchStatus_REQUEST') {
+      const available = availableTriggersByContext.get(contextKey) || 0;
+      availableTriggersByContext.set(contextKey, available + 1);
+      filtered.push(log);
+      continue;
+    }
+
+    if (logTag === 'ORDER_STATUS_API_LS_REQUEST') {
+      const available = availableTriggersByContext.get(contextKey) || 0;
+
+      if (available > 0) {
+        availableTriggersByContext.set(contextKey, available - 1);
+        pendingResponsesByContext.set(contextKey, (pendingResponsesByContext.get(contextKey) || 0) + 1);
+        filtered.push(log);
+      } else {
+        removedRequests += 1;
+        console.log(
+          `Second-level filter: removing orphaned ORDER_STATUS_API_LS_REQUEST without prior FlipKart-FetchStatus_REQUEST for context ${contextKey}, request_id: ${msg.request_id || ''}`
+        );
+      }
+      continue;
+    }
+
+    if (logTag === 'ORDER_STATUS_API_LS_RESPONSE') {
+      const matchedContextKey = resolvePendingOrderStatusResponseContext(contextKey, pendingResponsesByContext);
+      const pendingResponses = matchedContextKey ? (pendingResponsesByContext.get(matchedContextKey) || 0) : 0;
+
+      if (pendingResponses > 0) {
+        pendingResponsesByContext.set(matchedContextKey, pendingResponses - 1);
+        filtered.push(log);
+      } else {
+        removedResponses += 1;
+        console.log(
+          `Second-level filter: removing orphaned ORDER_STATUS_API_LS_RESPONSE without kept request for context ${contextKey}, request_id: ${msg.request_id || ''}`
+        );
+      }
+      continue;
+    }
+
+    filtered.push(log);
+  }
+
+  if (removedRequests > 0 || removedResponses > 0) {
+    console.log(
+      `Second-level filter: removed ${removedRequests} orphaned ORDER_STATUS_API_LS_REQUEST entr${removedRequests === 1 ? 'y' : 'ies'} and ${removedResponses} orphaned ORDER_STATUS_API_LS_RESPONSE entr${removedResponses === 1 ? 'y' : 'ies'} based on missing prior FlipKart-FetchStatus_REQUEST trigger`
     );
   }
 
@@ -500,7 +825,9 @@ export async function filterOrchestratorSkippableLogs(logs, outputPath = null) {
   console.log(`Second-level filtering: ${logs.length} -> ${filtered.length} (removed ${logs.length - filtered.length} orchestrator-skipped entries)`);
 
   const reordered = reorderOutOfOrderKycPairs(filtered);
-  const triggerPruned = pruneOrphanedGatewayLoanStatusRequests(reordered);
+  const flipkartSmReordered = reorderFlipkartSmFetchStatusSequence(reordered);
+  const fetchStatusTriggerPruned = pruneOrphanedOrderStatusAfterFetchStatus(flipkartSmReordered);
+  const triggerPruned = pruneOrphanedGatewayLoanStatusRequests(fetchStatusTriggerPruned);
   const balanced = balanceRequestResponsePairs(triggerPruned);
   
   // Save final filtered logs to file if outputPath provided

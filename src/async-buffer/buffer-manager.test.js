@@ -315,6 +315,94 @@ test('completed non-gateway-lender request is not retained as rewind fallback', 
   }
 });
 
+test('repeated same-context fetch-offer async requests prefer the better payload match over older FIFO candidate', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    const older = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'fetch-offer-initiated',
+      loanApplicationId: 'loan-1',
+      payload: {
+        loanApplicationId: 'loan-1',
+        loanApplicationStatus: 'INITIATED',
+        offerType: 'REAL_TIME',
+        response: {
+          errorMessage: 'Waiting for lender offers'
+        },
+        eligibility: {
+          requiredSteps: [],
+          errorMessages: ['Waiting for lender offers'],
+          actionRequired: []
+        }
+      }
+    }));
+
+    await new Promise(resolve => setTimeout(resolve, 5));
+
+    const newer = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'fetch-offer-action-required',
+      loanApplicationId: 'loan-1',
+      payload: {
+        loanApplicationId: 'loan-1',
+        loanApplicationStatus: 'ACTION_REQUIRED',
+        offerType: 'REAL_TIME',
+        response: {
+          errorMessage: 'ACTION_REQUIRED_FOR_AA'
+        },
+        eligibility: {
+          requiredSteps: ['PARENT_BANK_STATEMENT'],
+          errorMessages: ['ACTION_REQUIRED_FOR_AA'],
+          actionRequired: [
+            {
+              action: 'ACCOUNT_AGGREGATOR'
+            }
+          ]
+        }
+      }
+    }));
+
+    const claimed = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'fetch-offer-log',
+      loanApplicationId: 'loan-1',
+      payload: {
+        loanApplicationId: 'loan-1',
+        loanApplicationStatus: 'ACTION_REQUIRED',
+        offerType: 'REAL_TIME',
+        response: {
+          errorMessage: 'ACTION_REQUIRED_FOR_AA'
+        },
+        eligibility: {
+          requiredSteps: ['PARENT_BANK_STATEMENT'],
+          errorMessages: ['ACTION_REQUIRED_FOR_AA'],
+          actionRequired: [
+            {
+              action: 'ACCOUNT_AGGREGATOR'
+            }
+          ]
+        }
+      }
+    }), 30);
+
+    assert.ok(claimed);
+    assert.equal(claimed.key, newer.key);
+    assert.notEqual(claimed.key, older.key);
+  } finally {
+    manager.stop();
+  }
+});
+
 test('preserved gateway lender fallback is used after short rewind wait instead of long timeout', async () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,

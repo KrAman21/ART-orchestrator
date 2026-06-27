@@ -39,13 +39,28 @@ function getDefaultLogDir() {
   return candidates.find(canWriteToDir) || '/tmp/art-orchestrator';
 }
 
-const LOG_DIR = getDefaultLogDir();
-const LOG_FILE_PATH = process.env.LOG_FILE
-  ? resolve(process.cwd(), process.env.LOG_FILE)
-  : resolve(LOG_DIR, LOG_FILE);
+function resolveLogPath(envPath, fileName) {
+  if (envPath) {
+    return resolve(process.cwd(), envPath);
+  }
 
-const INCOMING_LOG_FILE = resolve(LOG_DIR, 'art-incoming.log');
-const OUTGOING_LOG_FILE = resolve(LOG_DIR, 'art-outgoing.log');
+  const contextPath =
+    process.env.REPORT_PATH ||
+    process.env.ART_DEBUG_LOG_PATH ||
+    process.env.ART_USER_LOG_PATH ||
+    process.env.LOG_FILE;
+
+  if (contextPath) {
+    return resolve(dirname(resolve(process.cwd(), contextPath)), fileName);
+  }
+
+  return resolve(LOG_DIR, fileName);
+}
+
+const LOG_DIR = getDefaultLogDir();
+const LOG_FILE_PATH = resolveLogPath(process.env.LOG_FILE, LOG_FILE);
+const INCOMING_LOG_FILE = resolveLogPath(process.env.ART_INCOMING_LOG_PATH, 'art-incoming.log');
+const OUTGOING_LOG_FILE = resolveLogPath(process.env.ART_OUTGOING_LOG_PATH, 'art-outgoing.log');
 
 function initLogFile(filePath) {
   try {

@@ -1106,6 +1106,13 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LENDER|FK SCORE API_REQUEST': { endpoint: '/prod/partner_score', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|DECISION API_REQUEST': { endpoint: '/prod/updateapplication', method: 'POST', service: 'LENDER', headers: {} },
 
+
+
+  /// superMoney
+
+  'GATEWAY_LENDER|ORDER_INIT_API_SO_REQUEST': {endpoint: '/order/init', method: 'POST', service: 'LENDER', headers: {}},
+  'GATEWAY_LENDER|ORDER_STATUS_API_LS_REQUEST': {endpoint: '/order/status', method: 'POST', service: 'LENDER', headers: {}},
+
   /// MIHURU LENDER APIs
 
   'GATEWAY_LENDER|GENERATE PARTNER AUTH TOKEN_REQUEST': {endpoint: 'assistmodule/v2/login/apiuser', method: 'POST', service: 'LENDER', headers: {}},
@@ -1563,6 +1570,8 @@ export const API_TO_LOGTAG_MAP = {
   '/api/v1/asset-details':{logTag : 'HDB_OFFER_SELECTION_API_REQUEST', api: '/api/v1/asset-details', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/prod/asset-details':{logTag : 'HDB_OFFER_SELECTION_API_REQUEST', api: '/prod/asset-details', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/MOCK_DATA/asset-details':{logTag : 'HDB_OFFER_SELECTION_API_REQUEST', api: '/MOCK_DATA/asset-details', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/order/init':{logTag : 'ORDER_INIT_API_SO_REQUEST', api: '/order/init', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/order/status':{logTag : 'ORDER_STATUS_API_LS_REQUEST', api: '/order/status', sourceDestination: 'GATEWAY_LENDER', headers: {} },
 };
 
 // Destinations that should not be called (external services)

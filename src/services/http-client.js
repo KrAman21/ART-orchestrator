@@ -21,6 +21,40 @@ function buildRequestUrl(baseUrl, endpoint) {
   };
 }
 
+function inferMerchantIdFromEndpoint(endpoint) {
+  if (typeof endpoint !== 'string') {
+    return null;
+  }
+
+  if (endpoint.startsWith('/flipkartSM/')) {
+    return 'flipkartSM';
+  }
+
+  if (endpoint.startsWith('/flipkart2w/')) {
+    return 'flipkart2w';
+  }
+
+  if (endpoint.startsWith('/flipkart/')) {
+    return 'flipkart';
+  }
+
+  return null;
+}
+
+function resolveMerchantIdForRequest(merchantId, customHeaders, endpoint) {
+  return (
+    merchantId ||
+    customHeaders?.['x-merchant-id'] ||
+    customHeaders?.['X-Merchant-Id'] ||
+    inferMerchantIdFromEndpoint(endpoint) ||
+    null
+  );
+}
+
+function buildBasicMerchantAuthorization(merchantId) {
+  return merchantId ? `Basic ${merchantId}` : 'Basic flipkart';
+}
+
 export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, timeoutMs = 30000) {
   const parts = sourceDestination?.split('_') || [];
   const source = parts[0] || '';
@@ -44,6 +78,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
   });
 
   const { url, socketEndpoint } = buildRequestUrl(baseUrl, endpoint);
+  const resolvedMerchantId = resolveMerchantIdForRequest(merchantId, customHeaders, endpoint);
   const headers = {
     ...customHeaders,
     'Content-Type': 'application/json',
@@ -65,8 +100,8 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
   }
 
   // Add merchant ID to headers if provided
-  if (merchantId) {
-    headers['x-merchant-id'] = merchantId;
+  if (resolvedMerchantId) {
+    headers['x-merchant-id'] = resolvedMerchantId;
   }
 
   try {
@@ -75,13 +110,24 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     if (dest === 'WRAPPER' && body) {
       // body is already stringified above; just add WRAPPER-specific headers
       headers['disable_encryption'] = customHeaders['disable_encryption'] || 'TRUE';
-      headers['authorization'] = customHeaders['authorization'] || 'Basic flipkart';
+      headers['authorization'] =
+        customHeaders['authorization']
+          ? customHeaders['authorization'].replace(/^Basic\s+.+$/i, buildBasicMerchantAuthorization(resolvedMerchantId))
+          : buildBasicMerchantAuthorization(resolvedMerchantId);
       
       // When disable_encryption is TRUE, LSP expects body as JSON String (not Object)
       // because Servant route type is ReqBody '[JSON] Text
       if (headers['disable_encryption'] === 'TRUE') {
         body = JSON.stringify(body);
       }
+
+      logger.info('Resolved WRAPPER authorization header', {
+        merchantId,
+        resolvedMerchantId,
+        authorization: headers['authorization'],
+        logTag,
+        requestId
+      });
     }
 
     logger.info('Request body prepared', {

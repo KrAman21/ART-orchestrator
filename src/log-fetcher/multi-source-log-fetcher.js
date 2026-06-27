@@ -11,6 +11,41 @@ import {
 } from './sources/order-context-resolver.js';
 import { logger } from '../utils/logger.js';
 
+function getCreatedAtTime(log) {
+  const createdAt = log?.message?.created_at;
+  const timestamp = createdAt ? new Date(createdAt).getTime() : Number.NaN;
+  return Number.isNaN(timestamp) ? Number.POSITIVE_INFINITY : timestamp;
+}
+
+function getOrderStartTime(orderLogs) {
+  const timestamps = (Array.isArray(orderLogs) ? orderLogs : [])
+    .map(getCreatedAtTime)
+    .filter(Number.isFinite);
+
+  if (timestamps.length === 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  return Math.min(...timestamps);
+}
+
+export function shouldMergeLoanApplicationLogs(orderLogs, loanApplicationLogs) {
+  const orderStartTime = getOrderStartTime(orderLogs);
+  if (!Number.isFinite(orderStartTime)) {
+    return true;
+  }
+
+  const loanApplicationTimestamps = (Array.isArray(loanApplicationLogs) ? loanApplicationLogs : [])
+    .map(getCreatedAtTime)
+    .filter(Number.isFinite);
+
+  if (loanApplicationTimestamps.length === 0) {
+    return true;
+  }
+
+  return loanApplicationTimestamps.every(timestamp => timestamp >= orderStartTime);
+}
+
 function dedupeLogs(logs) {
   const seen = new Set();
   const deduped = [];
@@ -104,9 +139,30 @@ export class MultiSourceLogFetcher {
     );
 
     const sourceResults = [orderLogsResult];
+    const discardedLoanApplicationIds = [];
     for (const loanApplicationId of replayContext.loanApplicationIds) {
       const loanApplicationResult = await fetchS3TraceLogsByLoanApplicationId(loanApplicationId, this.sessionToken);
-      sourceResults.push(loanApplicationResult);
+      if (
+        loanApplicationResult.success &&
+        !shouldMergeLoanApplicationLogs(orderLogsResult.logs, loanApplicationResult.logs)
+      ) {
+        logger.warn('Discarding full LAID log set because at least one log predates order start time', {
+          merchantId,
+          orderId,
+          loanApplicationId,
+          orderStartTime: new Date(getOrderStartTime(orderLogsResult.logs)).toISOString(),
+          earliestLoanApplicationLogAt: new Date(
+            Math.min(
+              ...loanApplicationResult.logs
+                .map(getCreatedAtTime)
+                .filter(Number.isFinite)
+            )
+          ).toISOString()
+        });
+        discardedLoanApplicationIds.push(loanApplicationId);
+      } else {
+        sourceResults.push(loanApplicationResult);
+      }
       await this.sleep(this.delayBetweenRequests);
     }
 
@@ -124,6 +180,7 @@ export class MultiSourceLogFetcher {
       orderId,
       customerId: replayContext.customerId,
       loanApplicationIds: replayContext.loanApplicationIds,
+      discardedLoanApplicationIds,
       sourceCounts,
       combinedLogCount: allLogs.length
     });
