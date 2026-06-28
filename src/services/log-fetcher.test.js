@@ -629,7 +629,7 @@ test('filterOrchestratorSkippableLogs forcibly reorders flipkartSM fetch-status 
   assert.ok(loanStatusAsyncIndex > fetchLoanApplicationIndex);
 });
 
-test('filterOrchestratorSkippableLogs removes orphaned CORE->GATEWAY loan status requests without a fresh APP->CORE trigger', async () => {
+test('filterOrchestratorSkippableLogs does not filter out CORE->GATEWAY loan status requests directly', async () => {
   const logs = [
     buildLog({
       messageNumber: 1,
@@ -692,6 +692,8 @@ test('filterOrchestratorSkippableLogs removes orphaned CORE->GATEWAY loan status
     [
       ['APP_CORE', 'LSP-LoanStatus_REQUEST'],
       ['CORE_APP', 'LSP-LoanStatus_RESPONSE'],
+      ['CORE_GATEWAY', 'Lsp-LoanStatusRequest_REQUEST'],
+      ['GATEWAY_CORE', 'Lsp-LoanStatusRequest_RESPONSE'],
       ['CORE_GATEWAY', 'Lsp-LoanStatusRequest_REQUEST'],
       ['GATEWAY_CORE', 'Lsp-LoanStatusRequest_RESPONSE']
     ]
@@ -799,6 +801,170 @@ test('filterOrchestratorSkippableLogs keeps extra APP->CORE loan status triggers
       ['CORE_APP', 'LSP-LoanStatus_RESPONSE'],
       ['CORE_GATEWAY', 'Lsp-LoanStatusRequest_REQUEST'],
       ['GATEWAY_CORE', 'Lsp-LoanStatusRequest_RESPONSE']
+    ]
+  );
+});
+
+test('filterOrchestratorSkippableLogs keeps only HDB lender loan-status flow backed by kept CORE->GATEWAY trigger', async () => {
+  const logs = [
+    {
+      messageNumber: 0,
+      message: {
+        created_at: '2026-06-27T11:44:52.200Z',
+        log_tag: 'FlipKart-FetchStatus_REQUEST',
+        trace_route: 'APP_WRAPPER',
+        request_id: 'fetch-status-1',
+        merchant_id: 'flipkart',
+        order_id: 'order-1',
+        trace_request: {
+          order_id: 'order-1',
+          txn_id: 'txn-1'
+        }
+      }
+    },
+    {
+      messageNumber: 1,
+      message: {
+        created_at: '2026-06-27T11:44:52.313Z',
+        log_tag: 'Lsp-LoanStatusRequest_REQUEST',
+        trace_route: 'CORE_GATEWAY',
+        request_id: 'core-gateway-1',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'HDB',
+        trace_request: {
+          loanApplicationId: 'loan-1',
+          forwardTxnId: 'txn-1'
+        }
+      }
+    },
+    {
+      messageNumber: 2,
+      message: {
+        created_at: '2026-06-27T11:44:52.352Z',
+        log_tag: 'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_REQUEST',
+        trace_route: 'GATEWAY_LENDER',
+        request_id: 'hdb-req-1',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'HDB',
+        trace_request: {
+          data: { applicationId: 'HF-1' }
+        }
+      }
+    },
+    {
+      messageNumber: 3,
+      message: {
+        created_at: '2026-06-27T11:44:52.598Z',
+        log_tag: 'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_RESPONSE',
+        trace_route: 'GATEWAY_LENDER',
+        request_id: 'hdb-res-1',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'HDB',
+        trace_response: {
+          partnerRefNo: 'loan-1'
+        }
+      }
+    },
+    {
+      messageNumber: 4,
+      message: {
+        created_at: '2026-06-27T11:44:52.621Z',
+        log_tag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+        trace_route: 'GATEWAY_LSP',
+        request_id: 'async-req-1',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'HDB',
+        trace_request: {
+          loanDetails: { loanApplicationId: 'loan-1' }
+        }
+      }
+    },
+    {
+      messageNumber: 5,
+      message: {
+        created_at: '2026-06-27T11:44:52.640Z',
+        log_tag: 'LOAN_STATUS_ASYNC_RESPONSE_RESPONSE',
+        trace_route: 'GATEWAY_LSP',
+        request_id: 'async-res-1',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'HDB',
+        trace_response: {
+          ack: { error: '0' }
+        }
+      }
+    },
+    {
+      messageNumber: 6,
+      message: {
+        created_at: '2026-06-27T11:46:15.293Z',
+        log_tag: 'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_REQUEST',
+        trace_route: 'GATEWAY_LENDER',
+        request_id: 'hdb-req-2',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'HDB',
+        trace_request: {
+          data: { applicationId: 'HF-1' }
+        }
+      }
+    },
+    {
+      messageNumber: 7,
+      message: {
+        created_at: '2026-06-27T11:46:15.510Z',
+        log_tag: 'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_RESPONSE',
+        trace_route: 'GATEWAY_LENDER',
+        request_id: 'hdb-res-2',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'HDB',
+        trace_response: {
+          partnerRefNo: 'loan-1'
+        }
+      }
+    },
+    {
+      messageNumber: 8,
+      message: {
+        created_at: '2026-06-27T11:46:15.526Z',
+        log_tag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+        trace_route: 'GATEWAY_LSP',
+        request_id: 'async-req-2',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'HDB',
+        trace_request: {
+          loanDetails: { loanApplicationId: 'loan-1' }
+        }
+      }
+    },
+    {
+      messageNumber: 9,
+      message: {
+        created_at: '2026-06-27T11:46:15.540Z',
+        log_tag: 'LOAN_STATUS_ASYNC_RESPONSE_RESPONSE',
+        trace_route: 'GATEWAY_LSP',
+        request_id: 'async-res-2',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'HDB',
+        trace_response: {
+          ack: { error: '0' }
+        }
+      }
+    }
+  ];
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  assert.deepEqual(
+    filtered.map(log => log.message.log_tag),
+    [
+      'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_REQUEST',
+      'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_RESPONSE',
+      'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+      'LOAN_STATUS_ASYNC_RESPONSE_RESPONSE'
     ]
   );
 });

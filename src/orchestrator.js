@@ -616,14 +616,22 @@ export class ReplayOrchestrator {
       return;
     }
 
+    const sourceDestination = normalizeSourceDestination(
+      incoming.sourceDestination || `${incoming.source}_${incoming.destination}`,
+      incoming.logTag
+    );
+
     this.observedIncomingRequests.push({
       source: incoming.source,
       destination: incoming.destination,
+      sourceDestination,
       logTag: incoming.logTag,
       lenderOrgId: incoming.lenderOrgId || null,
       loanApplicationId: incoming.loanApplicationId || incoming.payload?.loanApplicationId || incoming.payload?.loan_application_id || null,
       orderId: incoming.orderId || incoming.headers?.['x-order-id'] || null,
       requestId: incoming.requestId || null,
+      payload: incoming.payload || null,
+      timestamp: incoming.timestamp || incoming._timestamp || null,
       observedAt: Date.now()
     });
 
@@ -1143,7 +1151,8 @@ export class ReplayOrchestrator {
         const didRegister = this.stateManager.registerIdentifierMapping(
           identifierType,
           originalValue,
-          localValue
+          localValue,
+          identifierContext
         );
 
         if (

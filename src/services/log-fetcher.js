@@ -697,6 +697,133 @@ function pruneOrphanedGatewayLoanStatusRequests(logs) {
   return filtered;
 }
 
+function pruneOrphanedHdbLoanStatusFlows(logs) {
+  const availableTriggersByContext = new Map();
+  const pendingLenderResponsesByContext = new Map();
+  const pendingAsyncRequestsByContext = new Map();
+  const pendingAsyncResponsesByContext = new Map();
+  const observedHdbLoanStatusContexts = new Set();
+  const filtered = [];
+  let removedRequests = 0;
+  let removedResponses = 0;
+  let removedAsyncRequests = 0;
+  let removedAsyncResponses = 0;
+
+  for (const log of logs) {
+    const msg = log?.message || {};
+    const logTag = (msg.log_tag || '').trim();
+    const contextKey = extractReplayContextKey(log);
+    const candidateKeys = [contextKey, ...Array.from(getFetchStatusContextAliases(extractFetchStatusOrderContextKey(log)))];
+
+    if (logTag === 'Lsp-LoanStatusRequest_REQUEST') {
+      for (const candidateKey of candidateKeys) {
+        const available = availableTriggersByContext.get(candidateKey) || 0;
+        availableTriggersByContext.set(candidateKey, available + 1);
+      }
+      filtered.push(log);
+      continue;
+    }
+
+    if (logTag === 'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_REQUEST') {
+      for (const candidateKey of candidateKeys) {
+        observedHdbLoanStatusContexts.add(candidateKey);
+      }
+      const consumeFromKey = candidateKeys.find(candidateKey => (availableTriggersByContext.get(candidateKey) || 0) > 0);
+      const available = consumeFromKey ? (availableTriggersByContext.get(consumeFromKey) || 0) : 0;
+
+      if (available > 0) {
+        availableTriggersByContext.set(consumeFromKey, available - 1);
+        pendingLenderResponsesByContext.set(consumeFromKey, (pendingLenderResponsesByContext.get(consumeFromKey) || 0) + 1);
+        pendingAsyncRequestsByContext.set(consumeFromKey, (pendingAsyncRequestsByContext.get(consumeFromKey) || 0) + 1);
+        filtered.push(log);
+      } else {
+        removedRequests += 1;
+        console.log(
+          `Second-level filter: removing orphaned HDB loan-status request without prior Lsp-LoanStatusRequest_REQUEST trigger for context ${contextKey}, request_id: ${msg.request_id || ''}`
+        );
+      }
+      continue;
+    }
+
+    if (logTag === 'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_RESPONSE') {
+      for (const candidateKey of candidateKeys) {
+        observedHdbLoanStatusContexts.add(candidateKey);
+      }
+      const matchedContextKey = candidateKeys.find(candidateKey => (pendingLenderResponsesByContext.get(candidateKey) || 0) > 0);
+      const pendingResponses = matchedContextKey ? (pendingLenderResponsesByContext.get(matchedContextKey) || 0) : 0;
+
+      if (pendingResponses > 0) {
+        pendingLenderResponsesByContext.set(matchedContextKey, pendingResponses - 1);
+        filtered.push(log);
+      } else {
+        removedResponses += 1;
+        console.log(
+          `Second-level filter: removing orphaned HDB loan-status response without kept request for context ${contextKey}, request_id: ${msg.request_id || ''}`
+        );
+      }
+      continue;
+    }
+
+    if (logTag === 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST') {
+      const shouldApplyHdbAsyncPrune = candidateKeys.some(candidateKey => observedHdbLoanStatusContexts.has(candidateKey));
+      if (!shouldApplyHdbAsyncPrune) {
+        filtered.push(log);
+        continue;
+      }
+
+      const matchedContextKey = candidateKeys.find(candidateKey => (pendingAsyncRequestsByContext.get(candidateKey) || 0) > 0);
+      const pendingRequests = matchedContextKey ? (pendingAsyncRequestsByContext.get(matchedContextKey) || 0) : 0;
+
+      if (pendingRequests > 0) {
+        pendingAsyncRequestsByContext.set(matchedContextKey, pendingRequests - 1);
+        pendingAsyncResponsesByContext.set(matchedContextKey, (pendingAsyncResponsesByContext.get(matchedContextKey) || 0) + 1);
+        filtered.push(log);
+      } else {
+        removedAsyncRequests += 1;
+        console.log(
+          `Second-level filter: removing orphaned LOAN_STATUS_ASYNC_RESPONSE_REQUEST without kept HDB loan-status request for context ${contextKey}, request_id: ${msg.request_id || ''}`
+        );
+      }
+      continue;
+    }
+
+    if (logTag === 'LOAN_STATUS_ASYNC_RESPONSE_RESPONSE') {
+      const shouldApplyHdbAsyncPrune = candidateKeys.some(candidateKey => observedHdbLoanStatusContexts.has(candidateKey));
+      if (!shouldApplyHdbAsyncPrune) {
+        filtered.push(log);
+        continue;
+      }
+
+      const matchedContextKey = candidateKeys.find(candidateKey => (pendingAsyncResponsesByContext.get(candidateKey) || 0) > 0);
+      const pendingResponses = matchedContextKey ? (pendingAsyncResponsesByContext.get(matchedContextKey) || 0) : 0;
+
+      if (pendingResponses > 0) {
+        pendingAsyncResponsesByContext.set(matchedContextKey, pendingResponses - 1);
+        filtered.push(log);
+      } else {
+        removedAsyncResponses += 1;
+        console.log(
+          `Second-level filter: removing orphaned LOAN_STATUS_ASYNC_RESPONSE_RESPONSE without kept async request for context ${contextKey}, request_id: ${msg.request_id || ''}`
+        );
+      }
+      continue;
+    }
+
+    filtered.push(log);
+  }
+
+  if (removedRequests > 0 || removedResponses > 0 || removedAsyncRequests > 0 || removedAsyncResponses > 0) {
+    console.log(
+      `Second-level filter: removed ${removedRequests} orphaned HDB loan-status request entr${removedRequests === 1 ? 'y' : 'ies'}, ` +
+      `${removedResponses} orphaned HDB loan-status response entr${removedResponses === 1 ? 'y' : 'ies'}, ` +
+      `${removedAsyncRequests} orphaned async loan-status request entr${removedAsyncRequests === 1 ? 'y' : 'ies'}, and ` +
+      `${removedAsyncResponses} orphaned async loan-status response entr${removedAsyncResponses === 1 ? 'y' : 'ies'}`
+    );
+  }
+
+  return filtered;
+}
+
 function pruneOrphanedOrderStatusAfterFetchStatus(logs) {
   const availableTriggersByContext = new Map();
   const pendingResponsesByContext = new Map();
@@ -827,8 +954,8 @@ export async function filterOrchestratorSkippableLogs(logs, outputPath = null) {
   const reordered = reorderOutOfOrderKycPairs(filtered);
   const flipkartSmReordered = reorderFlipkartSmFetchStatusSequence(reordered);
   const fetchStatusTriggerPruned = pruneOrphanedOrderStatusAfterFetchStatus(flipkartSmReordered);
-  const triggerPruned = pruneOrphanedGatewayLoanStatusRequests(fetchStatusTriggerPruned);
-  const balanced = balanceRequestResponsePairs(triggerPruned);
+  const lenderLoanStatusPruned = pruneOrphanedHdbLoanStatusFlows(fetchStatusTriggerPruned);
+  const balanced = balanceRequestResponsePairs(lenderLoanStatusPruned);
   
   // Save final filtered logs to file if outputPath provided
   if (outputPath) {

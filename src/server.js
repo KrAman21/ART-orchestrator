@@ -60,10 +60,15 @@ export function createServer(orchestrator) {
       console.log(`Handling API: ${api}`);
       const payload = req.body;
       const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;
+      const nextExpectedEntry = orchestrator.validator?.entries?.[orchestrator.validator?.currentIndex] || null;
       
 
       // Determine source/destination and logTag from API endpoint mapping
-      const mapping = getApiMapping(api, { payload: req.body, headers: req.headers });
+      const mapping = getApiMapping(api, {
+        payload: req.body,
+        headers: req.headers,
+        nextExpectedLogTag: nextExpectedEntry?.logTag || null
+      });
       if (!mapping) {
         // Unknown API endpoint - likely a webhook/callback, ignore gracefully
         logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);

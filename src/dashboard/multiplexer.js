@@ -41,7 +41,14 @@ export function createMultiplexerServer() {
 
   app.use('/:api(*)', async (req, res) => {
     const api = '/' + req.params.api;
-    const mapping = getApiMapping(api, { payload: req.body, headers: req.headers });
+    const previewOrchestrator = registry.findOrchestrator(req.body, req.headers);
+    const nextExpectedEntry =
+      previewOrchestrator?.validator?.entries?.[previewOrchestrator?.validator?.currentIndex] || null;
+    const mapping = getApiMapping(api, {
+      payload: req.body,
+      headers: req.headers,
+      nextExpectedLogTag: nextExpectedEntry?.logTag || null
+    });
 
     if (!mapping) {
       logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
@@ -57,7 +64,7 @@ export function createMultiplexerServer() {
                          req.headers['x-lender-org-id'] ||
                          req.headers['X-Lender-Org-Id'];
 
-    const orchestrator = registry.findOrchestrator(payload, req.headers);
+    const orchestrator = previewOrchestrator;
 
     if (api === '/v1.0/fetchOfferResponse') {
       logger.info('FETCH_OFFER_ASYNC callback routing', {

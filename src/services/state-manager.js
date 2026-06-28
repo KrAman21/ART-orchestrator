@@ -1,7 +1,7 @@
 import { logger } from '../utils/logger.js';
 
 const IDENTIFIER_TYPE_ALIASES = Object.freeze({
-  loanApplicationId: ['loanApplicationId', 'loan_application_id', 'partnerRefNo', 'applicationid', 'ApplicationId'],
+  loanApplicationId: ['loanApplicationId', 'loan_application_id', 'partnerRefNo', 'applicationid', 'ApplicationId', 'applicationId'],
   lineDetailId: ['lineDetailId', 'lineId'],
   merchantUserId: ['merchantUserId'],
   lineDetailExtensibleDataId: ['lineDetailExtensibleDataId'],
@@ -40,8 +40,53 @@ const LOG_TAG_IDENTIFIER_TYPE_OVERRIDES = Object.freeze({
   },
   UpdateKYCRequest_REQUEST: {
     id: 'actionRequiredId'
+  },
+  'HDB_APPLICATION_STATUS_API :: FETCH_OFFER_REQUEST': {
+    applicationId: null,
+    applicationid: null,
+    ApplicationId: null
+  },
+  'HDB_APPLICATION_STATUS_API :: FETCH_OFFER_RESPONSE': {
+    applicationId: null,
+    applicationid: null,
+    ApplicationId: null
+  },
+  HDB_CHECK_OFFERS_API_REQUEST: {
+    applicationId: null,
+    applicationid: null,
+    ApplicationId: null
+  },
+  HDB_CHECK_OFFERS_API_RESPONSE: {
+    applicationId: null,
+    applicationid: null,
+    ApplicationId: null
+  },
+  HDB_WEBHOOK_REQUEST: {
+    loanApplicationId: null,
+    loan_application_id: null,
+    applicationId: null,
+    applicationid: null,
+    ApplicationId: null,
+    partnerRefNo: null
+  },
+  HDB_WEBHOOK_RESPONSE: {
+    loanApplicationId: null,
+    loan_application_id: null,
+    applicationId: null,
+    applicationid: null,
+    ApplicationId: null,
+    partnerRefNo: null
   }
 });
+
+const LOAN_APPLICATION_ID_MAPPING_SUPPRESSION_LOG_TAGS = new Set([
+  'HDB_APPLICATION_STATUS_API :: FETCH_OFFER_REQUEST',
+  'HDB_APPLICATION_STATUS_API :: FETCH_OFFER_RESPONSE',
+  'HDB_CHECK_OFFERS_API_REQUEST',
+  'HDB_CHECK_OFFERS_API_RESPONSE',
+  'HDB_WEBHOOK_REQUEST',
+  'HDB_WEBHOOK_RESPONSE'
+]);
 
 const NORMALIZED_IDENTIFIER_ALIAS_TO_TYPE = new Map(
   Object.entries(IDENTIFIER_TYPE_ALIASES).flatMap(([type, aliases]) =>
@@ -339,21 +384,40 @@ export class StateManager {
     const logTag = typeof context?.logTag === 'string' ? context.logTag : null;
     if (logTag) {
       const logTagOverrides = LOG_TAG_IDENTIFIER_TYPE_OVERRIDES[logTag];
-      const overriddenType = logTagOverrides?.[key];
-      if (overriddenType) {
-        return overriddenType;
+      if (logTagOverrides && Object.prototype.hasOwnProperty.call(logTagOverrides, key)) {
+        return logTagOverrides[key];
       }
     }
 
     return this.getIdentifierTypeForKey(key);
   }
 
-  registerIdentifierMapping(identifierType, originalValue, localValue) {
+  shouldSuppressIdentifierMapping(identifierType, context = {}) {
+    const logTag = typeof context?.logTag === 'string' ? context.logTag : null;
+
+    return (
+      identifierType === 'loanApplicationId' &&
+      logTag &&
+      LOAN_APPLICATION_ID_MAPPING_SUPPRESSION_LOG_TAGS.has(logTag)
+    );
+  }
+
+  registerIdentifierMapping(identifierType, originalValue, localValue, context = {}) {
     if (!identifierType || !originalValue || !localValue) return false;
     if (originalValue === localValue) return false;
 
     const mappings = this.identifierMappings.get(identifierType);
     if (!mappings) {
+      return false;
+    }
+
+    if (this.shouldSuppressIdentifierMapping(identifierType, context)) {
+      logger.info('Suppressed identifier mapping for non-canonical lender-scoped field', {
+        identifierType,
+        originalValue,
+        localValue,
+        logTag: context?.logTag || null
+      });
       return false;
     }
 
@@ -437,7 +501,7 @@ export class StateManager {
       const actualIds = this.collectIdentifiersByType(actualPayload, identifierType, context);
 
       for (let index = 0; index < Math.min(expectedIds.length, actualIds.length); index += 1) {
-        if (this.registerIdentifierMapping(identifierType, expectedIds[index], actualIds[index])) {
+        if (this.registerIdentifierMapping(identifierType, expectedIds[index], actualIds[index], context)) {
           totalRegistered += 1;
         }
       }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { AsyncReplayOrchestrator } from './async-orchestrator.js';
+import { AsyncReplayOrchestrator, prepareAsyncReplayForwarding } from './async-orchestrator.js';
 import { LogSequenceValidator } from '../services/log-sequence-validator.js';
 
 function createRequestLog(index, {
@@ -210,4 +210,47 @@ test('processNextLogEntry self-triggers configured fallback API after normal wai
   assert.equal(fallbackTimeoutMs, 9000);
   assert.equal(validator.processedIndices.has(0), true);
   assert.equal(validator.processedIndices.has(1), true);
+});
+
+test('prepareAsyncReplayForwarding preserves loan-status payload requestId during fallback replay', () => {
+  const entry = {
+    logTag: 'Lsp-LoanStatusRequest_REQUEST',
+    headers: {
+      'x-merchant-id': 'flipkart'
+    },
+    message: {
+      merchant_id: 'flipkart'
+    },
+    loanApplicationId: 'LSP123',
+    orderId: 'order-1'
+  };
+
+  const payload = {
+    loanApplicationId: 'LSP123',
+    requestId: 'body-request-id'
+  };
+
+  const prepared = prepareAsyncReplayForwarding(
+    entry,
+    payload,
+    'outer-replay-request-id',
+    {},
+    'flipkart',
+    [
+      {
+        logTag: 'Lsp-LoanStatusRequest_REQUEST',
+        source: 'CORE',
+        destination: 'GATEWAY',
+        sourceDestination: 'CORE_GATEWAY',
+        loanApplicationId: 'LSP123',
+        orderId: 'order-1',
+        payload: {
+          requestId: 'another-live-request-id'
+        }
+      }
+    ]
+  );
+
+  assert.equal(prepared.payload.requestId, 'body-request-id');
+  assert.equal(prepared.replayRequestIdCandidate?.requestId, 'another-live-request-id');
 });

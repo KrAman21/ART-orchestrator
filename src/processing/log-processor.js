@@ -41,7 +41,38 @@ export function shouldPreserveReplayLenderId(logTag, keyHint) {
   return logTag === 'GetLenderFlows_REQUEST' && keyHint === 'lenderId';
 }
 
-export function remapReplayIds(value, stateManager, logTag, keyHint = null) {
+function normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId = null) {
+  if (!remapped || typeof remapped !== 'object') {
+    return remapped;
+  }
+
+  const payloadData = remapped.data;
+  if (!payloadData || typeof payloadData !== 'object') {
+    return remapped;
+  }
+
+  const resolvedLoanApplicationId =
+    forcedLoanApplicationId ||
+    payloadData.partnerRefNo ||
+    payloadData.applicationId ||
+    payloadData.loanApplicationId ||
+    null;
+
+  if (!resolvedLoanApplicationId) {
+    return remapped;
+  }
+
+  return {
+    ...remapped,
+    data: {
+      ...payloadData,
+      applicationId: resolvedLoanApplicationId,
+      partnerRefNo: resolvedLoanApplicationId
+    }
+  };
+}
+
+export function remapReplayIds(value, stateManager, logTag, keyHint = null, forcedLoanApplicationId = null) {
   if (typeof value === 'string') {
     return stateManager?.remapReplayValue
       ? stateManager.remapReplayValue(value, keyHint, { logTag })
@@ -53,7 +84,7 @@ export function remapReplayIds(value, stateManager, logTag, keyHint = null) {
   }
 
   if (Array.isArray(value)) {
-    return value.map(item => remapReplayIds(item, stateManager, logTag, keyHint));
+    return value.map(item => remapReplayIds(item, stateManager, logTag, keyHint, forcedLoanApplicationId));
   }
 
   const remapped = {};
@@ -65,8 +96,12 @@ export function remapReplayIds(value, stateManager, logTag, keyHint = null) {
     } else if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
       remapped[key] = mappedLenderId;
     } else {
-      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key);
+      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key, forcedLoanApplicationId);
     }
+  }
+
+  if (logTag === 'HDB_WEBHOOK_REQUEST') {
+    return normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId);
   }
 
   return remapped;
@@ -260,7 +295,13 @@ export class LogProcessor {
       const sourceDestinationForRequest = entry.originalSourceDestination || entry.sourceDestination;
 
       // Transform masked values in payload before sending
-      const remappedPayload = remapReplayIds(entry.payload, this.stateManager, entry.logTag);
+      const remappedPayload = remapReplayIds(
+        entry.payload,
+        this.stateManager,
+        entry.logTag,
+        null,
+        this.stateManager?.getMappedLoanApplicationId?.(entry.loanApplicationId) || entry.loanApplicationId || null
+      );
       const transformedPayload = transformRequest(remappedPayload, entry.logTag);
 
       // Log API call before making request

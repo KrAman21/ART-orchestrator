@@ -15,6 +15,7 @@ test('remapReplayValue remaps typed identifier aliases', () => {
     partnerRefNo: 'replay-la',
     lineId: 'replay-line',
     applicationid: 'replay-la',
+    applicationId: 'replay-la',
     nested: {
       lineDetailId: 'replay-line',
       merchantUserId: 'replay-mu'
@@ -26,6 +27,7 @@ test('remapReplayValue remaps typed identifier aliases', () => {
   assert.equal(remapped.partnerRefNo, 'local-la');
   assert.equal(remapped.lineId, 'local-line');
   assert.equal(remapped.applicationid, 'local-la');
+  assert.equal(remapped.applicationId, 'local-la');
   assert.equal(remapped.nested.lineDetailId, 'local-line');
   assert.equal(remapped.nested.merchantUserId, 'local-mu');
   assert.equal(remapped.untouched, 'replay-line');
@@ -123,6 +125,52 @@ test('registerMappingsFromPayloadPair does not let KYC service applicationid ove
     stateManager.getMappedIdentifier('lineDetailId', 'replay-line-detail-id'),
     'local-line-detail-id'
   );
+});
+
+test('HDB status-check applicationId does not overwrite loan application mapping', () => {
+  const stateManager = new StateManager();
+
+  stateManager.registerIdentifierMapping('loanApplicationId', 'replay-la', 'local-la');
+
+  const registered = stateManager.registerMappingsFromPayloadPair(
+    {
+      data: {
+        applicationId: 'replay-la'
+      }
+    },
+    {
+      data: {
+        applicationId: 'HF20251028211676863'
+      }
+    },
+    { logTag: 'HDB_APPLICATION_STATUS_API :: FETCH_OFFER_REQUEST' }
+  );
+
+  assert.equal(registered, 0);
+  assert.equal(stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
+});
+
+test('HDB submit-additional-data applicationId does not overwrite loan application mapping', () => {
+  const stateManager = new StateManager();
+
+  stateManager.registerIdentifierMapping('loanApplicationId', 'replay-la', 'local-la');
+
+  const registered = stateManager.registerMappingsFromPayloadPair(
+    {
+      data: {
+        applicationId: 'replay-la'
+      }
+    },
+    {
+      data: {
+        applicationId: 'HF20251028211676863'
+      }
+    },
+    { logTag: 'HDB_CHECK_OFFERS_API_REQUEST' }
+  );
+
+  assert.equal(registered, 0);
+  assert.equal(stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
 });
 
 test('recordForwardedFor stores and resolves x-forwarded-for by replay context', () => {

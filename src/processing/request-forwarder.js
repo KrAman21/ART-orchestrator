@@ -3,6 +3,57 @@ import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeForwardingPayloadForEntry(payload, incoming, expectedEntry) {
+  if (!isPlainObject(payload)) {
+    return payload;
+  }
+
+  return payload;
+}
+
+function resolveForwardingMerchantId(incoming, expectedEntry) {
+  return (
+    incoming?.headers?.['x-merchant-id'] ||
+    incoming?.headers?.['X-Merchant-Id'] ||
+    incoming?.payload?.merchantId ||
+    incoming?.payload?.merchant_id ||
+    expectedEntry?.message?.merchant_id ||
+    expectedEntry?.payload?.merchantId ||
+    expectedEntry?.payload?.merchant_id ||
+    expectedEntry?.merchantId ||
+    null
+  );
+}
+
+export function prepareForwardingRequest(incoming, expectedEntry, endpointHeaders = {}) {
+  const merchantId = resolveForwardingMerchantId(incoming, expectedEntry);
+  const headers = {
+    ...(incoming?.headers || {}),
+    ...(endpointHeaders || {})
+  };
+
+  if (merchantId && !headers['x-merchant-id'] && !headers['X-Merchant-Id']) {
+    headers['x-merchant-id'] = merchantId;
+  }
+
+  const transformedPayload = transformRequest(incoming?.payload, expectedEntry?.logTag);
+  const payload = normalizeForwardingPayloadForEntry(
+    transformedPayload,
+    incoming,
+    expectedEntry
+  );
+
+  return {
+    headers,
+    payload,
+    merchantId
+  };
+}
+
 function remapReplayPayloadForEntry(stateManager, payload, entry) {
   return stateManager?.remapReplayValue
     ? stateManager.remapReplayValue(payload, null, { logTag: entry?.logTag })
@@ -314,7 +365,8 @@ export class RequestForwarder {
 
     // Get endpoint config for custom headers
     const endpointConfig = getEndpointConfig(expectedEntry.sourceDestination, expectedEntry.logTag);
-    const customHeaders = { ...incoming.headers, ...endpointConfig?.headers };
+    const forwardingRequest = prepareForwardingRequest(incoming, expectedEntry, endpointConfig?.headers);
+    const customHeaders = forwardingRequest.headers;
 
     // Log incoming request headers from LSP
     this.logger.info('=== INCOMING REQ HEADERS (from LSP) ===', {
@@ -378,8 +430,8 @@ export class RequestForwarder {
       // Use original source_destination for makeRequest to detect WRAPPER correctly
       const sourceDestinationForRequest = expectedEntry.originalSourceDestination || expectedEntry.sourceDestination;
 
-      // Transform masked values in payload before forwarding
-      const transformedPayload = transformRequest(incoming.payload, expectedEntry.logTag);
+      const transformedPayload = forwardingRequest.payload;
+      const originalPayloadRequestId = isPlainObject(incoming.payload) ? incoming.payload.requestId || null : null;
       const requestTimeoutMs =
         REQUEST_TIMEOUT_OVERRIDES[expectedEntry.logTag] ||
         this.config.timeoutMs ||
@@ -397,6 +449,16 @@ export class RequestForwarder {
         timeoutMs: requestTimeoutMs
       });
 
+      this.logger.info('Resolved forwarding request context', {
+        logTag: expectedEntry.logTag,
+        sourceDestination: expectedEntry.sourceDestination,
+        requestId: incoming.requestId,
+        merchantId: forwardingRequest.merchantId,
+        originalPayloadRequestId,
+        forwardedPayloadRequestId: isPlainObject(transformedPayload) ? transformedPayload.requestId || null : null,
+        hasMerchantHeader: Boolean(customHeaders['x-merchant-id'] || customHeaders['X-Merchant-Id'])
+      });
+
       // Make actual HTTP request to destination
       const serviceResponse = await makeRequest(
         this.callbacks.getServiceBaseUrl(destination),
@@ -406,7 +468,7 @@ export class RequestForwarder {
         incoming.requestId,
         sourceDestinationForRequest,
         expectedEntry.logTag,
-        null,
+        forwardingRequest.merchantId,
         customHeaders,
         expectedEntry.index,
         this.callbacks.getServiceUnixSocket(endpointConfig?.service || destination),

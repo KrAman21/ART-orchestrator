@@ -135,3 +135,59 @@ test('KYC service applicationid does not corrupt later APP_CORE loanApplicationI
   assert.equal(orchestrator.stateManager.getMappedIdentifier('lineDetailId', 'replay-line'), 'local-line');
   assert.equal(normalized.payload.loanApplicationId, 'local-la');
 });
+
+test('HDB submit-additional-data applicationId does not corrupt replay loanApplicationId mapping', () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.config = {};
+  orchestrator.orderId = 'order-1';
+
+  orchestrator.registerReplayIdentifierMappings(
+    {
+      logTag: 'LSP-FetchOfferRequest_REQUEST',
+      payload: {
+        loanApplication: {
+          loanApplicationId: 'replay-la'
+        }
+      }
+    },
+    {
+      logTag: 'LSP-FetchOfferRequest_REQUEST',
+      payload: {
+        loanApplication: {
+          loanApplicationId: 'local-la'
+        }
+      }
+    }
+  );
+
+  orchestrator.registerReplayIdentifierMappings(
+    {
+      logTag: 'HDB_CHECK_OFFERS_API_REQUEST',
+      payload: {
+        data: {
+          applicationId: 'replay-la'
+        }
+      }
+    },
+    {
+      logTag: 'HDB_CHECK_OFFERS_API_REQUEST',
+      payload: {
+        data: {
+          applicationId: 'HF20251028211676863'
+        }
+      }
+    }
+  );
+
+  const normalized = orchestrator.normalizeIncomingReplayIdentifiers({
+    logTag: 'WEBHOOK_REQUEST',
+    loanApplicationId: 'replay-la',
+    payload: {
+      loanApplicationId: 'replay-la'
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
+  assert.equal(normalized.payload.loanApplicationId, 'local-la');
+});

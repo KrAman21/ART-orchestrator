@@ -3,7 +3,7 @@ import { BufferManager } from './buffer-manager.js';
 import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
-import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES } from '../config.js';
+import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES, SERVICE_MAP } from '../config.js';
 import { getOptionalRepeatPolicy, isSelfTriggerFallbackApiLogTag, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, SELF_TRIGGER_FALLBACK_API_LOG_TAGS, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
@@ -41,7 +41,38 @@ function shouldPreserveReplayLenderId(logTag, keyHint) {
   return logTag === 'GetLenderFlows_REQUEST' && keyHint === 'lenderId';
 }
 
-function remapReplayIds(value, stateManager, logTag, keyHint = null) {
+function normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId = null) {
+  if (!remapped || typeof remapped !== 'object') {
+    return remapped;
+  }
+
+  const payloadData = remapped.data;
+  if (!payloadData || typeof payloadData !== 'object') {
+    return remapped;
+  }
+
+  const resolvedLoanApplicationId =
+    forcedLoanApplicationId ||
+    payloadData.partnerRefNo ||
+    payloadData.applicationId ||
+    payloadData.loanApplicationId ||
+    null;
+
+  if (!resolvedLoanApplicationId) {
+    return remapped;
+  }
+
+  return {
+    ...remapped,
+    data: {
+      ...payloadData,
+      applicationId: resolvedLoanApplicationId,
+      partnerRefNo: resolvedLoanApplicationId
+    }
+  };
+}
+
+function remapReplayIds(value, stateManager, logTag, keyHint = null, forcedLoanApplicationId = null) {
   if (typeof value === 'string') {
     return stateManager?.remapReplayValue
       ? stateManager.remapReplayValue(value, keyHint, { logTag })
@@ -53,7 +84,7 @@ function remapReplayIds(value, stateManager, logTag, keyHint = null) {
   }
 
   if (Array.isArray(value)) {
-    return value.map(item => remapReplayIds(item, stateManager, logTag, keyHint));
+    return value.map(item => remapReplayIds(item, stateManager, logTag, keyHint, forcedLoanApplicationId));
   }
 
   const remapped = {};
@@ -65,11 +96,253 @@ function remapReplayIds(value, stateManager, logTag, keyHint = null) {
     } else if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
       remapped[key] = mappedLenderId;
     } else {
-      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key);
+      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key, forcedLoanApplicationId);
     }
   }
 
+  if (logTag === 'HDB_WEBHOOK_REQUEST') {
+    return normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId);
+  }
+
   return remapped;
+}
+
+function resolveReplayMerchantId(entry, payload = null, fallbackMerchantId = null) {
+  return (
+    entry?.headers?.['x-merchant-id'] ||
+    entry?.headers?.['X-Merchant-Id'] ||
+    entry?.message?.merchant_id ||
+    payload?.merchantId ||
+    payload?.merchant_id ||
+    entry?.payload?.merchantId ||
+    entry?.payload?.merchant_id ||
+    fallbackMerchantId ||
+    null
+  );
+}
+
+function findFirstNestedValue(value, candidateKeys) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nestedMatch = findFirstNestedValue(item, candidateKeys);
+      if (nestedMatch !== null && nestedMatch !== undefined && nestedMatch !== '') {
+        return nestedMatch;
+      }
+    }
+    return null;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if (candidateKeys.includes(key) && nestedValue !== null && nestedValue !== undefined && nestedValue !== '') {
+      return nestedValue;
+    }
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    const nestedMatch = findFirstNestedValue(nestedValue, candidateKeys);
+    if (nestedMatch !== null && nestedMatch !== undefined && nestedMatch !== '') {
+      return nestedMatch;
+    }
+  }
+
+  return null;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function resolveRequestIdFromObservedRequest(request) {
+  if (!request) {
+    return null;
+  }
+
+  return (
+    request.payload?.requestId ||
+    request.payload?.request_id ||
+    request.requestId ||
+    null
+  );
+}
+
+function buildReplayRequestIdCandidate(candidateRequest, score) {
+  const requestId = resolveRequestIdFromObservedRequest(candidateRequest);
+  if (!requestId) {
+    return null;
+  }
+
+  return {
+    requestId,
+    score,
+    timestamp: candidateRequest.timestamp || candidateRequest.observedAt || 0,
+    logTag: candidateRequest.logTag || null,
+    sourceDestination:
+      candidateRequest.sourceDestination ||
+      (candidateRequest.source && candidateRequest.destination
+        ? normalizeSourceDestination(`${candidateRequest.source}_${candidateRequest.destination}`, candidateRequest.logTag)
+        : null)
+  };
+}
+
+export function resolveFallbackGatewayRequestId(entry, observedIncomingRequests = []) {
+  if (entry?.logTag !== 'Lsp-LoanStatusRequest_REQUEST') {
+    return null;
+  }
+
+  const candidates = [];
+
+  for (const candidateRequest of observedIncomingRequests || []) {
+    const normalizedSourceDestination =
+      candidateRequest?.sourceDestination ||
+      (candidateRequest?.source && candidateRequest?.destination
+        ? normalizeSourceDestination(`${candidateRequest.source}_${candidateRequest.destination}`, candidateRequest.logTag)
+        : null);
+
+    if (!candidateRequest || normalizedSourceDestination !== 'CORE_GATEWAY') {
+      continue;
+    }
+
+    if (candidateRequest.loanApplicationId !== entry.loanApplicationId) {
+      continue;
+    }
+
+    if (candidateRequest.orderId && entry.orderId && candidateRequest.orderId !== entry.orderId) {
+      continue;
+    }
+
+    let score = 0;
+    if (candidateRequest.logTag === 'LSP-SelectOffer_REQUEST') score += 200;
+    if (candidateRequest.logTag === 'LSP-FetchOfferRequest_REQUEST') score += 150;
+    if (candidateRequest.logTag === 'LSP-Eligibility_REQUEST') score += 100;
+    if (candidateRequest.logTag === 'Lsp-LoanStatusRequest_REQUEST') score += 50;
+
+    const builtCandidate = buildReplayRequestIdCandidate(candidateRequest, score);
+    if (builtCandidate) {
+      candidates.push(builtCandidate);
+    }
+  }
+
+  candidates.sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+    return right.timestamp - left.timestamp;
+  });
+
+  return candidates[0] || null;
+}
+
+export function prepareAsyncReplayForwarding(entry, payload, outboundRequestId, endpointHeaders = {}, fallbackMerchantId = null, observedIncomingRequests = []) {
+  const merchantId = resolveReplayMerchantId(entry, payload, fallbackMerchantId);
+  const headers = {
+    ...(entry?.headers || {}),
+    ...(endpointHeaders || {})
+  };
+
+  if (merchantId && !headers['x-merchant-id'] && !headers['X-Merchant-Id']) {
+    headers['x-merchant-id'] = merchantId;
+  }
+
+  const replayRequestIdCandidate = resolveFallbackGatewayRequestId(entry, observedIncomingRequests);
+  const normalizedPayload = payload;
+
+  return {
+    headers,
+    merchantId,
+    payload: normalizedPayload,
+    replayRequestIdCandidate
+  };
+}
+
+function buildReplayLenderDetailsSeedPayload(entry, payload, replayMerchantId, observedIncomingRequests = [], validatorEntries = []) {
+  if (entry?.logTag !== 'Lsp-LoanStatusRequest_REQUEST' || !isPlainObject(payload) || !payload.requestId) {
+    return null;
+  }
+
+  const merchantId = resolveReplayMerchantId(entry, payload, replayMerchantId);
+  const lenderOrgId =
+    entry?.lenderOrgId ||
+    payload?.lenderOrgId ||
+    payload?.lender_org_id ||
+    null;
+  const loanApplicationId =
+    entry?.loanApplicationId ||
+    payload?.loanApplicationId ||
+    payload?.loan_application_id ||
+    null;
+
+  if (!merchantId || !lenderOrgId) {
+    return null;
+  }
+
+  const observedCandidates = (observedIncomingRequests || []).map(request => ({
+    ...request,
+    payload: request?.payload || null,
+    message: request?.message || null,
+    lenderOrgId:
+      request?.lenderOrgId ||
+      request?.payload?.lenderOrgId ||
+      request?.payload?.lender_org_id ||
+      null,
+    loanApplicationId:
+      request?.loanApplicationId ||
+      request?.payload?.loanApplicationId ||
+      request?.payload?.loan_application_id ||
+      null
+  }));
+
+  const validatorCandidates = (validatorEntries || []).map(candidateEntry => ({
+    payload: candidateEntry?.payload || null,
+    message: candidateEntry?.message || null,
+    lenderOrgId: candidateEntry?.lenderOrgId || null,
+    loanApplicationId: candidateEntry?.loanApplicationId || null,
+    logTag: candidateEntry?.logTag || null
+  }));
+
+  const matchingCandidates = [...observedCandidates, ...validatorCandidates]
+    .filter(candidate => {
+      if (!candidate) return false;
+      if (candidate.lenderOrgId && candidate.lenderOrgId !== lenderOrgId) return false;
+      if (loanApplicationId && candidate.loanApplicationId && candidate.loanApplicationId !== loanApplicationId) return false;
+      return true;
+    })
+    .reverse();
+
+  let lenderRedirectionUrl = null;
+  let gatewayRefId = null;
+
+  for (const candidate of matchingCandidates) {
+    lenderRedirectionUrl =
+      lenderRedirectionUrl ||
+      findFirstNestedValue(candidate, [
+        'lenderRedirectionUrl',
+        'lender_redirection_url',
+        'redirectionUrl',
+        'redirection_url'
+      ]);
+    gatewayRefId =
+      gatewayRefId ||
+      findFirstNestedValue(candidate, [
+        'gatewayRefId',
+        'gateway_ref_id'
+      ]);
+
+    if (lenderRedirectionUrl && gatewayRefId) {
+      break;
+    }
+  }
+
+  return {
+    merchantId,
+    lenderOrgId,
+    requestId: payload.requestId,
+    lenderRedirectionUrl: lenderRedirectionUrl || '',
+    gatewayRefId: gatewayRefId || null
+  };
 }
 
 function buildSyntheticThemisIneligibleResponse(lenderOrgId) {
@@ -155,6 +428,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   constructor(logs, config = {}) {
     super(logs, config);
     this.config.asyncReplayMode = true;
+    this.replayMerchantId = config.merchantId || null;
     
     this.bufferManager = new BufferManager({
       defaultTimeoutMs: 60000
@@ -216,6 +490,148 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     });
     return true;
   }
+
+  collectLiveLoanApplicationCandidates(entry) {
+    if (!entry?.loanApplicationId) {
+      return [];
+    }
+
+    const candidates = [];
+    const seen = new Set();
+    const pushCandidate = (loanApplicationId, timestamp, source, metadata = {}) => {
+      if (!loanApplicationId || loanApplicationId === entry.loanApplicationId || seen.has(`${loanApplicationId}:${source}`)) {
+        return;
+      }
+
+      if (entry.orderId && metadata.orderId && metadata.orderId !== entry.orderId) {
+        return;
+      }
+
+      if (entry.lenderOrgId && metadata.lenderOrgId && metadata.lenderOrgId !== entry.lenderOrgId) {
+        return;
+      }
+
+      let score = 0;
+      if (entry.orderId && metadata.orderId === entry.orderId) score += 100;
+      if (entry.lenderOrgId && metadata.lenderOrgId === entry.lenderOrgId) score += 80;
+      if (metadata.source === 'GATEWAY' && metadata.destination === 'LSP') score += 40;
+      if (metadata.sourceDestination === 'GATEWAY_LSP') score += 40;
+      if (typeof metadata.logTag === 'string' && metadata.logTag.includes('FETCH_OFFER')) score += 30;
+      if (typeof loanApplicationId === 'string' && loanApplicationId.startsWith('LSP')) score += 20;
+
+      seen.add(`${loanApplicationId}:${source}`);
+      candidates.push({
+        loanApplicationId,
+        timestamp: timestamp || 0,
+        source,
+        score,
+        metadata
+      });
+    };
+
+    for (const bufferedEntry of this.bufferManager?.incomingRequests?.values?.() || []) {
+      const request = bufferedEntry?.request;
+      if (!request) {
+        continue;
+      }
+
+      pushCandidate(
+        request.loanApplicationId || request.payload?.loanApplicationId || request.payload?.loan_application_id,
+        bufferedEntry.timestamp,
+        'incoming_buffer',
+        {
+          orderId: request.orderId || request.payload?.orderId || request.payload?.order_id || null,
+          lenderOrgId: request.lenderOrgId || request.payload?.lenderOrgId || request.payload?.lender_org_id || null,
+          source: request.source,
+          destination: request.destination,
+          sourceDestination: request.sourceDestination,
+          logTag: request.logTag
+        }
+      );
+    }
+
+    for (const responseEntry of this.bufferManager?.responseBuffer?.values?.() || []) {
+      const metadata = responseEntry?.metadata || {};
+      pushCandidate(
+        metadata.loanApplicationId,
+        responseEntry.timestamp,
+        'response_buffer',
+        metadata
+      );
+    }
+
+    for (const observedEntry of this.observedIncomingRequests || []) {
+      pushCandidate(
+        observedEntry.loanApplicationId || observedEntry.payload?.loanApplicationId || observedEntry.payload?.loan_application_id,
+        observedEntry.timestamp,
+        'observed_incoming',
+        observedEntry
+      );
+    }
+
+    candidates.sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return right.timestamp - left.timestamp;
+    });
+
+    return candidates;
+  }
+
+  resolveOutboundLoanApplicationIdForReplay(entry, options = {}) {
+    const {
+      allowInferenceFromLiveBuffer = false
+    } = options;
+
+    if (!entry?.loanApplicationId) {
+      return null;
+    }
+
+    const mappedLoanApplicationId = this.stateManager?.getMappedLoanApplicationId?.(entry.loanApplicationId);
+    if (mappedLoanApplicationId && mappedLoanApplicationId !== entry.loanApplicationId) {
+      return mappedLoanApplicationId;
+    }
+
+    if (!allowInferenceFromLiveBuffer) {
+      return mappedLoanApplicationId || entry.loanApplicationId;
+    }
+
+    const candidates = this.collectLiveLoanApplicationCandidates(entry);
+    const bestCandidate = candidates[0];
+
+    if (!bestCandidate) {
+      logger.info('No live replay loanApplicationId candidate found for outbound fallback request', {
+        logTag: entry.logTag,
+        replayLoanApplicationId: entry.loanApplicationId,
+        orderId: entry.orderId || null,
+        lenderOrgId: entry.lenderOrgId || null
+      });
+      return mappedLoanApplicationId || entry.loanApplicationId;
+    }
+
+    this.stateManager?.registerIdentifierMapping?.(
+      'loanApplicationId',
+      entry.loanApplicationId,
+      bestCandidate.loanApplicationId
+    );
+
+    logger.info('Inferred live loanApplicationId for outbound replay request', {
+      logTag: entry.logTag,
+      replayLoanApplicationId: entry.loanApplicationId,
+      resolvedLoanApplicationId: bestCandidate.loanApplicationId,
+      source: bestCandidate.source,
+      candidateScore: bestCandidate.score,
+      candidateMetadata: {
+        logTag: bestCandidate.metadata?.logTag || null,
+        sourceDestination: bestCandidate.metadata?.sourceDestination || null,
+        orderId: bestCandidate.metadata?.orderId || null,
+        lenderOrgId: bestCandidate.metadata?.lenderOrgId || null
+      }
+    });
+
+    return bestCandidate.loanApplicationId;
+  }
   
   async start() {
     if (this.isRunning) {
@@ -227,6 +643,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.shouldStop = false;
     
     const { merchantId, orderId } = AsyncReplayOrchestrator.extractMerchantId(this.logs);
+    this.replayMerchantId = merchantId || this.replayMerchantId || this.config.merchantId || null;
     const lenderOrgIdToIdMap = AsyncReplayOrchestrator.extractLenderOrgIds(this.logs);
     const lineDetails = AsyncReplayOrchestrator.extractLineDetails(this.logs);
     const customerSeedData = AsyncReplayOrchestrator.extractCustomerSeedData(this.logs);
@@ -973,18 +1390,86 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       if (isDirectLenderGatewayRequest && replayEndpoint) {
         api = replayEndpoint;
       }
-      const customHeaders = {
+      const endpointHeaders = {
         ...(endpointConfig?.headers || {}),
         ...buildAppCoreAuthHeaders(entry, this.validator.entries, this.stateManager)
       };
-      await ensureAppCorePreconditions(entry, customHeaders, this.stateManager);
+      await ensureAppCorePreconditions(entry, endpointHeaders, this.stateManager);
       const { requestId: outboundRequestId, originalRequestId, normalized } =
         getAppCoreRequestId(entry);
       const service = endpointConfig?.service || entry.destination;
       const method = entry.httpMethod || endpointConfig?.method || 'POST';
+      const resolvedLoanApplicationId = this.resolveOutboundLoanApplicationIdForReplay(entry, {
+        allowInferenceFromLiveBuffer: Boolean(fallbackReason)
+      });
       
-      const remappedPayload = remapReplayIds(entry.payload, this.stateManager, entry.logTag);
+      const remappedPayload = remapReplayIds(
+        entry.payload,
+        this.stateManager,
+        entry.logTag,
+        null,
+        resolvedLoanApplicationId
+      );
       const transformedPayload = transformRequest(remappedPayload, entry.logTag);
+      const forwardingRequest = prepareAsyncReplayForwarding(
+        entry,
+        transformedPayload,
+        outboundRequestId,
+        endpointHeaders,
+        this.replayMerchantId || this.config.merchantId || null,
+        this.observedIncomingRequests || []
+      );
+
+      if (entry.logTag === 'Lsp-LoanStatusRequest_REQUEST' && fallbackReason) {
+        const lenderDetailsSeedPayload = buildReplayLenderDetailsSeedPayload(
+          entry,
+          forwardingRequest.payload,
+          this.replayMerchantId || this.config.merchantId || null,
+          this.observedIncomingRequests || [],
+          this.validator?.entries || []
+        );
+
+        if (lenderDetailsSeedPayload) {
+          logger.info('Priming gateway lender details before self-triggered loan-status replay', {
+            logTag: entry.logTag,
+            requestId: lenderDetailsSeedPayload.requestId,
+            lenderOrgId: lenderDetailsSeedPayload.lenderOrgId,
+            merchantId: lenderDetailsSeedPayload.merchantId,
+            hasGatewayRefId: Boolean(lenderDetailsSeedPayload.gatewayRefId),
+            hasLenderRedirectionUrl: Boolean(lenderDetailsSeedPayload.lenderRedirectionUrl)
+          });
+
+          const lenderDetailsSeedResponse = await makeRequest(
+            SERVICE_MAP.LSP.baseUrl,
+            '/art/lender-details/set',
+            'POST',
+            lenderDetailsSeedPayload,
+            lenderDetailsSeedPayload.requestId,
+            null,
+            'ART_SET_LENDER_DETAILS_REPLAY',
+            lenderDetailsSeedPayload.merchantId,
+            {},
+            null,
+            SERVICE_MAP.LSP.unixSocket,
+            10000
+          );
+
+          logger.info('Gateway lender details priming completed', {
+            logTag: entry.logTag,
+            requestId: lenderDetailsSeedPayload.requestId,
+            status: lenderDetailsSeedResponse.status,
+            error: lenderDetailsSeedResponse.error || false,
+            responseData: lenderDetailsSeedResponse.data || null
+          });
+        } else {
+          logger.warn('Skipped gateway lender details priming because replay context was incomplete', {
+            logTag: entry.logTag,
+            fallbackReason,
+            hasPayloadRequestId: Boolean(forwardingRequest.payload?.requestId),
+            lenderOrgId: entry.lenderOrgId || forwardingRequest.payload?.lenderOrgId || forwardingRequest.payload?.lender_org_id || null
+          });
+        }
+      }
       
       logger.info('ORCH_SENDING_ASYNC', {
         destination: service,
@@ -993,22 +1478,35 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         logTag: entry.logTag,
         requestId: outboundRequestId,
         originalRequestId,
-        requestIdNormalizedForAppCore: normalized
+        requestIdNormalizedForAppCore: normalized,
+        merchantId: forwardingRequest.merchantId,
+        originalPayloadRequestId:
+          transformedPayload && typeof transformedPayload === 'object' && !Array.isArray(transformedPayload)
+            ? transformedPayload.requestId || null
+            : null,
+        forwardedPayloadRequestId:
+          forwardingRequest.payload && typeof forwardingRequest.payload === 'object' && !Array.isArray(forwardingRequest.payload)
+            ? forwardingRequest.payload.requestId || null
+            : null,
+        replayRequestIdReuseCandidate: forwardingRequest.replayRequestIdCandidate,
+        hasMerchantHeader: Boolean(
+          forwardingRequest.headers['x-merchant-id'] || forwardingRequest.headers['X-Merchant-Id']
+        )
       });
       
       this.httpClient.send(
         this.getServiceBaseUrl(service),
         api,
         method,
-        transformedPayload,
+        forwardingRequest.payload,
         outboundRequestId,
         entry.sourceDestination,
         entry.logTag,
-        null,
-        customHeaders,
+        forwardingRequest.merchantId,
+        forwardingRequest.headers,
         entry.index,
         this.getServiceUnixSocket(service),
-        this.stateManager.getMappedLoanApplicationId(entry.loanApplicationId),
+        resolvedLoanApplicationId,
         entry.lenderOrgId,
         entry.clientRequestId
       );

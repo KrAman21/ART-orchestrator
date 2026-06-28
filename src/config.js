@@ -1705,6 +1705,21 @@ export function getApiMapping(api, context = {}) {
     return null;
   }
 
+  const nextExpectedLogTag = context?.nextExpectedLogTag || null;
+
+  if (
+    ['/api/v1/status-check', '/prod/status-check', '/MOCK_DATA/status-check'].includes(api) &&
+    (
+      nextExpectedLogTag === 'HDB_APPLICATION_STATUS_API :: FETCH_OFFER_REQUEST' ||
+      nextExpectedLogTag === 'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_REQUEST'
+    )
+  ) {
+    return {
+      ...mapping,
+      logTag: nextExpectedLogTag
+    };
+  }
+
   if (api === '/lsp/generateKFS') {
     const lenderOrgId = extractLenderOrgId(context.payload, context.headers);
     if (lenderOrgId) {
