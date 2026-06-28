@@ -2,6 +2,8 @@ import { logger } from '../utils/logger.js';
 
 const IDENTIFIER_TYPE_ALIASES = Object.freeze({
   loanApplicationId: ['loanApplicationId', 'loan_application_id', 'partnerRefNo', 'applicationid', 'ApplicationId', 'applicationId'],
+  txnRefId: ['txnRefId', 'txnrefid', 'txn_ref_id', '_txnrefid', 'TxnRefId', 'TxnRefID'],
+  customerId: ['customerId', 'customer_id', 'customerid', 'merchant_customer_id', 'merchantCustomerId'],
   lineDetailId: ['lineDetailId', 'lineId'],
   merchantUserId: ['merchantUserId'],
   lineDetailExtensibleDataId: ['lineDetailExtensibleDataId'],
@@ -35,6 +37,22 @@ const LOG_TAG_IDENTIFIER_TYPE_OVERRIDES = Object.freeze({
     ApplicationId: 'lineDetailId'
   },
   'KYC SERVICE API_RESPONSE': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  },
+  'KFS SERVICE API :: PARENT_REQUEST': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  },
+  'KFS SERVICE API :: PARENT_RESPONSE': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  },
+  'KFS SERVICE API :: CHILD_REQUEST': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId'
+  },
+  'KFS SERVICE API :: CHILD_RESPONSE': {
     applicationid: 'lineDetailId',
     ApplicationId: 'lineDetailId'
   },
@@ -93,6 +111,30 @@ const NORMALIZED_IDENTIFIER_ALIAS_TO_TYPE = new Map(
     aliases.map(alias => [alias.toLowerCase(), type])
   )
 );
+
+const PROD_LOAN_APPLICATION_ID_KEYS = new Set([
+  'loan_application_id',
+  'loanapplicationid'
+]);
+
+const PROD_SESSION_TOKEN_KEYS = new Set([
+  'sessiontoken',
+  'session_token',
+  'x-session-token'
+]);
+
+const PROD_TXN_REF_ID_KEYS = new Set([
+  'txnrefid',
+  'txn_ref_id',
+  '_txnrefid'
+]);
+
+const PROD_CUSTOMER_ID_KEYS = new Set([
+  'customerid',
+  'customer_id',
+  'merchant_customer_id',
+  'merchantcustomerid'
+]);
 
 /**
  * PendingRequest represents an in-flight request waiting for response
@@ -175,6 +217,19 @@ export class StateManager {
       Object.keys(IDENTIFIER_TYPE_ALIASES).map(type => [type, new Map()])
     );
     this.loanApplicationIdMappings = this.identifierMappings.get('loanApplicationId');
+    this.prodLoanApplicationIds = new Set();
+    this.replayLoanApplicationIdAliases = new Set();
+    this.currentReplayLoanApplicationId = null;
+    this.prodSessionTokens = new Set();
+    this.replaySessionTokenAliases = new Set();
+    this.currentReplaySessionToken = null;
+    this.prodTxnRefIds = new Set();
+    this.replayTxnRefIdAliases = new Set();
+    this.currentReplayTxnRefId = null;
+    this.prodCustomerIds = new Set();
+    this.replayCustomerIdAliases = new Set();
+    this.currentReplayCustomerId = null;
+    this.replayAppAuthByLoanApplicationId = new Map();
 
     this.config = {
       defaultTimeoutMs: 10000,
@@ -366,6 +421,646 @@ export class StateManager {
 
   getTrackedIdentifierTypes() {
     return Object.keys(IDENTIFIER_TYPE_ALIASES);
+  }
+
+  resetProdLoanApplicationIds() {
+    this.prodLoanApplicationIds.clear();
+    this.replayLoanApplicationIdAliases.clear();
+    this.currentReplayLoanApplicationId = null;
+  }
+
+  resetProdSessionTokens() {
+    this.prodSessionTokens.clear();
+    this.replaySessionTokenAliases.clear();
+    this.currentReplaySessionToken = null;
+  }
+
+  resetProdTxnRefIds() {
+    this.prodTxnRefIds.clear();
+    this.replayTxnRefIdAliases.clear();
+    this.currentReplayTxnRefId = null;
+  }
+
+  resetProdCustomerIds() {
+    this.prodCustomerIds.clear();
+    this.replayCustomerIdAliases.clear();
+    this.currentReplayCustomerId = null;
+  }
+
+  extractProdLoanApplicationIdsFromValue(source) {
+    const ids = [];
+    const seen = new Set();
+
+    const visit = value => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+
+      for (const [key, nestedValue] of Object.entries(value)) {
+        if (
+          typeof nestedValue === 'string' &&
+          PROD_LOAN_APPLICATION_ID_KEYS.has(String(key).toLowerCase()) &&
+          !seen.has(nestedValue)
+        ) {
+          seen.add(nestedValue);
+          ids.push(nestedValue);
+        }
+
+        visit(nestedValue);
+      }
+    };
+
+    visit(source);
+    return ids;
+  }
+
+  seedProdLoanApplicationIdsFromLogs(logs = []) {
+    this.resetProdLoanApplicationIds();
+
+    const discoveredIds = this.extractProdLoanApplicationIdsFromValue(logs);
+    for (const loanApplicationId of discoveredIds) {
+      this.prodLoanApplicationIds.add(loanApplicationId);
+    }
+
+    logger.info('Seeded PROD loanApplicationIds for replay', {
+      total: this.prodLoanApplicationIds.size,
+      loanApplicationIds: Array.from(this.prodLoanApplicationIds)
+    });
+
+    return this.prodLoanApplicationIds.size;
+  }
+
+  extractProdSessionTokensFromValue(source) {
+    const tokens = [];
+    const seen = new Set();
+
+    const visit = value => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+
+      for (const [key, nestedValue] of Object.entries(value)) {
+        if (
+          typeof nestedValue === 'string' &&
+          PROD_SESSION_TOKEN_KEYS.has(String(key).toLowerCase()) &&
+          !seen.has(nestedValue)
+        ) {
+          seen.add(nestedValue);
+          tokens.push(nestedValue);
+        }
+
+        visit(nestedValue);
+      }
+    };
+
+    visit(source);
+    return tokens;
+  }
+
+  seedProdSessionTokensFromLogs(logs = []) {
+    this.resetProdSessionTokens();
+
+    const discoveredTokens = this.extractProdSessionTokensFromValue(logs);
+    for (const sessionToken of discoveredTokens) {
+      this.prodSessionTokens.add(sessionToken);
+    }
+
+    logger.info('Seeded PROD session tokens for replay', {
+      total: this.prodSessionTokens.size,
+      sessionTokens: Array.from(this.prodSessionTokens)
+    });
+
+    return this.prodSessionTokens.size;
+  }
+
+  extractProdTxnRefIdsFromValue(source) {
+    const txnRefIds = [];
+    const seen = new Set();
+
+    const visit = value => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+
+      for (const [key, nestedValue] of Object.entries(value)) {
+        if (
+          typeof nestedValue === 'string' &&
+          PROD_TXN_REF_ID_KEYS.has(String(key).toLowerCase()) &&
+          !seen.has(nestedValue)
+        ) {
+          seen.add(nestedValue);
+          txnRefIds.push(nestedValue);
+        }
+
+        visit(nestedValue);
+      }
+    };
+
+    visit(source);
+    return txnRefIds;
+  }
+
+  seedProdTxnRefIdsFromLogs(logs = []) {
+    this.resetProdTxnRefIds();
+
+    const discoveredTxnRefIds = this.extractProdTxnRefIdsFromValue(logs);
+    for (const txnRefId of discoveredTxnRefIds) {
+      this.prodTxnRefIds.add(txnRefId);
+    }
+
+    logger.info('Seeded PROD txnRefIds for replay', {
+      total: this.prodTxnRefIds.size,
+      txnRefIds: Array.from(this.prodTxnRefIds)
+    });
+
+    return this.prodTxnRefIds.size;
+  }
+
+  extractProdCustomerIdsFromValue(source) {
+    const customerIds = [];
+    const seen = new Set();
+
+    const visit = value => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+
+      for (const [key, nestedValue] of Object.entries(value)) {
+        if (
+          typeof nestedValue === 'string' &&
+          PROD_CUSTOMER_ID_KEYS.has(String(key).toLowerCase()) &&
+          !seen.has(nestedValue)
+        ) {
+          seen.add(nestedValue);
+          customerIds.push(nestedValue);
+        }
+
+        visit(nestedValue);
+      }
+    };
+
+    visit(source);
+    return customerIds;
+  }
+
+  seedProdCustomerIdsFromLogs(logs = []) {
+    this.resetProdCustomerIds();
+
+    const discoveredCustomerIds = this.extractProdCustomerIdsFromValue(logs);
+    for (const customerId of discoveredCustomerIds) {
+      this.prodCustomerIds.add(customerId);
+    }
+
+    logger.info('Seeded PROD customerIds for replay', {
+      total: this.prodCustomerIds.size,
+      customerIds: Array.from(this.prodCustomerIds)
+    });
+
+    return this.prodCustomerIds.size;
+  }
+
+  getProdLoanApplicationIds() {
+    return Array.from(this.prodLoanApplicationIds);
+  }
+
+  getCurrentReplayLoanApplicationId() {
+    return this.currentReplayLoanApplicationId;
+  }
+
+  getCurrentReplaySessionToken() {
+    return this.currentReplaySessionToken;
+  }
+
+  getCurrentReplayTxnRefId() {
+    return this.currentReplayTxnRefId;
+  }
+
+  getCurrentReplayCustomerId() {
+    return this.currentReplayCustomerId;
+  }
+
+  setCurrentReplayLoanApplicationId(loanApplicationId, context = {}) {
+    if (!loanApplicationId || typeof loanApplicationId !== 'string') {
+      return false;
+    }
+
+    const previousCurrentLoanApplicationId = this.currentReplayLoanApplicationId;
+    if (previousCurrentLoanApplicationId === loanApplicationId) {
+      return false;
+    }
+
+    if (previousCurrentLoanApplicationId) {
+      this.replayLoanApplicationIdAliases.add(previousCurrentLoanApplicationId);
+    }
+
+    this.currentReplayLoanApplicationId = loanApplicationId;
+
+    for (const prodLoanApplicationId of this.prodLoanApplicationIds) {
+      this.registerIdentifierMapping(
+        'loanApplicationId',
+        prodLoanApplicationId,
+        loanApplicationId,
+        { ...context, logTag: context?.logTag || 'GLOBAL_LAID_REPLAY_MAPPING' }
+      );
+    }
+
+    logger.info('Updated current replay loanApplicationId', {
+      previousLoanApplicationId: previousCurrentLoanApplicationId,
+      currentLoanApplicationId: loanApplicationId,
+      prodLoanApplicationIdCount: this.prodLoanApplicationIds.size,
+      replayAliasCount: this.replayLoanApplicationIdAliases.size,
+      sourceDestination: context?.sourceDestination || null,
+      logTag: context?.logTag || null,
+      requestId: context?.requestId || null
+    });
+
+    return true;
+  }
+
+  setCurrentReplaySessionToken(sessionToken, context = {}) {
+    if (!sessionToken || typeof sessionToken !== 'string') {
+      return false;
+    }
+
+    const previousCurrentSessionToken = this.currentReplaySessionToken;
+    if (previousCurrentSessionToken === sessionToken) {
+      return false;
+    }
+
+    if (previousCurrentSessionToken) {
+      this.replaySessionTokenAliases.add(previousCurrentSessionToken);
+    }
+
+    this.currentReplaySessionToken = sessionToken;
+
+    for (const prodSessionToken of this.prodSessionTokens) {
+      this.replaySessionTokenAliases.add(prodSessionToken);
+    }
+
+    logger.info('Updated current replay session token', {
+      previousSessionToken: previousCurrentSessionToken,
+      currentSessionToken: sessionToken,
+      prodSessionTokenCount: this.prodSessionTokens.size,
+      replayAliasCount: this.replaySessionTokenAliases.size,
+      sourceDestination: context?.sourceDestination || null,
+      logTag: context?.logTag || null,
+      requestId: context?.requestId || null
+    });
+
+    return true;
+  }
+
+  setCurrentReplayTxnRefId(txnRefId, context = {}) {
+    if (!txnRefId || typeof txnRefId !== 'string') {
+      return false;
+    }
+
+    const previousCurrentTxnRefId = this.currentReplayTxnRefId;
+    if (previousCurrentTxnRefId === txnRefId) {
+      return false;
+    }
+
+    if (previousCurrentTxnRefId) {
+      this.replayTxnRefIdAliases.add(previousCurrentTxnRefId);
+    }
+
+    this.currentReplayTxnRefId = txnRefId;
+
+    for (const prodTxnRefId of this.prodTxnRefIds) {
+      this.replayTxnRefIdAliases.add(prodTxnRefId);
+      this.registerIdentifierMapping(
+        'txnRefId',
+        prodTxnRefId,
+        txnRefId,
+        { ...context, logTag: context?.logTag || 'GLOBAL_TXN_REF_ID_REPLAY_MAPPING' }
+      );
+    }
+
+    logger.info('Updated current replay txnRefId', {
+      previousTxnRefId: previousCurrentTxnRefId,
+      currentTxnRefId: txnRefId,
+      prodTxnRefIdCount: this.prodTxnRefIds.size,
+      replayAliasCount: this.replayTxnRefIdAliases.size,
+      sourceDestination: context?.sourceDestination || null,
+      logTag: context?.logTag || null,
+      requestId: context?.requestId || null
+    });
+
+    return true;
+  }
+
+  setCurrentReplayCustomerId(customerId, context = {}) {
+    if (!customerId || typeof customerId !== 'string') {
+      return false;
+    }
+
+    const previousCurrentCustomerId = this.currentReplayCustomerId;
+    if (previousCurrentCustomerId === customerId) {
+      return false;
+    }
+
+    if (previousCurrentCustomerId) {
+      this.replayCustomerIdAliases.add(previousCurrentCustomerId);
+    }
+
+    this.currentReplayCustomerId = customerId;
+
+    for (const prodCustomerId of this.prodCustomerIds) {
+      this.replayCustomerIdAliases.add(prodCustomerId);
+      this.registerIdentifierMapping(
+        'customerId',
+        prodCustomerId,
+        customerId,
+        { ...context, logTag: context?.logTag || 'GLOBAL_CUSTOMER_ID_REPLAY_MAPPING' }
+      );
+    }
+
+    logger.info('Updated current replay customerId', {
+      previousCustomerId: previousCurrentCustomerId,
+      currentCustomerId: customerId,
+      prodCustomerIdCount: this.prodCustomerIds.size,
+      replayAliasCount: this.replayCustomerIdAliases.size,
+      sourceDestination: context?.sourceDestination || null,
+      logTag: context?.logTag || null,
+      requestId: context?.requestId || null
+    });
+
+    return true;
+  }
+
+  shouldRewriteOutgoingLoanApplicationId(value) {
+    if (!value || typeof value !== 'string') {
+      return false;
+    }
+
+    if (this.currentReplayLoanApplicationId && value === this.currentReplayLoanApplicationId) {
+      return false;
+    }
+
+    return this.prodLoanApplicationIds.has(value) || this.replayLoanApplicationIdAliases.has(value);
+  }
+
+  shouldRewriteOutgoingSessionToken(value) {
+    if (!value || typeof value !== 'string') {
+      return false;
+    }
+
+    if (this.currentReplaySessionToken && value === this.currentReplaySessionToken) {
+      return false;
+    }
+
+    return this.prodSessionTokens.has(value) || this.replaySessionTokenAliases.has(value);
+  }
+
+  shouldRewriteOutgoingTxnRefId(value) {
+    if (!value || typeof value !== 'string') {
+      return false;
+    }
+
+    if (this.currentReplayTxnRefId && value === this.currentReplayTxnRefId) {
+      return false;
+    }
+
+    return this.prodTxnRefIds.has(value) || this.replayTxnRefIdAliases.has(value);
+  }
+
+  shouldRewriteOutgoingCustomerId(value) {
+    if (!value || typeof value !== 'string') {
+      return false;
+    }
+
+    if (this.currentReplayCustomerId && value === this.currentReplayCustomerId) {
+      return false;
+    }
+
+    return this.prodCustomerIds.has(value) || this.replayCustomerIdAliases.has(value);
+  }
+
+  rewriteOutgoingLoanApplicationIds(value, context = {}) {
+    if (!this.currentReplayLoanApplicationId && !this.currentReplaySessionToken && !this.currentReplayTxnRefId && !this.currentReplayCustomerId) {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      if (this.currentReplaySessionToken && this.shouldRewriteOutgoingSessionToken(value)) {
+        logger.debug('Rewriting outgoing session token value', {
+          originalValue: value,
+          rewrittenValue: this.currentReplaySessionToken,
+          logTag: context?.logTag || null,
+          field: context?.field || null
+        });
+        return this.currentReplaySessionToken;
+      }
+
+      if (this.currentReplayTxnRefId && this.shouldRewriteOutgoingTxnRefId(value)) {
+        logger.debug('Rewriting outgoing txnRefId value', {
+          originalValue: value,
+          rewrittenValue: this.currentReplayTxnRefId,
+          logTag: context?.logTag || null,
+          field: context?.field || null
+        });
+        return this.currentReplayTxnRefId;
+      }
+
+      if (this.currentReplayCustomerId && this.shouldRewriteOutgoingCustomerId(value)) {
+        logger.debug('Rewriting outgoing customerId value', {
+          originalValue: value,
+          rewrittenValue: this.currentReplayCustomerId,
+          logTag: context?.logTag || null,
+          field: context?.field || null
+        });
+        return this.currentReplayCustomerId;
+      }
+
+      if (this.shouldRewriteOutgoingLoanApplicationId(value)) {
+        logger.debug('Rewriting outgoing loanApplicationId value', {
+          originalValue: value,
+          rewrittenValue: this.currentReplayLoanApplicationId,
+          logTag: context?.logTag || null,
+          field: context?.field || null
+        });
+        return this.currentReplayLoanApplicationId;
+      }
+
+      return value;
+    }
+
+    if (Array.isArray(value)) {
+      return value.map(item => this.rewriteOutgoingLoanApplicationIds(item, context));
+    }
+
+    if (value && typeof value === 'object') {
+      const rewritten = {};
+      for (const [key, nestedValue] of Object.entries(value)) {
+        rewritten[key] = this.rewriteOutgoingLoanApplicationIds(nestedValue, {
+          ...context,
+          field: key
+        });
+      }
+      return rewritten;
+    }
+
+    return value;
+  }
+
+  rewriteOutgoingLoanApplicationIdsInEndpoint(endpoint, context = {}) {
+    if ((!this.currentReplayLoanApplicationId && !this.currentReplaySessionToken && !this.currentReplayTxnRefId && !this.currentReplayCustomerId) || typeof endpoint !== 'string' || endpoint.length === 0) {
+      return endpoint;
+    }
+
+    const [pathPart, queryPart] = endpoint.split('?');
+    const rewrittenPath = pathPart
+      .split('/')
+      .map(segment => {
+        if (this.currentReplaySessionToken && this.shouldRewriteOutgoingSessionToken(segment)) {
+          return this.currentReplaySessionToken;
+        }
+        if (this.currentReplayTxnRefId && this.shouldRewriteOutgoingTxnRefId(segment)) {
+          return this.currentReplayTxnRefId;
+        }
+        if (this.currentReplayCustomerId && this.shouldRewriteOutgoingCustomerId(segment)) {
+          return this.currentReplayCustomerId;
+        }
+        if (this.shouldRewriteOutgoingLoanApplicationId(segment)) {
+          return this.currentReplayLoanApplicationId;
+        }
+        return segment;
+      })
+      .join('/');
+
+    if (!queryPart) {
+      return rewrittenPath;
+    }
+
+    const params = new URLSearchParams(queryPart);
+    for (const [key, value] of params.entries()) {
+      if (this.currentReplaySessionToken && this.shouldRewriteOutgoingSessionToken(value)) {
+        params.set(key, this.currentReplaySessionToken);
+      } else if (this.currentReplayTxnRefId && this.shouldRewriteOutgoingTxnRefId(value)) {
+        params.set(key, this.currentReplayTxnRefId);
+      } else if (this.currentReplayCustomerId && this.shouldRewriteOutgoingCustomerId(value)) {
+        params.set(key, this.currentReplayCustomerId);
+      } else if (this.shouldRewriteOutgoingLoanApplicationId(value)) {
+        params.set(key, this.currentReplayLoanApplicationId);
+      }
+    }
+
+    const rewrittenEndpoint = `${rewrittenPath}?${params.toString()}`;
+    if (rewrittenEndpoint !== endpoint) {
+      logger.debug('Rewrote outgoing endpoint loanApplicationId values', {
+        originalEndpoint: endpoint,
+        rewrittenEndpoint,
+        logTag: context?.logTag || null
+      });
+    }
+
+    return rewrittenEndpoint;
+  }
+
+  normalizeReplayResponseEnvelope(responseData) {
+    let normalized = responseData;
+
+    for (let depth = 0; depth < 3; depth += 1) {
+      if (typeof normalized !== 'string') {
+        break;
+      }
+
+      try {
+        normalized = JSON.parse(normalized);
+      } catch {
+        break;
+      }
+    }
+
+    return normalized;
+  }
+
+  updateReplayAppAuthFromResponse(loanApplicationId, responseData, context = {}) {
+    if (!loanApplicationId || !responseData) {
+      return false;
+    }
+
+    const normalized = this.normalizeReplayResponseEnvelope(responseData);
+    const payload = normalized?.payload && typeof normalized.payload === 'object'
+      ? normalized.payload
+      : normalized;
+
+    if (!payload || typeof payload !== 'object') {
+      return false;
+    }
+
+    const sessionToken =
+      payload.sessionToken ||
+      payload.session_token ||
+      payload.data?.sessionToken ||
+      payload.data?.session_token ||
+      null;
+    const userId =
+      payload.userId ||
+      payload.user_id ||
+      payload.data?.userId ||
+      payload.data?.user_id ||
+      null;
+    const deviceTokenId =
+      payload.deviceTokenId ||
+      payload.device_token_id ||
+      payload.data?.deviceTokenId ||
+      payload.data?.device_token_id ||
+      null;
+
+    if (!sessionToken && !userId && !deviceTokenId) {
+      return false;
+    }
+
+    if (sessionToken) {
+      this.setCurrentReplaySessionToken(sessionToken, context);
+    }
+
+    this.replayAppAuthByLoanApplicationId.set(loanApplicationId, {
+      sessionToken,
+      userId,
+      deviceTokenId,
+      updatedAt: Date.now(),
+      logTag: context?.logTag || null
+    });
+
+    logger.info('Updated live replay app auth from response', {
+      loanApplicationId,
+      logTag: context?.logTag || null,
+      hasSessionToken: Boolean(sessionToken),
+      hasUserId: Boolean(userId),
+      hasDeviceTokenId: Boolean(deviceTokenId)
+    });
+
+    return true;
+  }
+
+  getReplayAppAuth(loanApplicationId) {
+    if (!loanApplicationId) {
+      return null;
+    }
+
+    return this.replayAppAuthByLoanApplicationId.get(loanApplicationId) || null;
   }
 
   getIdentifierTypeForKey(key) {
@@ -694,6 +1389,10 @@ export class StateManager {
     this.pendingResponses.clear();
     this._bufferedRequests.clear();
     this.responseHeaders.clear();
+    this.forwardedForByContext.clear();
+    this.replayAppAuthByLoanApplicationId.clear();
+    this.replaySessionTokenAliases.clear();
+    this.currentReplaySessionToken = null;
 
     logger.info('Cleared transient replay state', {
       pendingRequests: 0,

@@ -42,6 +42,67 @@ function findReplayAppCoreAuth(candidate) {
   };
 }
 
+function findMatchingGetLenderFlowsResponse(entry, entries = []) {
+  if (!entry) {
+    return null;
+  }
+
+  const loanApplicationId =
+    entry.loanApplicationId ||
+    entry.payload?.loanApplicationId ||
+    entry.payload?.loan_application_id;
+
+  if (!loanApplicationId) {
+    return null;
+  }
+
+  return [...entries]
+    .slice(0, entry.index)
+    .reverse()
+    .find(candidate =>
+      candidate?.logTag === 'GetLenderFlows_RESPONSE' &&
+      candidate.loanApplicationId === loanApplicationId &&
+      candidate.payload
+    );
+}
+
+export function buildReplaySessionHeaders(entry, entries = [], stateManager = null) {
+  const loanApplicationId =
+    entry?.loanApplicationId ||
+    entry?.payload?.loanApplicationId ||
+    entry?.payload?.loan_application_id ||
+    null;
+  const liveReplayAuth = typeof stateManager?.getReplayAppAuth === 'function'
+    ? stateManager.getReplayAppAuth(loanApplicationId)
+    : null;
+  const currentReplaySessionToken = typeof stateManager?.getCurrentReplaySessionToken === 'function'
+    ? stateManager.getCurrentReplaySessionToken()
+    : null;
+  const matchingResponse = findMatchingGetLenderFlowsResponse(entry, entries);
+  const replayAuth = liveReplayAuth || findReplayAppCoreAuth(matchingResponse);
+  const sessionToken = replayAuth?.sessionToken || currentReplaySessionToken || process.env.LOAN_STATUS_SESSION_TOKEN;
+
+  if (!sessionToken) {
+    return {};
+  }
+
+  logger.info('Resolved replay session token from GetLenderFlows context', {
+    logTag: entry?.logTag || null,
+    loanApplicationId,
+    matchedReplayAuthSource: liveReplayAuth
+      ? 'LIVE_REPLAY_STATE'
+      : currentReplaySessionToken
+        ? 'CURRENT_REPLAY_SESSION_TOKEN'
+        : matchingResponse?.logTag || null,
+    hasSessionToken: true,
+    sessionTokenPreview: maskValue(sessionToken)
+  });
+
+  return {
+    'x-session-token': sessionToken
+  };
+}
+
 export function buildAppCoreAuthHeaders(entry, entries = [], stateManager = null) {
   if (!entry || entry.sourceDestination !== 'APP_CORE') {
     return {};
@@ -70,19 +131,17 @@ export function buildAppCoreAuthHeaders(entry, entries = [], stateManager = null
     return baseHeaders;
   }
 
-  const matchingResponse = [...entries]
-    .slice(0, entry.index)
-    .reverse()
-    .find(candidate =>
-      candidate?.logTag === 'GetLenderFlows_RESPONSE' &&
-      candidate.loanApplicationId === loanApplicationId &&
-      candidate.payload
-    );
-
-  const replayAuth = findReplayAppCoreAuth(matchingResponse);
-  const sessionToken = replayAuth.sessionToken || process.env.LOAN_STATUS_SESSION_TOKEN;
-  const userId = replayAuth.userId || process.env.LOAN_STATUS_USER_ID;
-  const deviceTokenId = replayAuth.deviceTokenId;
+  const matchingResponse = findMatchingGetLenderFlowsResponse(entry, entries);
+  const liveReplayAuth = typeof stateManager?.getReplayAppAuth === 'function'
+    ? stateManager.getReplayAppAuth(loanApplicationId)
+    : null;
+  const currentReplaySessionToken = typeof stateManager?.getCurrentReplaySessionToken === 'function'
+    ? stateManager.getCurrentReplaySessionToken()
+    : null;
+  const replayAuth = liveReplayAuth || findReplayAppCoreAuth(matchingResponse);
+  const sessionToken = replayAuth?.sessionToken || currentReplaySessionToken || process.env.LOAN_STATUS_SESSION_TOKEN;
+  const userId = replayAuth?.userId || process.env.LOAN_STATUS_USER_ID;
+  const deviceTokenId = replayAuth?.deviceTokenId;
   const forwardedForFromState = typeof stateManager?.resolveForwardedFor === 'function'
     ? stateManager.resolveForwardedFor(entry)
     : null;
@@ -97,7 +156,11 @@ export function buildAppCoreAuthHeaders(entry, entries = [], stateManager = null
   logger.info('APP_CORE auth headers resolved from replay context', {
     logTag: entry.logTag,
     loanApplicationId,
-    matchedReplayAuthSource: matchingResponse?.logTag || null,
+    matchedReplayAuthSource: liveReplayAuth
+      ? 'LIVE_REPLAY_STATE'
+      : currentReplaySessionToken
+        ? 'CURRENT_REPLAY_SESSION_TOKEN'
+        : matchingResponse?.logTag || null,
     hasMerchantId: Boolean(merchantId),
     hasOrderId: Boolean(orderId),
     hasSessionToken: Boolean(sessionToken),

@@ -171,7 +171,8 @@ export const REPLAY_SPECIAL_CASES = [
 
 export const POLLING_API_LOG_TAGS = new Set([
   'LSP-LoanStatus_REQUEST',
-  'FlipKart-GetRedirectionURL_REQUEST'
+  'FlipKart-GetRedirectionURL_REQUEST',
+  'GetAgreementDataRequest_REQUEST'
 ]);
 
 export const SKIPPABLE_ASYNC_API_LOG_TAGS = new Set([
@@ -180,6 +181,11 @@ export const SKIPPABLE_ASYNC_API_LOG_TAGS = new Set([
 
 export const SELF_TRIGGER_FALLBACK_API_LOG_TAGS = new Set([
   'LOAN_STATUS_ASYNC_RESPONSE_REQUEST', 'WEBHOOK_REQUEST', 'Lsp-LoanStatusRequest_REQUEST'
+]);
+
+export const TOLERATED_BATCH_TIMEOUT_LOG_TAGS = new Set([
+  'FlipKart-RealTimeEligibility_REQUEST',
+  'GetAgreementDataRequest-LSP_REQUEST'
 ]);
 
 export const THEMIS_ELIGIBILITY_LOG_TAG = 'Themis-Eligibility_REQUEST';
@@ -203,6 +209,10 @@ export function isSkippableAsyncApiLogTag(logTag) {
 
 export function isSelfTriggerFallbackApiLogTag(logTag) {
   return SELF_TRIGGER_FALLBACK_API_LOG_TAGS.has(logTag);
+}
+
+export function isToleratedBatchTimeoutApiLogTag(logTag) {
+  return TOLERATED_BATCH_TIMEOUT_LOG_TAGS.has(logTag);
 }
 
 export function getOptionalRepeatPolicy(config, currentEntry) {

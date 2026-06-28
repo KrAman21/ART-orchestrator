@@ -212,6 +212,49 @@ test('processNextLogEntry self-triggers configured fallback API after normal wai
   assert.equal(validator.processedIndices.has(1), true);
 });
 
+test('processOneCycle force-recovers stalled LENDER to GATEWAY webhook request after idle cycles', async () => {
+  const logs = [
+    createRequestLog(0, {
+      logTag: 'DMI_WEBHOOK_REQUEST',
+      traceRoute: 'LENDER_GATEWAY',
+      lenderOrgId: 'DMI'
+    }),
+    {
+      messageNumber: 1,
+      message: {
+        log_tag: 'DMI_WEBHOOK_RESPONSE',
+        trace_route: 'LENDER_GATEWAY',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'DMI'
+      }
+    }
+  ];
+
+  const validator = new LogSequenceValidator(logs);
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.validator = validator;
+  orchestrator.lastIdleExternalEntryKey = null;
+  orchestrator.idleExternalEntryCycles = 0;
+  orchestrator.checkBufferedResponses = async () => false;
+  orchestrator.processNextLogEntry = async () => false;
+
+  let recoveredEntry = null;
+  orchestrator.triggerExternalRequestAsync = async entry => {
+    recoveredEntry = entry;
+    validator.markProcessed(entry);
+    return { success: true };
+  };
+
+  const firstCycle = await AsyncReplayOrchestrator.prototype.processOneCycle.call(orchestrator);
+  const secondCycle = await AsyncReplayOrchestrator.prototype.processOneCycle.call(orchestrator);
+
+  assert.equal(firstCycle, false);
+  assert.equal(secondCycle, true);
+  assert.equal(recoveredEntry, validator.entries[0]);
+  assert.equal(validator.processedIndices.has(0), true);
+});
+
 test('prepareAsyncReplayForwarding preserves loan-status payload requestId during fallback replay', () => {
   const entry = {
     logTag: 'Lsp-LoanStatusRequest_REQUEST',
@@ -253,4 +296,276 @@ test('prepareAsyncReplayForwarding preserves loan-status payload requestId durin
 
   assert.equal(prepared.payload.requestId, 'body-request-id');
   assert.equal(prepared.replayRequestIdCandidate?.requestId, 'another-live-request-id');
+});
+
+test('prepareAsyncReplayForwarding adds SDK headers when log tag contains SDK', () => {
+  const entry = {
+    headers: {},
+    logTag: 'LSP-LoanStatus_SDK_REQUEST',
+    sourceDestination: 'CORE_GATEWAY',
+    message: {
+      merchant_id: 'flipkart'
+    },
+    payload: {}
+  };
+
+  const prepared = prepareAsyncReplayForwarding(
+    entry,
+    {},
+    'outer-replay-request-id',
+    {},
+    'flipkart',
+    []
+  );
+
+  assert.equal(prepared.headers['x-origin'], 'SDK');
+  assert.equal(prepared.headers['x-version'], 'V1');
+});
+
+test('processNextLogEntry waits for incoming CORE->GATEWAY fetchOfferSync request instead of proactively sending it', async () => {
+  const logs = [
+    createRequestLog(0, {
+      logTag: 'LSP-FetchOfferSync_REQUEST',
+      traceRoute: 'CORE_GATEWAY'
+    })
+  ];
+
+  const validator = new LogSequenceValidator(logs);
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.config = {
+    timeoutMs: 90000
+  };
+  orchestrator.validator = validator;
+  orchestrator.isRunning = true;
+  orchestrator.observedIncomingRequests = [];
+  orchestrator.observedProcessedResponses = [];
+
+  let waitedEntry = null;
+  let triggerCalled = false;
+
+  orchestrator.bufferManager = {
+    hasMatchingBufferedRequest: () => false,
+    waitForMatchingRequest: async entry => {
+      waitedEntry = entry;
+      return null;
+    }
+  };
+
+  orchestrator.triggerExternalRequestAsync = async () => {
+    triggerCalled = true;
+    return true;
+  };
+
+  const result = await AsyncReplayOrchestrator.prototype.processNextLogEntry.call(orchestrator);
+
+  assert.equal(result, false);
+  assert.equal(waitedEntry, validator.entries[0]);
+  assert.equal(triggerCalled, false);
+});
+
+test('buildFailureFallbackResponse uses matching replay response for tolerated FlipKart real-time eligibility timeout', () => {
+  const logs = [
+    {
+      messageNumber: 0,
+      message: {
+        log_tag: 'FlipKart-RealTimeEligibility_REQUEST',
+        trace_route: 'APP_WRAPPER',
+        order_id: 'order-1',
+        client_request_id: 'client-1',
+        trace_request: {
+          order_id: 'order-1'
+        }
+      }
+    },
+    {
+      messageNumber: 1,
+      message: {
+        log_tag: 'FlipKart-RealTimeEligibility_RESPONSE',
+        trace_route: 'APP_WRAPPER',
+        order_id: 'order-1',
+        client_request_id: 'client-1',
+        trace_response: {
+          status: 'SUCCESS',
+          eligibility: {
+            lender_code: 'DMI'
+          }
+        }
+      }
+    },
+    {
+      messageNumber: 2,
+      message: {
+        log_tag: 'FlipKart-RealTimeEligibility_REQUEST',
+        trace_route: 'APP_WRAPPER',
+        order_id: 'order-1',
+        client_request_id: 'client-2',
+        trace_request: {
+          order_id: 'order-1'
+        }
+      }
+    },
+    {
+      messageNumber: 3,
+      message: {
+        log_tag: 'FlipKart-RealTimeEligibility_RESPONSE',
+        trace_route: 'APP_WRAPPER',
+        order_id: 'order-1',
+        client_request_id: 'client-2',
+        trace_response: {
+          status: 'SUCCESS',
+          eligibility: {
+            lender_code: 'DMI',
+            round: 2
+          }
+        }
+      }
+    }
+  ];
+
+  const orchestrator = new AsyncReplayOrchestrator(logs, {
+    timeoutMs: 10000,
+    orderId: 'order-1'
+  });
+
+  const fallback = orchestrator.buildFailureFallbackResponse(
+    {
+      logTag: 'FlipKart-RealTimeEligibility_REQUEST',
+      logIndex: 0,
+      requestId: 'req-1'
+    },
+    {
+      status: 200,
+      statusText: 'OK',
+      data: '{"status":"FAILURE","error":{"error_message":"No response from eligibility core within timeout"}}'
+    },
+    {
+      error_message: 'No response from eligibility core within timeout'
+    },
+    null
+  );
+
+  assert.ok(fallback);
+  assert.equal(fallback.reason, 'tolerated_batch_timeout_replay_response_fallback');
+  assert.equal(fallback.postBatchConfirmationRequired, false);
+  assert.deepEqual(fallback.response.data, {
+    status: 'SUCCESS',
+    eligibility: {
+      lender_code: 'DMI'
+    }
+  });
+});
+
+test('buildFailureFallbackResponse requires post-batch confirmation when no later FlipKart real-time eligibility request exists', () => {
+  const logs = [
+    {
+      messageNumber: 0,
+      message: {
+        log_tag: 'FlipKart-RealTimeEligibility_REQUEST',
+        trace_route: 'APP_WRAPPER',
+        order_id: 'order-1',
+        client_request_id: 'client-1',
+        trace_request: {
+          order_id: 'order-1'
+        }
+      }
+    },
+    {
+      messageNumber: 1,
+      message: {
+        log_tag: 'FlipKart-RealTimeEligibility_RESPONSE',
+        trace_route: 'APP_WRAPPER',
+        order_id: 'order-1',
+        client_request_id: 'client-1',
+        trace_response: {
+          status: 'SUCCESS'
+        }
+      }
+    }
+  ];
+
+  const orchestrator = new AsyncReplayOrchestrator(logs, {
+    timeoutMs: 10000,
+    orderId: 'order-1'
+  });
+
+  const fallback = orchestrator.buildFailureFallbackResponse(
+    {
+      logTag: 'FlipKart-RealTimeEligibility_REQUEST',
+      logIndex: 0,
+      requestId: 'req-1'
+    },
+    {
+      status: 200,
+      statusText: 'OK',
+      data: '{"status":"FAILURE","error":{"error_message":"No response from eligibility core within timeout"}}'
+    },
+    {
+      error_message: 'No response from eligibility core within timeout'
+    },
+    null
+  );
+
+  assert.ok(fallback);
+  assert.equal(fallback.postBatchConfirmationRequired, true);
+  assert.equal(orchestrator.pendingPostBatchConfirmations.has(1), true);
+});
+
+test('buildFailureFallbackResponse uses matching replay response for tolerated GetAgreementDataRequest-LSP timeout', () => {
+  const logs = [
+    {
+      messageNumber: 0,
+      message: {
+        log_tag: 'GetAgreementDataRequest-LSP_REQUEST',
+        trace_route: 'CORE_GATEWAY',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        trace_request: {
+          loanApplicationId: 'loan-1',
+          applicationType: 'LINE_TXN'
+        }
+      }
+    },
+    {
+      messageNumber: 1,
+      message: {
+        log_tag: 'GetAgreementDataRequest-LSP_RESPONSE',
+        trace_route: 'CORE_GATEWAY',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        trace_response: {
+          status: 'SUCCESS',
+          agreementUrl: 'https://example.test/agreement'
+        }
+      }
+    }
+  ];
+
+  const orchestrator = new AsyncReplayOrchestrator(logs, {
+    timeoutMs: 10000,
+    orderId: 'order-1'
+  });
+
+  const fallback = orchestrator.buildFailureFallbackResponse(
+    {
+      logTag: 'GetAgreementDataRequest-LSP_REQUEST',
+      logIndex: 0,
+      requestId: 'req-1'
+    },
+    {
+      status: 0,
+      statusText: 'Timeout',
+      data: null,
+      message: 'Request timeout'
+    },
+    null,
+    new Error('Request timeout')
+  );
+
+  assert.ok(fallback);
+  assert.equal(fallback.reason, 'tolerated_batch_timeout_replay_response_fallback');
+  assert.equal(fallback.postBatchConfirmationRequired, true);
+  assert.deepEqual(fallback.response.data, {
+    status: 'SUCCESS',
+    agreementUrl: 'https://example.test/agreement'
+  });
 });

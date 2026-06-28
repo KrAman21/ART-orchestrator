@@ -21,7 +21,8 @@ test('registerReplayIdentifierMappings learns live IDs and normalizes future pay
           }
         },
         loanApplication: {
-          loanApplicationId: 'replay-la'
+          loanApplicationId: 'replay-la',
+          txnRefId: 'replay-txn-ref'
         }
       }
     },
@@ -35,7 +36,8 @@ test('registerReplayIdentifierMappings learns live IDs and normalizes future pay
           }
         },
         loanApplication: {
-          loanApplicationId: 'local-la'
+          loanApplicationId: 'local-la',
+          txnRefId: 'local-txn-ref'
         }
       }
     }
@@ -47,6 +49,7 @@ test('registerReplayIdentifierMappings learns live IDs and normalizes future pay
       applicationid: 'replay-la',
       lineId: 'replay-line',
       loanApplicationId: 'replay-la',
+      txnRefId: 'replay-txn-ref',
       merchantUserId: 'replay-mu',
       lineDetailExtensibleDataId: 'replay-lded'
     }
@@ -54,10 +57,12 @@ test('registerReplayIdentifierMappings learns live IDs and normalizes future pay
 
   assert.equal(orchestrator.stateManager.getMappedIdentifier('lineDetailId', 'replay-line'), 'local-line');
   assert.equal(orchestrator.stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
+  assert.equal(orchestrator.stateManager.getMappedIdentifier('txnRefId', 'replay-txn-ref'), 'local-txn-ref');
   assert.equal(normalized.loanApplicationId, 'local-la');
   assert.equal(normalized.payload.applicationid, 'local-la');
   assert.equal(normalized.payload.lineId, 'local-line');
   assert.equal(normalized.payload.loanApplicationId, 'local-la');
+  assert.equal(normalized.payload.txnRefId, 'local-txn-ref');
   assert.equal(normalized.payload.merchantUserId, 'local-mu');
   assert.equal(normalized.payload.lineDetailExtensibleDataId, 'local-lded');
 });
@@ -190,4 +195,126 @@ test('HDB submit-additional-data applicationId does not corrupt replay loanAppli
 
   assert.equal(orchestrator.stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
   assert.equal(normalized.payload.loanApplicationId, 'local-la');
+});
+
+test('recordObservedIncomingRequest trusts live loan application id only from LSP or GATEWAY traffic', () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.observedIncomingRequests = [];
+
+  orchestrator.stateManager.seedProdLoanApplicationIdsFromLogs([
+    {
+      payload: {
+        loanApplicationId: 'prod-la'
+      }
+    }
+  ]);
+
+  orchestrator.recordObservedIncomingRequest({
+    source: 'APP',
+    destination: 'CORE',
+    logTag: 'LSP-LoanStatus_REQUEST',
+    payload: {
+      loanApplicationId: 'untrusted-live-la'
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getCurrentReplayLoanApplicationId(), null);
+
+  orchestrator.recordObservedIncomingRequest({
+    source: 'CORE',
+    destination: 'GATEWAY',
+    logTag: 'Lsp-LoanStatusRequest_REQUEST',
+    payload: {
+      loanApplicationId: 'trusted-live-la'
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getCurrentReplayLoanApplicationId(), 'trusted-live-la');
+  assert.equal(
+    orchestrator.stateManager.rewriteOutgoingLoanApplicationIds({ loanApplicationId: 'prod-la' }).loanApplicationId,
+    'trusted-live-la'
+  );
+});
+
+test('recordObservedIncomingRequest trusts live customerId only from LSP or GATEWAY traffic', () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.observedIncomingRequests = [];
+
+  orchestrator.stateManager.seedProdCustomerIdsFromLogs([
+    {
+      payload: {
+        customerId: 'prod-customer'
+      }
+    }
+  ]);
+
+  orchestrator.recordObservedIncomingRequest({
+    source: 'APP',
+    destination: 'CORE',
+    logTag: 'LSP-LoanStatus_REQUEST',
+    payload: {
+      customerId: 'untrusted-live-customer'
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getCurrentReplayCustomerId(), null);
+
+  orchestrator.recordObservedIncomingRequest({
+    source: 'CORE',
+    destination: 'GATEWAY',
+    logTag: 'Lsp-LoanStatusRequest_REQUEST',
+    payload: {
+      customerId: 'trusted-live-customer'
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getCurrentReplayCustomerId(), 'trusted-live-customer');
+  assert.equal(
+    orchestrator.stateManager.rewriteOutgoingLoanApplicationIds({ customerId: 'prod-customer' }).customerId,
+    'trusted-live-customer'
+  );
+});
+
+test('recordObservedIncomingRequest trusts live txnRefId only from GATEWAY_LENDER traffic', () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.observedIncomingRequests = [];
+
+  orchestrator.stateManager.seedProdTxnRefIdsFromLogs([
+    {
+      payload: {
+        txnrefid: 'prod-txn-ref'
+      }
+    }
+  ]);
+
+  orchestrator.recordObservedIncomingRequest({
+    source: 'CORE',
+    destination: 'GATEWAY',
+    sourceDestination: 'CORE_GATEWAY',
+    logTag: 'DMI_TXN_STATUS_REQUEST',
+    payload: {
+      txnrefid: 'untrusted-live-txn-ref'
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getCurrentReplayTxnRefId(), null);
+
+  orchestrator.recordObservedIncomingRequest({
+    source: 'GATEWAY',
+    destination: 'LENDER',
+    sourceDestination: 'GATEWAY_LENDER',
+    logTag: 'DMI_CREATE_TXN_REQUEST',
+    payload: {
+      txnrefid: 'trusted-live-txn-ref'
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getCurrentReplayTxnRefId(), 'trusted-live-txn-ref');
+  assert.equal(
+    orchestrator.stateManager.rewriteOutgoingLoanApplicationIds({ txnRefId: 'prod-txn-ref' }).txnRefId,
+    'trusted-live-txn-ref'
+  );
 });

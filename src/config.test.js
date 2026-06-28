@@ -46,3 +46,61 @@ test('getApiMapping keeps HDB status-check as fetch-offer when next expected rep
     headers: {}
   });
 });
+
+test('getApiMapping resolves /prod/MOCK_DATA as KFS parent request when that tag is nearest in replay lookahead', () => {
+  const mapping = getApiMapping('/prod/MOCK_DATA', {
+    payload: {},
+    headers: {},
+    nextExpectedLogTag: 'UNRELATED_TAG',
+    lookaheadLogTags: [
+      'SOME_OTHER_REQUEST',
+      'KFS SERVICE API :: PARENT_REQUEST',
+      'KYC SERVICE API_REQUEST'
+    ]
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'KFS SERVICE API :: PARENT_REQUEST',
+    api: '/prod/MOCK_DATA',
+    sourceDestination: 'GATEWAY_LENDER',
+    headers: {}
+  });
+});
+
+test('getApiMapping resolves /prod/MOCK_DATA as KYC request when that tag is nearest in replay lookahead', () => {
+  const mapping = getApiMapping('/prod/MOCK_DATA', {
+    payload: {},
+    headers: {},
+    nextExpectedLogTag: 'KYC SERVICE API_REQUEST',
+    lookaheadLogTags: [
+      'KYC SERVICE API_REQUEST',
+      'KFS SERVICE API :: CHILD_REQUEST'
+    ]
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'KYC SERVICE API_REQUEST',
+    api: '/prod/MOCK_DATA',
+    sourceDestination: 'GATEWAY_LENDER',
+    headers: {}
+  });
+});
+
+test('getApiMapping resolves /prod/MOCK_DATA as KFS child request when that tag is nearest in replay lookahead', () => {
+  const mapping = getApiMapping('/prod/MOCK_DATA', {
+    payload: {},
+    headers: {},
+    nextExpectedLogTag: 'UNRELATED_TAG',
+    lookaheadLogTags: [
+      'ANOTHER_TAG',
+      'KFS SERVICE API :: CHILD_REQUEST'
+    ]
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'KFS SERVICE API :: CHILD_REQUEST',
+    api: '/prod/MOCK_DATA',
+    sourceDestination: 'GATEWAY_LENDER',
+    headers: {}
+  });
+});

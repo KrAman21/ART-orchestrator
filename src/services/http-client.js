@@ -55,6 +55,53 @@ function buildBasicMerchantAuthorization(merchantId) {
   return merchantId ? `Basic ${merchantId}` : 'Basic flipkart';
 }
 
+function shouldSendAppCoreAsTextEnvelope(sourceDestination, logTag, method) {
+  return (
+    sourceDestination === 'APP_CORE' &&
+    method !== 'GET'
+  );
+}
+
+function buildAppCoreTextEnvelope(payload, requestId, merchantId, customHeaders = {}) {
+  return {
+    payload: payload ?? {},
+    header: {
+      'X-Merchant-Id': merchantId || payload?.merchantId || payload?.merchant_id || 'flipkart',
+      ...(payload?.clientAuthToken ? { 'X-Client-Auth-Token': payload.clientAuthToken } : {}),
+      ...customHeaders
+    },
+    timeStamp: new Date().toISOString(),
+    requestId: requestId || payload?.requestId || crypto.randomUUID()
+  };
+}
+
+function shouldSendSdkWrapperAsTextEnvelope(sourceDestination, logTag, endpoint, method) {
+  if (sourceDestination !== 'APP_WRAPPER' || method === 'GET') {
+    return false;
+  }
+
+  if (typeof logTag === 'string' && logTag.includes('SDK')) {
+    return true;
+  }
+
+  return typeof endpoint === 'string' && (
+    endpoint.includes('/sdk/') ||
+    endpoint.includes('credit/sdk/')
+  );
+}
+
+function buildWrapperJsonEnvelope(payload, requestId, merchantId, customHeaders = {}) {
+  return {
+    payload: payload ?? {},
+    header: {
+      'X-Merchant-Id': merchantId || payload?.merchantId || payload?.merchant_id || 'flipkart',
+      ...customHeaders
+    },
+    timeStamp: new Date().toISOString(),
+    requestId: requestId || payload?.requestId || crypto.randomUUID()
+  };
+}
+
 export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, timeoutMs = 30000) {
   const parts = sourceDestination?.split('_') || [];
   const source = parts[0] || '';
@@ -106,6 +153,30 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
 
   try {
     let body = method !== 'GET' ? JSON.stringify(payload ?? {}) : undefined;
+    const usesSdkWrapperTextEnvelope =
+      shouldSendSdkWrapperAsTextEnvelope(sourceDestination, logTag, endpoint, method);
+
+    if (shouldSendAppCoreAsTextEnvelope(sourceDestination, logTag, method)) {
+      const requestPayload = buildAppCoreTextEnvelope(payload, requestId, merchantId, customHeaders);
+      body = JSON.stringify(JSON.stringify(requestPayload));
+      logger.info('Prepared APP_CORE request as unencrypted JwtPayload text envelope on first attempt', {
+        requestId,
+        endpoint,
+        logTag,
+        envelopeRequestId: requestPayload.requestId
+      });
+    }
+
+    if (usesSdkWrapperTextEnvelope) {
+      const requestPayload = buildWrapperJsonEnvelope(payload, requestId, merchantId, customHeaders);
+      body = JSON.stringify(JSON.stringify(requestPayload));
+      logger.info('Prepared SDK wrapper request as stringified JSON envelope on first attempt', {
+        requestId,
+        endpoint,
+        logTag,
+        envelopeRequestId: requestPayload.requestId
+      });
+    }
 
     if (dest === 'WRAPPER' && body) {
       // body is already stringified above; just add WRAPPER-specific headers
@@ -117,7 +188,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       
       // When disable_encryption is TRUE, LSP expects body as JSON String (not Object)
       // because Servant route type is ReqBody '[JSON] Text
-      if (headers['disable_encryption'] === 'TRUE') {
+      if (headers['disable_encryption'] === 'TRUE' && !usesSdkWrapperTextEnvelope) {
         body = JSON.stringify(body);
       }
 
@@ -182,16 +253,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       data?.actualValue === 'Object' &&
       body
     ) {
-      const requestPayload = {
-        payload: payload ?? {},
-        header: {
-          'X-Merchant-Id': merchantId || payload?.merchantId || payload?.merchant_id || 'flipkart',
-          ...(payload?.clientAuthToken ? { 'X-Client-Auth-Token': payload.clientAuthToken } : {}),
-          ...customHeaders
-        },
-        timeStamp: new Date().toISOString(),
-        requestId: requestId || payload?.requestId || crypto.randomUUID()
-      };
+      const requestPayload = buildAppCoreTextEnvelope(payload, requestId, merchantId, customHeaders);
       const retryBody = JSON.stringify(JSON.stringify(requestPayload));
       logger.warn('Retrying APP_CORE request as unencrypted JwtPayload text after LSP type mismatch', {
         requestId,

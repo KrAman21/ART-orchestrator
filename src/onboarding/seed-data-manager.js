@@ -1,6 +1,6 @@
 import { makeRequest } from '../services/http-client.js';
 import { logger } from '../utils/logger.js';
-import { SERVICE_MAP, LENDER_ORG_ID_TO_ID_MAP, getLenderId } from '../config.js';
+import { SERVICE_MAP, LENDER_ORG_ID_TO_ID_MAP } from '../config.js';
 import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
 import { transformRequest } from '../services/request-transformer.js';
 
@@ -310,22 +310,6 @@ export class SeedDataManager {
     return null;
   }
 
-  static remapLineDetailForCurrentSystem(lineDetail, lenderOrgId) {
-    if (!lineDetail || typeof lineDetail !== 'object') {
-      return lineDetail;
-    }
-
-    const mappedLenderId = getLenderId(lenderOrgId);
-    if (!mappedLenderId) {
-      return lineDetail;
-    }
-
-    return {
-      ...lineDetail,
-      lenderId: mappedLenderId
-    };
-  }
-
   static extractCustomerSeedData(logs) {
     const eligibleTags = new Set([
       'FlipKart-Eligibility_REQUEST',
@@ -474,7 +458,10 @@ export class SeedDataManager {
         }
 
         lineSeedData.push({
-          lineDetail: SeedDataManager.remapLineDetailForCurrentSystem(lineDetail, lenderOrgId),
+          // Preserve the replay lenderId as-is while seeding line data.
+          // ART's static orgId->lenderId map can drift from the current LSP DB,
+          // which causes seeded line_detail rows to point at the wrong lender.
+          lineDetail,
           referenceId
         });
       }

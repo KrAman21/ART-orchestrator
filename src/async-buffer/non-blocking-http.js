@@ -10,6 +10,8 @@ export class NonBlockingHttpClient {
     this.failedRequests = [];
     this.shouldTreatApiFailureAsExpected =
       options.shouldTreatApiFailureAsExpected || (() => false);
+    this.buildFailureFallbackResponse =
+      options.buildFailureFallbackResponse || (() => null);
   }
   
   async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, loanApplicationId = null, lenderOrgId = null, clientRequestId = null) {
@@ -100,6 +102,31 @@ export class NonBlockingHttpClient {
       });
       
       if (hasFailure) {
+        const fallbackResponse = this.buildFailureFallbackResponse(activeReq, response, apiFailure, null);
+        if (fallbackResponse?.response) {
+          logger.warn('Non-blocking request failure tolerated via replay fallback response', {
+            requestId,
+            logTag,
+            status: response.status,
+            apiFailure,
+            fallbackReason: fallbackResponse.reason || 'replay_fallback_response'
+          });
+          this.bufferManager.addResponse(requestId, fallbackResponse.response, false, {
+            requestId,
+            logTag,
+            sourceDestination,
+            loanApplicationId: activeReq?.loanApplicationId,
+            lenderOrgId: activeReq?.lenderOrgId,
+            clientRequestId: activeReq?.clientRequestId,
+            orderId: this.orderId,
+            toleratedFailureFallback: true,
+            toleratedFailureReason: fallbackResponse.reason || null,
+            postBatchConfirmationRequired: fallbackResponse.postBatchConfirmationRequired === true,
+            postBatchConfirmationResponseIndex: fallbackResponse.postBatchConfirmationResponseIndex ?? null
+          });
+          return;
+        }
+
         const errorMsg = apiFailure 
           ? `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`
           : response.message;
@@ -137,6 +164,36 @@ export class NonBlockingHttpClient {
       const activeReq = this.activeRequests.get(requestId);
       this.activeRequests.delete(requestId);
       logger.error('Non-blocking request exception', { requestId, error: error.message, hasActiveReq: !!activeReq });
+
+      const fallbackResponse = this.buildFailureFallbackResponse(
+        activeReq,
+        { error: true, message: error.message, status: 0, data: null },
+        null,
+        error
+      );
+      if (fallbackResponse?.response) {
+        logger.warn('Non-blocking request exception tolerated via replay fallback response', {
+          requestId,
+          logTag,
+          error: error.message,
+          fallbackReason: fallbackResponse.reason || 'replay_fallback_response'
+        });
+        this.bufferManager.addResponse(requestId, fallbackResponse.response, false, {
+          requestId,
+          logTag,
+          sourceDestination,
+          loanApplicationId: activeReq?.loanApplicationId,
+          lenderOrgId: activeReq?.lenderOrgId,
+          clientRequestId: activeReq?.clientRequestId,
+          orderId: this.orderId,
+          toleratedFailureFallback: true,
+          toleratedFailureReason: fallbackResponse.reason || null,
+          postBatchConfirmationRequired: fallbackResponse.postBatchConfirmationRequired === true,
+          postBatchConfirmationResponseIndex: fallbackResponse.postBatchConfirmationResponseIndex ?? null
+        });
+        return;
+      }
+
       this.recordFailure(activeReq, requestId, { error: true, message: error.message }, error);
       this.bufferManager.addResponse(requestId, { error: true, message: error.message }, true, {
         requestId,

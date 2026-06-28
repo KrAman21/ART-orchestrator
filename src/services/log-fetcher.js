@@ -891,6 +891,14 @@ function shouldSkipLog(log) {
   const msg = log?.message || {};
   const traceRoute = msg.trace_route || '';
   const logTag = (msg.log_tag || '').trim();
+
+  if (traceRoute === 'CORE_APP') {
+    return true;
+  }
+
+  if (logTag.includes('.')) {
+    return true;
+  }
   
   if (traceRoute.startsWith('WRAPPER_') || traceRoute.endsWith('_WRAPPER')) {
     if (traceRoute === 'APP_WRAPPER') {

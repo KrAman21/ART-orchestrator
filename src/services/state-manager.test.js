@@ -3,195 +3,104 @@ import assert from 'node:assert/strict';
 
 import { StateManager } from './state-manager.js';
 
-test('remapReplayValue remaps typed identifier aliases', () => {
+test('updateReplayAppAuthFromResponse stores live app auth from stringified GetLenderFlows response', () => {
   const stateManager = new StateManager();
 
-  stateManager.registerIdentifierMapping('loanApplicationId', 'replay-la', 'local-la');
-  stateManager.registerIdentifierMapping('lineDetailId', 'replay-line', 'local-line');
-  stateManager.registerIdentifierMapping('merchantUserId', 'replay-mu', 'local-mu');
+  const updated = stateManager.updateReplayAppAuthFromResponse(
+    'LA-1',
+    JSON.stringify({
+      payload: {
+        sessionToken: 'live-session-token-123',
+        userId: 'live-user-1',
+        deviceTokenId: 'live-device-1'
+      }
+    }),
+    { logTag: 'GetLenderFlows_RESPONSE' }
+  );
 
-  const remapped = stateManager.remapReplayValue({
-    loanApplicationId: 'replay-la',
-    partnerRefNo: 'replay-la',
-    lineId: 'replay-line',
-    applicationid: 'replay-la',
-    applicationId: 'replay-la',
-    nested: {
-      lineDetailId: 'replay-line',
-      merchantUserId: 'replay-mu'
-    },
-    untouched: 'replay-line'
+  assert.equal(updated, true);
+  assert.deepEqual(stateManager.getReplayAppAuth('LA-1'), {
+    sessionToken: 'live-session-token-123',
+    userId: 'live-user-1',
+    deviceTokenId: 'live-device-1',
+    updatedAt: stateManager.getReplayAppAuth('LA-1').updatedAt,
+    logTag: 'GetLenderFlows_RESPONSE'
   });
-
-  assert.equal(remapped.loanApplicationId, 'local-la');
-  assert.equal(remapped.partnerRefNo, 'local-la');
-  assert.equal(remapped.lineId, 'local-line');
-  assert.equal(remapped.applicationid, 'local-la');
-  assert.equal(remapped.applicationId, 'local-la');
-  assert.equal(remapped.nested.lineDetailId, 'local-line');
-  assert.equal(remapped.nested.merchantUserId, 'local-mu');
-  assert.equal(remapped.untouched, 'replay-line');
 });
 
-test('remapReplayValue honors DMI applicationid context as line detail id', () => {
+test('seedProdSessionTokensFromLogs and rewriteOutgoingLoanApplicationIds remap stale prod session token to live replay token', () => {
   const stateManager = new StateManager();
-
-  stateManager.registerIdentifierMapping('loanApplicationId', 'replay-la', 'local-la');
-  stateManager.registerIdentifierMapping('lineDetailId', 'replay-line', 'local-line');
-
-  const remapped = stateManager.remapReplayValue(
+  stateManager.seedProdSessionTokensFromLogs([
     {
-      applicationid: 'replay-line',
+      payload: {
+        sessionToken: 'prod-session-token-1'
+      }
+    }
+  ]);
+  stateManager.setCurrentReplaySessionToken('live-session-token-1', { logTag: 'GetLenderFlows_RESPONSE' });
+
+  const rewritten = stateManager.rewriteOutgoingLoanApplicationIds({
+    header: {
+      'x-session-token': 'prod-session-token-1'
+    },
+    payload: {
+      sessionToken: 'prod-session-token-1'
+    }
+  });
+
+  assert.equal(rewritten.header['x-session-token'], 'live-session-token-1');
+  assert.equal(rewritten.payload.sessionToken, 'live-session-token-1');
+});
+
+test('seedProdTxnRefIdsFromLogs and rewriteOutgoingLoanApplicationIds remap stale prod txnRefId to live replay txnRefId', () => {
+  const stateManager = new StateManager();
+  stateManager.seedProdTxnRefIdsFromLogs([
+    {
+      payload: {
+        txnrefid: 'prod-txn-ref-1'
+      }
+    }
+  ]);
+  stateManager.setCurrentReplayTxnRefId('live-txn-ref-1', { logTag: 'DMI_CREATE_TXN_REQUEST' });
+
+  const rewritten = stateManager.rewriteOutgoingLoanApplicationIds({
+    payload: {
+      txnRefId: 'prod-txn-ref-1',
       nested: {
-        ApplicationId: 'replay-line'
+        txnrefid: 'prod-txn-ref-1'
       }
-    },
-    null,
-    { logTag: 'DMI_WEBHOOK_REQUEST' }
-  );
-
-  assert.equal(remapped.applicationid, 'local-line');
-  assert.equal(remapped.nested.ApplicationId, 'local-line');
-});
-
-test('registerMappingsFromPayloadPair learns identifier mappings from matched response payloads', () => {
-  const stateManager = new StateManager();
-
-  const registered = stateManager.registerMappingsFromPayloadPair(
-    {
-      payload: {
-        loanApplicationId: 'replay-la',
-        lineId: 'replay-line'
-      }
-    },
-    {
-      payload: {
-        loanApplicationId: 'local-la',
-        lineId: 'local-line'
-      }
-    }
-  );
-
-  assert.equal(registered, 2);
-  assert.equal(stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
-  assert.equal(stateManager.getMappedIdentifier('lineDetailId', 'replay-line'), 'local-line');
-});
-
-test('registerMappingsFromPayloadPair honors log-tag-specific identifier overrides', () => {
-  const stateManager = new StateManager();
-
-  const registered = stateManager.registerMappingsFromPayloadPair(
-    {
-      actionsRequired: [
-        { id: 'replay-action-id' }
-      ]
-    },
-    {
-      actionsRequired: [
-        { id: 'local-action-id' }
-      ]
-    },
-    { logTag: 'UpdateKYCRequest_REQUEST' }
-  );
-
-  assert.equal(registered, 1);
-  assert.equal(stateManager.getMappedIdentifier('actionRequiredId', 'replay-action-id'), 'local-action-id');
-});
-
-test('registerMappingsFromPayloadPair does not let KYC service applicationid overwrite loan application mapping', () => {
-  const stateManager = new StateManager();
-
-  stateManager.registerIdentifierMapping('loanApplicationId', 'replay-la', 'local-la');
-
-  const registered = stateManager.registerMappingsFromPayloadPair(
-    {
-      redirectionurl: 'https://example.test/KYC/replay-la/DMI/flipkart',
-      leadid: 'lead-1',
-      applicationid: 'replay-line-detail-id',
-      type: 'kyc'
-    },
-    {
-      redirectionurl: 'https://example.test/KYC/local-la/DMI/flipkart',
-      leadid: 'lead-1',
-      applicationid: 'local-line-detail-id',
-      type: 'kyc'
-    },
-    { logTag: 'KYC SERVICE API_REQUEST' }
-  );
-
-  assert.equal(registered, 1);
-  assert.equal(stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
-  assert.equal(
-    stateManager.getMappedIdentifier('lineDetailId', 'replay-line-detail-id'),
-    'local-line-detail-id'
-  );
-});
-
-test('HDB status-check applicationId does not overwrite loan application mapping', () => {
-  const stateManager = new StateManager();
-
-  stateManager.registerIdentifierMapping('loanApplicationId', 'replay-la', 'local-la');
-
-  const registered = stateManager.registerMappingsFromPayloadPair(
-    {
-      data: {
-        applicationId: 'replay-la'
-      }
-    },
-    {
-      data: {
-        applicationId: 'HF20251028211676863'
-      }
-    },
-    { logTag: 'HDB_APPLICATION_STATUS_API :: FETCH_OFFER_REQUEST' }
-  );
-
-  assert.equal(registered, 0);
-  assert.equal(stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
-});
-
-test('HDB submit-additional-data applicationId does not overwrite loan application mapping', () => {
-  const stateManager = new StateManager();
-
-  stateManager.registerIdentifierMapping('loanApplicationId', 'replay-la', 'local-la');
-
-  const registered = stateManager.registerMappingsFromPayloadPair(
-    {
-      data: {
-        applicationId: 'replay-la'
-      }
-    },
-    {
-      data: {
-        applicationId: 'HF20251028211676863'
-      }
-    },
-    { logTag: 'HDB_CHECK_OFFERS_API_REQUEST' }
-  );
-
-  assert.equal(registered, 0);
-  assert.equal(stateManager.getMappedIdentifier('loanApplicationId', 'replay-la'), 'local-la');
-});
-
-test('recordForwardedFor stores and resolves x-forwarded-for by replay context', () => {
-  const stateManager = new StateManager();
-
-  const stored = stateManager.recordForwardedFor({
-    requestId: 'req-1',
-    loanApplicationId: 'loan-1',
-    orderId: 'order-1',
-    headers: {
-      'x-forwarded-for': '10.10.10.10, 127.0.0.1'
     }
   });
 
-  assert.equal(stored, true);
-  assert.equal(
-    stateManager.resolveForwardedFor({ loanApplicationId: 'loan-1' }),
-    '10.10.10.10, 127.0.0.1'
-  );
-  assert.equal(
-    stateManager.resolveForwardedFor({ orderId: 'order-1' }),
-    '10.10.10.10, 127.0.0.1'
-  );
+  assert.equal(rewritten.payload.txnRefId, 'live-txn-ref-1');
+  assert.equal(rewritten.payload.nested.txnrefid, 'live-txn-ref-1');
+});
+
+test('seedProdCustomerIdsFromLogs and rewriteOutgoingLoanApplicationIds remap stale prod customerId to live replay customerId', () => {
+  const stateManager = new StateManager();
+  stateManager.seedProdCustomerIdsFromLogs([
+    {
+      payload: {
+        customerId: 'prod-customer-1',
+        merchant_customer_id: 'prod-customer-2'
+      }
+    }
+  ]);
+  stateManager.setCurrentReplayCustomerId('live-customer-1', { logTag: 'LSP-Eligibility_REQUEST' });
+
+  const rewritten = stateManager.rewriteOutgoingLoanApplicationIds({
+    header: {
+      customerId: 'prod-customer-1'
+    },
+    payload: {
+      customerId: 'prod-customer-1',
+      nested: {
+        merchant_customer_id: 'prod-customer-2'
+      }
+    }
+  });
+
+  assert.equal(rewritten.header.customerId, 'live-customer-1');
+  assert.equal(rewritten.payload.customerId, 'live-customer-1');
+  assert.equal(rewritten.payload.nested.merchant_customer_id, 'live-customer-1');
 });

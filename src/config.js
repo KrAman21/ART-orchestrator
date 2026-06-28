@@ -191,7 +191,7 @@ export const API_TO_ENDPOINT_MAP = {
   // ── Generic / JuspaySDK (prefix: /api/) ─────────────────────────────────────
   'APP_WRAPPER|JUSPAY_SDK_REQUEST':        { endpoint: '/api/eligibility', method: 'POST', service: 'LSP', headers: {} }, // commonAuth-based, used by galaxyHealth too
   'APP_WRAPPER|JuspaySDK-GetKFS_REQUEST':  { endpoint: '/api/getKFS',      method: 'POST', service: 'LSP', headers: {} },
-
+  'APP_WRAPPER|JuspaySDK-FetchStatus_REQUEST' :{endpoint: 'credit/sdk/fetch/status', method: 'POST', service: 'LSP', headers: {}},
   // ── PayIn3 (prefix: /payin3/) — note: type has duplicate "payin3" prefix ─────
   'APP_WRAPPER|PayIn3-SoftEligiblity_REQUEST':  { endpoint: '/payin3/payin3/eligibility',  method: 'POST', service: 'LSP', headers: {} },
   'APP_WRAPPER|JuspaySDK-SetOfferV2_REQUEST':   { endpoint: '/payin3/payin3/offer/set',     method: 'POST', service: 'LSP', headers: {} },
@@ -320,6 +320,7 @@ export const API_TO_ENDPOINT_MAP = {
   'APP_CORE|GetKYCRequest_REQUEST': { endpoint: '/api/v4.0/kyc/getKYC', method: 'POST', service: 'LSP', headers: {} },
   'APP_CORE|TriggerKYCRequest_REQUEST': { endpoint: '/api/v4.0/kyc/trigger', method: 'POST', service: 'LSP', headers: {} },
   'APP_CORE|UpdateKYCRequest_REQUEST':{ endpoint: '/api/v3.3/kyc/updateKYC/trigger', method: 'POST', service: 'LSP', headers: {} },
+  'APP_CORE|GetAgreementDataRequest_REQUEST':{ endpoint: '/api/v3.3/loan/offers/getAgreementData/trigger', method: 'POST', service: 'LSP', headers: {} },
   
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing/REQUEST) ====================
   // REQUEST variants (used by logs.json)
@@ -353,6 +354,8 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_GATEWAY|LSP-BackRedirection_REQUEST': { endpoint: '/gateway/v1.0/backRedirection', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-CreateUpdateCustomer_REQUEST': { endpoint: '/gateway/v1.0/customer', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-CreateUpdateApplicant_REQUEST': { endpoint: '/gateway/v1.0/applicant', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|LSP-GetStatus_REQUEST': { endpoint: '/gateway/v3.3/fetchLoanStatus', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|GetAgreementDataRequest-LSP_REQUEST': { endpoint: '/gateway/v3.3/loan/getLoanAgreementRequest', method: 'POST', service: 'GW', headers: {} },
 
   // Original OUTGOING mappings (kept for compatibility)
   'CORE_GATEWAY|LSP-SelectOffer_OUTGOING': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
@@ -509,6 +512,8 @@ export const API_TO_ENDPOINT_MAP = {
   // ============================================================================
   'GATEWAY_LENDER|CHECK ELIGIBILITY API_REQUEST': { endpoint: '/base/flipkart/fk/checkEligibility', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|KYC SERVICE API_REQUEST': { endpoint: '/prod/MOCK_DATA', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|KFS SERVICE API :: PARENT_REQUEST': { endpoint: '/prod/MOCK_DATA', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|KFS SERVICE API :: CHILD_REQUEST': { endpoint: '/prod/MOCK_DATA', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|HDB_TOKEN_API_REQUEST': { endpoint: '/api/hdb/token', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|LiquiLoans-GetSchemeList Request': { endpoint: '/api/dealer/schemes', method: 'GET', service: 'LIQUILOANS', headers: {} },
   'GATEWAY_LENDER|LiquiLoans-GetSchemeList_REQUEST': { endpoint: '/api/dealer/schemes', method: 'GET', service: 'LIQUILOANS', headers: {} },
@@ -1105,6 +1110,7 @@ export const API_TO_ENDPOINT_MAP = {
   'GATEWAY_LENDER|FK SCORE API_REQUEST': { endpoint: '/uat/partner_score', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|FK SCORE API_REQUEST': { endpoint: '/prod/partner_score', method: 'POST', service: 'LENDER', headers: {} },
   'GATEWAY_LENDER|DECISION API_REQUEST': { endpoint: '/prod/updateapplication', method: 'POST', service: 'LENDER', headers: {} },
+  'GATEWAY_LENDER|CHECK ELIGIBILITY API_REQUEST':{endpoint: '/prod/parentoppcheckeligibilityapi', method: 'POST', service: 'LENDER', headers: {}},
 
 
 
@@ -1439,6 +1445,8 @@ export const API_TO_LOGTAG_MAP = {
   '/gateway/v1.0/getKFS-request': { logTag: 'LSP-GetKFS_REQUEST', api: '/gateway/v1.0/getKFS', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v1.0/hardEligibility-request': { logTag: 'LSP-HardEligibility_REQUEST', api: '/gateway/v1.0/hardEligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/api/fetch/loanApplicationData': { logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST', api: '/api/fetch/loanApplicationData', sourceDestination: 'GATEWAY_LSP', headers: {} },
+  '/gateway/v3.3/fetchLoanStatus':{logTag: 'LSP-GetStatus_REQUEST', api: '/gateway/v3.3/fetchLoanStatus', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v3.3/loan/getLoanAgreementRequest': { logTag: 'GetAgreementDataRequest-LSP_REQUEST', api: '/gateway/v3.3/loan/getLoanAgreementRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
   
   // ==================== GATEWAY_CORE (Gateway to Core - Responses/Callbacks) ====================
   '/v1/themis/eligibility/callback': { logTag: 'LSP-Eligibility_INCOMING', api: '/v1/themis/eligibility/callback', sourceDestination: 'GATEWAY_CORE', headers: {} },
@@ -1572,6 +1580,10 @@ export const API_TO_LOGTAG_MAP = {
   '/MOCK_DATA/asset-details':{logTag : 'HDB_OFFER_SELECTION_API_REQUEST', api: '/MOCK_DATA/asset-details', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/order/init':{logTag : 'ORDER_INIT_API_SO_REQUEST', api: '/order/init', sourceDestination: 'GATEWAY_LENDER', headers: {} },
   '/order/status':{logTag : 'ORDER_STATUS_API_LS_REQUEST', api: '/order/status', sourceDestination: 'GATEWAY_LENDER', headers: {} },
+  '/prod/parentoppcheckeligibilityapi': {logTag :  'CHECK ELIGIBILITY API_REQUEST', sourceDestination: 'GATEWAY_LENDER', api: '/prod/parentoppcheckeligibilityapi', headers: {} },
+  '/MOCK_DATA/parentoppcheckeligibilityapi': {logTag :  'CHECK ELIGIBILITY API_REQUEST', sourceDestination: 'GATEWAY_LENDER', api: '/MOCK_DATA/parentoppcheckeligibilityapi', headers: {} },
+  '/uat/parentoppcheckeligibilityapi': {logTag :  'CHECK ELIGIBILITY API_REQUEST', sourceDestination: 'GATEWAY_LENDER', api: '/uat/parentoppcheckeligibilityapi', headers: {} },
+  '/prod/TransactionWrapperAPI': {logTag :  'NEW TRANSACTION CREATION API_REQUEST', sourceDestination: 'GATEWAY_LENDER', api: '/prod/TransactionWrapperAPI', headers: {} }
 };
 
 // Destinations that should not be called (external services)
@@ -1691,6 +1703,24 @@ function extractLenderOrgId(payload = {}, headers = {}) {
     getHeaderValue(headers, 'x-lender-org-id');
 }
 
+function selectNearestLookaheadLogTag(preferredLogTags = [], lookaheadLogTags = []) {
+  if (!Array.isArray(preferredLogTags) || preferredLogTags.length === 0) {
+    return null;
+  }
+
+  if (!Array.isArray(lookaheadLogTags) || lookaheadLogTags.length === 0) {
+    return null;
+  }
+
+  for (const candidate of lookaheadLogTags) {
+    if (preferredLogTags.includes(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 /**
  * Get full mapping info for an API endpoint
  * @param {string} api - API endpoint path
@@ -1706,6 +1736,9 @@ export function getApiMapping(api, context = {}) {
   }
 
   const nextExpectedLogTag = context?.nextExpectedLogTag || null;
+  const lookaheadLogTags = Array.isArray(context?.lookaheadLogTags)
+    ? context.lookaheadLogTags.filter(Boolean)
+    : [];
 
   if (
     ['/api/v1/status-check', '/prod/status-check', '/MOCK_DATA/status-check'].includes(api) &&
@@ -1718,6 +1751,27 @@ export function getApiMapping(api, context = {}) {
       ...mapping,
       logTag: nextExpectedLogTag
     };
+  }
+
+  if (api === '/prod/MOCK_DATA') {
+    const contextualMockDataLogTag = selectNearestLookaheadLogTag(
+      [
+        'KFS SERVICE API :: PARENT_REQUEST',
+        'KYC SERVICE API_REQUEST',
+        'KFS SERVICE API :: CHILD_REQUEST'
+      ],
+      [
+        nextExpectedLogTag,
+        ...lookaheadLogTags
+      ]
+    );
+
+    if (contextualMockDataLogTag) {
+      return {
+        ...mapping,
+        logTag: contextualMockDataLogTag
+      };
+    }
   }
 
   if (api === '/lsp/generateKFS') {

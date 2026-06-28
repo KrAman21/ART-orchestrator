@@ -28,6 +28,16 @@ function extractReplayIndexFromResultEntry(entryText) {
   return match ? Number(match[1]) : null;
 }
 
+function shouldTrustLiveLoanApplicationIdSource(incoming) {
+  const source = incoming?.source || null;
+  const destination = incoming?.destination || null;
+
+  return source === 'LSP' ||
+    source === 'GATEWAY' ||
+    destination === 'LSP' ||
+    destination === 'GATEWAY';
+}
+
 export class ReplayOrchestrator {
   constructor(logs, config = {}) {
     this.config = {
@@ -68,6 +78,10 @@ export class ReplayOrchestrator {
     this.logs = logs;
     this.validator = new LogSequenceValidator(logs);
     this.seedDataManager = new SeedDataManager(logs);
+    this.stateManager.seedProdLoanApplicationIdsFromLogs(logs);
+    this.stateManager.seedProdSessionTokensFromLogs(logs);
+    this.stateManager.seedProdTxnRefIdsFromLogs(logs);
+    this.stateManager.seedProdCustomerIdsFromLogs(logs);
     this.resetState();
   }
 
@@ -190,7 +204,11 @@ export class ReplayOrchestrator {
         shouldBlockOnHeldExternalRequest: () => true,
         trackAsyncCompletion: this.trackAsyncCompletion.bind(this),
         fail: this.fail.bind(this),
-        recordBufferFailure: this.recordBufferFailure.bind(this)
+        recordBufferFailure: this.recordBufferFailure.bind(this),
+        buildFailureFallbackResponse:
+          typeof this.buildFailureFallbackResponse === 'function'
+            ? this.buildFailureFallbackResponse.bind(this)
+            : null
       }
     });
 
@@ -621,13 +639,37 @@ export class ReplayOrchestrator {
       incoming.logTag
     );
 
+    const observedLoanApplicationIds = this.stateManager.extractProdLoanApplicationIdsFromValue(incoming);
+    const observedSessionTokens = this.stateManager.extractProdSessionTokensFromValue(incoming);
+    const observedTxnRefIds = this.stateManager.extractProdTxnRefIdsFromValue(incoming);
+    const observedCustomerIds = this.stateManager.extractProdCustomerIdsFromValue(incoming);
+    const observedLoanApplicationId =
+      incoming.loanApplicationId ||
+      observedLoanApplicationIds[observedLoanApplicationIds.length - 1] ||
+      null;
+    const observedSessionToken =
+      incoming.headers?.['x-session-token'] ||
+      incoming.headers?.['X-Session-Token'] ||
+      observedSessionTokens[observedSessionTokens.length - 1] ||
+      null;
+    const observedTxnRefId =
+      incoming.txnRefId ||
+      observedTxnRefIds[observedTxnRefIds.length - 1] ||
+      null;
+    const observedCustomerId =
+      incoming.customerId ||
+      observedCustomerIds[observedCustomerIds.length - 1] ||
+      null;
+
     this.observedIncomingRequests.push({
       source: incoming.source,
       destination: incoming.destination,
       sourceDestination,
       logTag: incoming.logTag,
       lenderOrgId: incoming.lenderOrgId || null,
-      loanApplicationId: incoming.loanApplicationId || incoming.payload?.loanApplicationId || incoming.payload?.loan_application_id || null,
+      loanApplicationId: observedLoanApplicationId,
+      txnRefId: observedTxnRefId,
+      customerId: observedCustomerId,
       orderId: incoming.orderId || incoming.headers?.['x-order-id'] || null,
       requestId: incoming.requestId || null,
       payload: incoming.payload || null,
@@ -637,6 +679,78 @@ export class ReplayOrchestrator {
 
     if (this.observedIncomingRequests.length > 500) {
       this.observedIncomingRequests.splice(0, this.observedIncomingRequests.length - 500);
+    }
+
+    if (observedLoanApplicationId && shouldTrustLiveLoanApplicationIdSource(incoming)) {
+      this.stateManager.setCurrentReplayLoanApplicationId(observedLoanApplicationId, {
+        logTag: incoming.logTag,
+        source: incoming.source,
+        destination: incoming.destination,
+        sourceDestination,
+        requestId: incoming.requestId || null
+      });
+    } else if (observedLoanApplicationId) {
+      logger.info('Ignoring observed loanApplicationId for replay remap because source is not trusted', {
+        observedLoanApplicationId,
+        logTag: incoming.logTag,
+        source: incoming.source || null,
+        destination: incoming.destination || null,
+        sourceDestination
+      });
+    }
+
+    if (observedSessionToken && shouldTrustLiveLoanApplicationIdSource(incoming)) {
+      this.stateManager.setCurrentReplaySessionToken(observedSessionToken, {
+        logTag: incoming.logTag,
+        source: incoming.source,
+        destination: incoming.destination,
+        sourceDestination,
+        requestId: incoming.requestId || null
+      });
+    } else if (observedSessionToken) {
+      logger.info('Ignoring observed session token for replay remap because source is not trusted', {
+        observedSessionToken,
+        logTag: incoming.logTag,
+        source: incoming.source || null,
+        destination: incoming.destination || null,
+        sourceDestination
+      });
+    }
+
+    if (observedTxnRefId && sourceDestination === 'GATEWAY_LENDER') {
+      this.stateManager.setCurrentReplayTxnRefId(observedTxnRefId, {
+        logTag: incoming.logTag,
+        source: incoming.source,
+        destination: incoming.destination,
+        sourceDestination,
+        requestId: incoming.requestId || null
+      });
+    } else if (observedTxnRefId) {
+      logger.info('Ignoring observed txnRefId for replay remap because source is not GATEWAY_LENDER', {
+        observedTxnRefId,
+        logTag: incoming.logTag,
+        source: incoming.source || null,
+        destination: incoming.destination || null,
+        sourceDestination
+      });
+    }
+
+    if (observedCustomerId && shouldTrustLiveLoanApplicationIdSource(incoming)) {
+      this.stateManager.setCurrentReplayCustomerId(observedCustomerId, {
+        logTag: incoming.logTag,
+        source: incoming.source,
+        destination: incoming.destination,
+        sourceDestination,
+        requestId: incoming.requestId || null
+      });
+    } else if (observedCustomerId) {
+      logger.info('Ignoring observed customerId for replay remap because source is not trusted', {
+        observedCustomerId,
+        logTag: incoming.logTag,
+        source: incoming.source || null,
+        destination: incoming.destination || null,
+        sourceDestination
+      });
     }
   }
 
@@ -1130,6 +1244,10 @@ export class ReplayOrchestrator {
       loanApplicationId: this.stateManager.getMappedIdentifier(
         'loanApplicationId',
         incoming.loanApplicationId
+      ),
+      txnRefId: this.stateManager.getMappedIdentifier(
+        'txnRefId',
+        incoming.txnRefId
       ),
       payload: this.stateManager.remapReplayValue(incoming.payload, null, remapContext),
       message: this.stateManager.remapReplayValue(incoming.message, null, remapContext)

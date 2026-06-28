@@ -1265,6 +1265,81 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
   return true;
 }
 
+export async function maybeRecoverStalledExternalReplayEntry(
+  orchestrator,
+  currentEntry,
+  stuckDurationMs,
+  retryIntervalMs,
+  orderId,
+  orderIndex,
+  totalOrders,
+  runnerRecoveryState
+) {
+  if (!currentEntry?.isRequest) {
+    return false;
+  }
+
+  if (orchestrator?.validator?.processedIndices?.has?.(currentEntry.index)) {
+    return false;
+  }
+
+  const isExternalSourceRequest = ['APP', 'LENDER', 'EULER', 'THEMIS'].includes(currentEntry.source);
+  if (!isExternalSourceRequest) {
+    return false;
+  }
+
+  if (typeof orchestrator?.triggerExternalRequestAsync !== 'function') {
+    return false;
+  }
+
+  const recoveryThresholdMs = Math.max(retryIntervalMs * 2, 2_000);
+  if (stuckDurationMs < recoveryThresholdMs) {
+    return false;
+  }
+
+  if (runnerRecoveryState.lastRecoveredEntryIndex === currentEntry.index) {
+    return false;
+  }
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Outer runner recovering stalled external replay entry - Current: ${currentEntry.logTag || 'unknown'}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      stuckDurationMs,
+      retryIntervalMs,
+      recoveryThresholdMs,
+      source: currentEntry.source,
+      destination: currentEntry.destination,
+      phase: 'OUTER_STALLED_EXTERNAL_ENTRY_RECOVERY'
+    }
+  );
+
+  try {
+    await orchestrator.triggerExternalRequestAsync(currentEntry);
+    if (typeof orchestrator?.markStuckEntryResolved === 'function') {
+      orchestrator.markStuckEntryResolved(currentEntry, 'outer_runner_external_recovery');
+    }
+    runnerRecoveryState.lastRecoveredEntryIndex = currentEntry.index;
+    return true;
+  } catch (error) {
+    logger.warn('Outer runner failed while recovering stalled external replay entry', {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      error: error?.message || String(error),
+      phase: 'OUTER_STALLED_EXTERNAL_ENTRY_RECOVERY_FAILED'
+    });
+    runnerRecoveryState.lastRecoveredEntryIndex = currentEntry.index;
+    return false;
+  }
+}
+
 async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal) {
   const startTime = Date.now();
   let timeoutDeadline = startTime + timeoutMs;
@@ -1277,6 +1352,9 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
   let stuckEntryIndex = null;
   let stuckSince = null;
   let lastGlobalTimeoutDeferralEntryIndex = null;
+  const runnerRecoveryState = {
+    lastRecoveredEntryIndex: null
+  };
 
   while (Date.now() < timeoutDeadline) {
     if (stopSignal?.requested) {
@@ -1335,12 +1413,31 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
       lastGlobalTimeoutDeferralEntryIndex = null;
     }
 
+    if (currentIndex !== runnerRecoveryState.lastRecoveredEntryIndex) {
+      runnerRecoveryState.lastRecoveredEntryIndex = null;
+    }
+
     // Track how long we've been stuck on the same entry
     if (currentIndex !== null && currentIndex === stuckEntryIndex) {
       const currentMaxRetrySeconds = getMaxRetrySeconds(currentEntry?.logTag);
       const configuredRetryMs = currentMaxRetrySeconds * 1000;
       const currentMaxRetryMs = getEffectiveEntryRetryMs(orchestrator, currentEntry, configuredRetryMs);
       const stuckDurationMs = Date.now() - stuckSince;
+
+      if (await maybeRecoverStalledExternalReplayEntry(
+        orchestrator,
+        currentEntry,
+        stuckDurationMs,
+        retryIntervalMs,
+        orderId,
+        orderIndex,
+        totalOrders,
+        runnerRecoveryState
+      )) {
+        stuckSince = Date.now();
+        await sleep(retryIntervalMs);
+        continue;
+      }
 
       if (maybeSkipGatewayLenderAuthFallback(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
         stuckEntryIndex = null;

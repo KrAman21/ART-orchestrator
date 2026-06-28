@@ -2,6 +2,7 @@ import { getEndpointConfig, REQUEST_TIMEOUT_OVERRIDES, SKIP_DESTINATIONS } from 
 import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
+import { normalizeCanonicalLoanApplicationReferences } from '../services/canonical-loan-application-id.js';
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -29,23 +30,52 @@ function resolveForwardingMerchantId(incoming, expectedEntry) {
   );
 }
 
-export function prepareForwardingRequest(incoming, expectedEntry, endpointHeaders = {}) {
+function hasHeader(headers, headerName) {
+  return Object.keys(headers || {}).some(key => key.toLowerCase() === headerName.toLowerCase());
+}
+
+function applySdkHeaders(headers, logTag) {
+  if (typeof logTag !== 'string' || !logTag.includes('SDK')) {
+    return headers;
+  }
+
+  const updatedHeaders = { ...(headers || {}) };
+
+  if (!hasHeader(updatedHeaders, 'x-origin')) {
+    updatedHeaders['x-origin'] = 'SDK';
+  }
+
+  if (!hasHeader(updatedHeaders, 'x-version')) {
+    updatedHeaders['x-version'] = 'V1';
+  }
+
+  return updatedHeaders;
+}
+
+export function prepareForwardingRequest(incoming, expectedEntry, endpointHeaders = {}, stateManager = null) {
   const merchantId = resolveForwardingMerchantId(incoming, expectedEntry);
-  const headers = {
+  const rawHeaders = {
     ...(incoming?.headers || {}),
     ...(endpointHeaders || {})
   };
+  const remappedHeaders = stateManager?.rewriteOutgoingLoanApplicationIds
+    ? stateManager.rewriteOutgoingLoanApplicationIds(rawHeaders, { logTag: expectedEntry?.logTag, field: 'headers' })
+    : rawHeaders;
+  const headers = applySdkHeaders(remappedHeaders, expectedEntry?.logTag);
 
   if (merchantId && !headers['x-merchant-id'] && !headers['X-Merchant-Id']) {
     headers['x-merchant-id'] = merchantId;
   }
 
   const transformedPayload = transformRequest(incoming?.payload, expectedEntry?.logTag);
-  const payload = normalizeForwardingPayloadForEntry(
+  const normalizedPayload = normalizeForwardingPayloadForEntry(
     transformedPayload,
     incoming,
     expectedEntry
   );
+  const payload = stateManager?.rewriteOutgoingLoanApplicationIds
+    ? stateManager.rewriteOutgoingLoanApplicationIds(normalizedPayload, { logTag: expectedEntry?.logTag, field: 'payload' })
+    : normalizedPayload;
 
   return {
     headers,
@@ -61,7 +91,17 @@ function remapReplayPayloadForEntry(stateManager, payload, entry) {
 }
 
 function transformReplayPayloadForEntry(stateManager, payload, entry) {
-  return transformRequest(remapReplayPayloadForEntry(stateManager, payload, entry), entry?.logTag);
+  const remappedPayload = remapReplayPayloadForEntry(stateManager, payload, entry);
+  const canonicalLoanApplicationId =
+    entry?.loanApplicationId ||
+    remappedPayload?.loanApplicationId ||
+    remappedPayload?.loan_application_id ||
+    null;
+
+  return transformRequest(
+    normalizeCanonicalLoanApplicationReferences(remappedPayload, canonicalLoanApplicationId),
+    entry?.logTag
+  );
 }
 
 /**
@@ -125,6 +165,103 @@ export class RequestForwarder {
     return this.callbacks.shouldBlockOnHeldExternalRequest
       ? this.callbacks.shouldBlockOnHeldExternalRequest() !== false
       : true;
+  }
+
+  tryBuildFailureFallbackResult({
+    incoming,
+    expectedEntry,
+    expectedResponse,
+    correlationKey,
+    destination,
+    endpoint,
+    transformedPayload,
+    serviceResponse,
+    apiFailure
+  }) {
+    if (typeof this.callbacks.buildFailureFallbackResponse !== 'function') {
+      return null;
+    }
+
+    const fallbackResponse = this.callbacks.buildFailureFallbackResponse(
+      {
+        logTag: expectedEntry?.logTag,
+        logIndex: expectedEntry?.index,
+        requestId: incoming?.requestId,
+        sourceDestination: expectedEntry?.sourceDestination,
+        endpoint,
+        baseUrl: this.callbacks.getServiceBaseUrl(destination),
+        payload: transformedPayload,
+        loanApplicationId: expectedEntry?.loanApplicationId || incoming?.loanApplicationId || null,
+        lenderOrgId: expectedEntry?.lenderOrgId || incoming?.lenderOrgId || null,
+        clientRequestId: expectedEntry?.clientRequestId || incoming?.clientRequestId || null
+      },
+      serviceResponse,
+      apiFailure,
+      serviceResponse?.error ? new Error(serviceResponse.message || 'Request failed') : null
+    );
+
+    if (!fallbackResponse?.response) {
+      return null;
+    }
+
+    this.logger.warn('Using replay response fallback for tolerated blocking forward failure', {
+      requestId: incoming?.requestId || null,
+      logTag: expectedEntry?.logTag || null,
+      logIndex: expectedEntry?.index ?? null,
+      endpoint,
+      destination,
+      reason: fallbackResponse.reason || 'replay_fallback_response'
+    });
+
+    if (fallbackResponse.response.headers) {
+      this.stateManager.storeResponseHeaders(correlationKey, fallbackResponse.response.headers);
+    }
+
+    this.stateManager.handleIncomingResponse(correlationKey, fallbackResponse.response.data);
+
+    if (expectedResponse && !this.validator.processedIndices.has(expectedResponse.index)) {
+      const comparison = this.callbacks.comparePayloads(
+        expectedResponse.payload,
+        fallbackResponse.response.data,
+        expectedResponse.logTag
+      );
+
+      if (!comparison.match) {
+        this.logger.warn('Replay fallback response comparison mismatch tolerated', {
+          request: expectedEntry?.toString?.() || null,
+          response: expectedResponse.toString(),
+          logTag: expectedResponse.logTag,
+          differences: comparison.differences
+        });
+      } else {
+        this.logger.info('Replay fallback response validated', {
+          request: expectedEntry?.toString?.() || null,
+          response: expectedResponse.toString()
+        });
+      }
+
+      this.validator.markProcessed(expectedResponse);
+      this.callbacks.recordSuccess('downstream_response_validation', expectedResponse);
+    }
+
+    this.logger.logOutgoing(incoming.source, incoming.destination, endpoint, transformedPayload, {
+      event: 'forward_failed_tolerated',
+      requestId: incoming.requestId,
+      logTag: expectedEntry.logTag,
+      sourceDestination: expectedEntry.sourceDestination,
+      logIndex: expectedEntry.index,
+      status: fallbackResponse.response.status || serviceResponse?.status || null,
+      statusText: fallbackResponse.response.statusText || serviceResponse?.statusText || null,
+      error: serviceResponse?.message || null,
+      hasError: false,
+      fallbackReason: fallbackResponse.reason || null
+    });
+
+    return {
+      success: true,
+      payload: fallbackResponse.response.data,
+      headers: fallbackResponse.response.headers || {}
+    };
   }
 
   /**
@@ -365,7 +502,12 @@ export class RequestForwarder {
 
     // Get endpoint config for custom headers
     const endpointConfig = getEndpointConfig(expectedEntry.sourceDestination, expectedEntry.logTag);
-    const forwardingRequest = prepareForwardingRequest(incoming, expectedEntry, endpointConfig?.headers);
+    const forwardingRequest = prepareForwardingRequest(
+      incoming,
+      expectedEntry,
+      endpointConfig?.headers,
+      this.stateManager
+    );
     const customHeaders = forwardingRequest.headers;
 
     // Log incoming request headers from LSP
@@ -380,7 +522,13 @@ export class RequestForwarder {
     try {
       // Get endpoint from config - use mapped endpoint instead of incoming api
       const endpointConfig = getEndpointConfig(expectedEntry.sourceDestination, expectedEntry.logTag);
-      const endpoint = endpointConfig?.endpoint || api;
+      const rawEndpoint = endpointConfig?.endpoint || api;
+      const endpoint = this.stateManager?.rewriteOutgoingLoanApplicationIdsInEndpoint
+        ? this.stateManager.rewriteOutgoingLoanApplicationIdsInEndpoint(rawEndpoint, {
+          logTag: expectedEntry?.logTag,
+          field: 'endpoint'
+        })
+        : rawEndpoint;
       
       this.logger.info('Resolved endpoint for forwarding', {
         incomingApi: api,
@@ -498,6 +646,22 @@ export class RequestForwarder {
       const apiFailure = this.checkApiFailure(serviceResponse);
 
       if (serviceResponse && (serviceResponse.error || serviceResponse.status !== 200 || apiFailure)) {
+        const toleratedFailureResult = this.tryBuildFailureFallbackResult({
+          incoming,
+          expectedEntry,
+          expectedResponse,
+          correlationKey,
+          destination,
+          endpoint,
+          transformedPayload,
+          serviceResponse,
+          apiFailure
+        });
+
+        if (toleratedFailureResult) {
+          return toleratedFailureResult;
+        }
+
         this.logger.logOutgoing(incoming.source, incoming.destination, endpoint, transformedPayload, {
           event: 'forward_failed',
           requestId: incoming.requestId,

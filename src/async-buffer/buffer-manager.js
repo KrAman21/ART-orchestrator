@@ -169,8 +169,13 @@ export class BufferManager {
   }
 
   extractCorrelationIdentifiers(request = {}) {
+    const outerRequestId = request.requestId || request.request_id || null;
+    const payloadRequestId = request.payload?.requestId || request.payload?.request_id || null;
+
     return {
-      requestId: request.requestId || request.request_id || request.payload?.requestId || request.payload?.request_id || null,
+      requestId: outerRequestId || payloadRequestId,
+      outerRequestId,
+      payloadRequestId,
       clientRequestId: request.clientRequestId || request.client_request_id || request.payload?.clientRequestId || request.payload?.client_request_id || null,
       traceId: request.traceId || request.trace_id || request.payload?.traceId || request.payload?.trace_id || null,
       sequenceId: request.sequenceId || request.sequence_id || request.headers?.['x-sequence-id'] || null,
@@ -200,6 +205,9 @@ export class BufferManager {
       canonicalRequestLogTag(request.logTag),
       `${request.source}_${request.destination}`,
       ids.requestId || '',
+      ids.outerRequestId && ids.payloadRequestId && ids.outerRequestId !== ids.payloadRequestId
+        ? ids.payloadRequestId
+        : '',
       ids.clientRequestId || '',
       ids.traceId || '',
       ids.sequenceId || '',

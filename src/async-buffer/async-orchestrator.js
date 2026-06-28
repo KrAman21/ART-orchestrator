@@ -4,12 +4,13 @@ import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES, SERVICE_MAP } from '../config.js';
-import { getOptionalRepeatPolicy, isSelfTriggerFallbackApiLogTag, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, SELF_TRIGGER_FALLBACK_API_LOG_TAGS, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
-import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
+import { getOptionalRepeatPolicy, isSelfTriggerFallbackApiLogTag, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, isToleratedBatchTimeoutApiLogTag, SELF_TRIGGER_FALLBACK_API_LOG_TAGS, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
+import { buildAppCoreAuthHeaders, buildReplaySessionHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
 import { getAppCoreRequestId } from '../services/app-core-request-id.js';
 import { resolveReplayEndpoint } from '../services/replay-request-resolver.js';
 import { makeRequest } from '../services/http-client.js';
+import { normalizeCanonicalLoanApplicationReferences } from '../services/canonical-loan-application-id.js';
 
 function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
   if (!entry || entry.sourceDestination !== 'APP_WRAPPER') {
@@ -104,7 +105,7 @@ function remapReplayIds(value, stateManager, logTag, keyHint = null, forcedLoanA
     return normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId);
   }
 
-  return remapped;
+  return normalizeCanonicalLoanApplicationReferences(remapped, forcedLoanApplicationId);
 }
 
 function resolveReplayMerchantId(entry, payload = null, fallbackMerchantId = null) {
@@ -154,6 +155,28 @@ function findFirstNestedValue(value, candidateKeys) {
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasHeader(headers, headerName) {
+  return Object.keys(headers || {}).some(key => key.toLowerCase() === headerName.toLowerCase());
+}
+
+function applySdkHeaders(headers, logTag) {
+  if (typeof logTag !== 'string' || !logTag.includes('SDK')) {
+    return headers;
+  }
+
+  const updatedHeaders = { ...(headers || {}) };
+
+  if (!hasHeader(updatedHeaders, 'x-origin')) {
+    updatedHeaders['x-origin'] = 'SDK';
+  }
+
+  if (!hasHeader(updatedHeaders, 'x-version')) {
+    updatedHeaders['x-version'] = 'V1';
+  }
+
+  return updatedHeaders;
 }
 
 function resolveRequestIdFromObservedRequest(request) {
@@ -236,19 +259,25 @@ export function resolveFallbackGatewayRequestId(entry, observedIncomingRequests 
   return candidates[0] || null;
 }
 
-export function prepareAsyncReplayForwarding(entry, payload, outboundRequestId, endpointHeaders = {}, fallbackMerchantId = null, observedIncomingRequests = []) {
+export function prepareAsyncReplayForwarding(entry, payload, outboundRequestId, endpointHeaders = {}, fallbackMerchantId = null, observedIncomingRequests = [], stateManager = null) {
   const merchantId = resolveReplayMerchantId(entry, payload, fallbackMerchantId);
-  const headers = {
+  const rawHeaders = {
     ...(entry?.headers || {}),
     ...(endpointHeaders || {})
   };
+  const remappedHeaders = stateManager?.rewriteOutgoingLoanApplicationIds
+    ? stateManager.rewriteOutgoingLoanApplicationIds(rawHeaders, { logTag: entry?.logTag, field: 'headers' })
+    : rawHeaders;
+  const headers = applySdkHeaders(remappedHeaders, entry?.logTag);
 
   if (merchantId && !headers['x-merchant-id'] && !headers['X-Merchant-Id']) {
     headers['x-merchant-id'] = merchantId;
   }
 
   const replayRequestIdCandidate = resolveFallbackGatewayRequestId(entry, observedIncomingRequests);
-  const normalizedPayload = payload;
+  const normalizedPayload = stateManager?.rewriteOutgoingLoanApplicationIds
+    ? stateManager.rewriteOutgoingLoanApplicationIds(payload, { logTag: entry?.logTag, field: 'payload' })
+    : payload;
 
   return {
     headers,
@@ -439,7 +468,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       config.reportGenerator,
       config.orderId,
       {
-        shouldTreatApiFailureAsExpected: this.shouldTreatApiFailureAsExpected.bind(this)
+        shouldTreatApiFailureAsExpected: this.shouldTreatApiFailureAsExpected.bind(this),
+        buildFailureFallbackResponse: this.buildFailureFallbackResponse.bind(this)
       }
     );
     
@@ -448,6 +478,9 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.shouldStop = false;
     this.orderId = config.orderId;
     this.resolvedStuckEntrySignals = new Set();
+    this.pendingPostBatchConfirmations = new Map();
+    this.lastIdleExternalEntryKey = null;
+    this.idleExternalEntryCycles = 0;
     if (this.requestForwarder?.callbacks) {
       this.requestForwarder.callbacks.shouldAutoProcessNextLogEntry = () => false;
       this.requestForwarder.callbacks.shouldBlockOnHeldExternalRequest = () => false;
@@ -615,6 +648,13 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       entry.loanApplicationId,
       bestCandidate.loanApplicationId
     );
+    this.stateManager?.setCurrentReplayLoanApplicationId?.(bestCandidate.loanApplicationId, {
+      logTag: entry.logTag,
+      requestId: entry.requestId || null,
+      source: entry.source,
+      destination: entry.destination,
+      sourceDestination: entry.sourceDestination
+    });
 
     logger.info('Inferred live loanApplicationId for outbound replay request', {
       logTag: entry.logTag,
@@ -707,8 +747,69 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     
     didWork = await this.checkBufferedResponses() || didWork;
     didWork = await this.processNextLogEntry() || didWork;
+
+    if (!didWork) {
+      didWork = await this.maybeRecoverStalledExternalRequest() || didWork;
+    } else {
+      this.lastIdleExternalEntryKey = null;
+      this.idleExternalEntryCycles = 0;
+    }
     
     return didWork;
+  }
+
+  buildIdleExternalEntryKey(entry) {
+    if (!entry) {
+      return null;
+    }
+
+    return [
+      entry.index,
+      entry.logTag || 'NO_TAG',
+      entry.source || 'NO_SOURCE',
+      entry.destination || 'NO_DEST',
+      entry.requestId || 'NO_REQ'
+    ].join('|');
+  }
+
+  async maybeRecoverStalledExternalRequest() {
+    const entry = this.validator.getCurrentEntry();
+    if (!entry || !entry.isRequest || this.validator.processedIndices.has(entry.index)) {
+      this.lastIdleExternalEntryKey = null;
+      this.idleExternalEntryCycles = 0;
+      return false;
+    }
+
+    const isExternalSourceRequest = ['APP', 'LENDER', 'EULER', 'THEMIS'].includes(entry.source);
+    if (!isExternalSourceRequest) {
+      this.lastIdleExternalEntryKey = null;
+      this.idleExternalEntryCycles = 0;
+      return false;
+    }
+
+    const entryKey = this.buildIdleExternalEntryKey(entry);
+    if (this.lastIdleExternalEntryKey === entryKey) {
+      this.idleExternalEntryCycles += 1;
+    } else {
+      this.lastIdleExternalEntryKey = entryKey;
+      this.idleExternalEntryCycles = 1;
+    }
+
+    if (this.idleExternalEntryCycles < 2) {
+      return false;
+    }
+
+    logger.warn('Recovering stalled external-source replay entry after idle async cycles', {
+      entry: entry.toString(),
+      idleCycles: this.idleExternalEntryCycles,
+      requestId: entry.requestId || null,
+      sourceDestination: entry.sourceDestination || null
+    });
+
+    await this.triggerExternalRequestAsync(entry);
+    this.lastIdleExternalEntryKey = null;
+    this.idleExternalEntryCycles = 0;
+    return true;
   }
 
   hasProcessedBranchAdvance(currentEntry, optionalRepeatPolicy) {
@@ -1175,10 +1276,27 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       );
     }
 
+    if (currentEntry.logTag === 'GetLenderFlows_RESPONSE') {
+      this.stateManager?.updateReplayAppAuthFromResponse?.(
+        currentEntry.loanApplicationId || requestEntry?.loanApplicationId || null,
+        buffered.response.data,
+        { logTag: currentEntry.logTag }
+      );
+    }
+
     this.recordObservedProcessedResponse(currentEntry, buffered.response.data);
     
     this.validator.advance();
     this.recordSuccess('buffered_response_validation', currentEntry);
+
+    const postBatchConfirmationSucceeded = await this.runPostBatchConfirmationIfNeeded(
+      currentEntry,
+      requestEntry,
+      buffered.metadata || {}
+    );
+    if (!postBatchConfirmationSucceeded) {
+      return true;
+    }
     
     logger.info('Buffered response validated and processed', {
       entry: currentEntry.toString()
@@ -1218,8 +1336,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return true;
     }
     const orchestratorInitiatedSources = ['APP', 'LENDER', 'EULER', 'THEMIS'];
-    const shouldOrchestratorInitiate = orchestratorInitiatedSources.includes(entry.source) ||
-      (entry.source === 'CORE' && entry.destination === 'GATEWAY' && entry.logTag === 'LSP-FetchOfferSync_REQUEST');
+    const shouldOrchestratorInitiate = orchestratorInitiatedSources.includes(entry.source);
     
     if (shouldOrchestratorInitiate && entry.isRequest) {
       await this.triggerExternalRequestAsync(entry);
@@ -1390,8 +1507,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       if (isDirectLenderGatewayRequest && replayEndpoint) {
         api = replayEndpoint;
       }
+      api = this.stateManager?.rewriteOutgoingLoanApplicationIdsInEndpoint
+        ? this.stateManager.rewriteOutgoingLoanApplicationIdsInEndpoint(api, {
+          logTag: entry?.logTag,
+          field: 'endpoint'
+        })
+        : api;
       const endpointHeaders = {
         ...(endpointConfig?.headers || {}),
+        ...buildReplaySessionHeaders(entry, this.validator.entries, this.stateManager),
         ...buildAppCoreAuthHeaders(entry, this.validator.entries, this.stateManager)
       };
       await ensureAppCorePreconditions(entry, endpointHeaders, this.stateManager);
@@ -1417,7 +1541,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         outboundRequestId,
         endpointHeaders,
         this.replayMerchantId || this.config.merchantId || null,
-        this.observedIncomingRequests || []
+        this.observedIncomingRequests || [],
+        this.stateManager
       );
 
       if (entry.logTag === 'Lsp-LoanStatusRequest_REQUEST' && fallbackReason) {
@@ -1761,6 +1886,258 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     }
 
     return false;
+  }
+
+  buildFailureFallbackResponse(activeReq, response, apiFailure = null, exception = null) {
+    if (!activeReq?.logTag || !isToleratedBatchTimeoutApiLogTag(activeReq.logTag)) {
+      return null;
+    }
+
+    const failureMessage = [
+      apiFailure?.error_message,
+      apiFailure?.message,
+      apiFailure?.description,
+      response?.message,
+      exception?.message
+    ]
+      .filter(Boolean)
+      .join(' | ')
+      .toLowerCase();
+
+    const isTimeoutLikeFailure =
+      failureMessage.includes('timeout') ||
+      failureMessage.includes('timed out') ||
+      failureMessage.includes('no response from eligibility core within timeout');
+
+    if (!isTimeoutLikeFailure) {
+      return null;
+    }
+
+    const requestEntry = this.validator.entries.find(entry => entry.index === activeReq.logIndex);
+    if (!requestEntry) {
+      return null;
+    }
+
+    const expectedResponse = this.findCorrespondingResponse(requestEntry, true);
+    if (!expectedResponse?.payload) {
+      return null;
+    }
+
+    const hasLaterReplayAttempt = this.hasLaterMatchingReplayRequest(requestEntry);
+    const postBatchConfirmationRequired = !hasLaterReplayAttempt;
+
+    if (postBatchConfirmationRequired) {
+      this.pendingPostBatchConfirmations.set(expectedResponse.index, {
+        requestEntryIndex: requestEntry.index,
+        responseEntryIndex: expectedResponse.index
+      });
+    }
+
+    if (this.reportGenerator && this.orderId) {
+      this.reportGenerator.recordReplayWarning(this.orderId, {
+        type: 'TOLERATED_BATCH_TIMEOUT_FALLBACK',
+        logTag: activeReq.logTag,
+        logIndex: activeReq.logIndex,
+        requestEntry: requestEntry.toString(),
+        responseEntry: expectedResponse.toString(),
+        hasLaterReplayAttempt,
+        postBatchConfirmationRequired,
+        error: failureMessage || null
+      });
+    }
+
+    logger.warn('Using replay response fallback for tolerated batch timeout request', {
+      logTag: activeReq.logTag,
+      requestId: activeReq.requestId || null,
+      logIndex: activeReq.logIndex,
+      requestEntry: requestEntry.toString(),
+      responseEntry: expectedResponse.toString(),
+      hasLaterReplayAttempt,
+      postBatchConfirmationRequired,
+      failureMessage: failureMessage || null
+    });
+
+    return {
+      reason: 'tolerated_batch_timeout_replay_response_fallback',
+      postBatchConfirmationRequired,
+      postBatchConfirmationResponseIndex: expectedResponse.index,
+      response: {
+        status: response?.status || 200,
+        statusText: response?.statusText || 'OK',
+        data: expectedResponse.payload,
+        headers: response?.headers || {},
+        error: false
+      }
+    };
+  }
+
+  hasLaterMatchingReplayRequest(requestEntry) {
+    if (!requestEntry) {
+      return false;
+    }
+
+    return this.validator.entries.some(candidate => {
+      if (!candidate?.isRequest || candidate.index <= requestEntry.index) {
+        return false;
+      }
+
+      if (
+        candidate.source !== requestEntry.source ||
+        candidate.destination !== requestEntry.destination ||
+        candidate.logTag !== requestEntry.logTag
+      ) {
+        return false;
+      }
+
+      if (
+        requestEntry.loanApplicationId &&
+        candidate.loanApplicationId &&
+        requestEntry.loanApplicationId !== candidate.loanApplicationId
+      ) {
+        return false;
+      }
+
+      if (
+        requestEntry.orderId &&
+        candidate.orderId &&
+        requestEntry.orderId !== candidate.orderId
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
+  async runPostBatchConfirmationIfNeeded(responseEntry, requestEntry = null, bufferedMetadata = {}) {
+    if (!bufferedMetadata?.postBatchConfirmationRequired) {
+      return true;
+    }
+
+    const scheduledConfirmation = this.pendingPostBatchConfirmations.get(responseEntry.index);
+    this.pendingPostBatchConfirmations.delete(responseEntry.index);
+
+    const confirmationRequestEntry =
+      requestEntry ||
+      this.validator.entries.find(entry => entry.index === scheduledConfirmation?.requestEntryIndex) ||
+      null;
+
+    if (!confirmationRequestEntry) {
+      logger.warn('Skipped post-batch confirmation because request entry was unavailable', {
+        responseEntry: responseEntry.toString()
+      });
+      return true;
+    }
+
+    logger.info('Running post-batch confirmation call for tolerated replay timeout flow', {
+      requestEntry: confirmationRequestEntry.toString(),
+      responseEntry: responseEntry.toString()
+    });
+
+    const confirmationResult = await this.executeBlockingReplayRequest(confirmationRequestEntry, {
+      fallbackReason: 'post_batch_confirmation'
+    });
+    const confirmationApiFailure = this.httpClient?.checkApiFailure?.(confirmationResult) || null;
+    const confirmationFailed =
+      confirmationResult?.error ||
+      confirmationResult?.status >= 500 ||
+      !!confirmationApiFailure;
+
+    if (confirmationFailed) {
+      const failureMessage =
+        confirmationApiFailure?.error_message ||
+        confirmationApiFailure?.message ||
+        confirmationApiFailure?.description ||
+        confirmationResult?.message ||
+        'Post batch confirmation failed';
+
+      logger.error('Post-batch confirmation failed for tolerated replay timeout flow', {
+        requestEntry: confirmationRequestEntry.toString(),
+        responseEntry: responseEntry.toString(),
+        failureMessage,
+        status: confirmationResult?.status || null
+      });
+
+      await this.fail(`API Failure: ${failureMessage}`);
+      return false;
+    }
+
+    logger.info('Post-batch confirmation succeeded for tolerated replay timeout flow', {
+      requestEntry: confirmationRequestEntry.toString(),
+      responseEntry: responseEntry.toString(),
+      status: confirmationResult?.status || null
+    });
+
+    return true;
+  }
+
+  async executeBlockingReplayRequest(entry, options = {}) {
+    const {
+      fallbackReason = null
+    } = options;
+
+    const endpointConfig = getEndpointConfig(entry.sourceDestination, entry.logTag);
+    const resolvedEndpoint = resolveWrapperEndpointForMerchant(entry, endpointConfig);
+    const replayEndpoint = resolveReplayEndpoint(entry.url);
+    const isDirectLenderGatewayRequest =
+      entry.isRequest && entry.source === 'LENDER' && entry.destination === 'GATEWAY';
+    let api = resolvedEndpoint || this.getApiForLogTag(entry.logTag);
+    if (isDirectLenderGatewayRequest && replayEndpoint) {
+      api = replayEndpoint;
+    }
+    api = this.stateManager?.rewriteOutgoingLoanApplicationIdsInEndpoint
+      ? this.stateManager.rewriteOutgoingLoanApplicationIdsInEndpoint(api, {
+        logTag: entry?.logTag,
+        field: 'endpoint'
+      })
+      : api;
+
+    const endpointHeaders = {
+      ...(endpointConfig?.headers || {}),
+      ...buildReplaySessionHeaders(entry, this.validator.entries, this.stateManager),
+      ...buildAppCoreAuthHeaders(entry, this.validator.entries, this.stateManager)
+    };
+
+    await ensureAppCorePreconditions(entry, endpointHeaders, this.stateManager);
+
+    const { requestId: outboundRequestId } = getAppCoreRequestId(entry);
+    const service = endpointConfig?.service || entry.destination;
+    const method = entry.httpMethod || endpointConfig?.method || 'POST';
+    const resolvedLoanApplicationId = this.resolveOutboundLoanApplicationIdForReplay(entry, {
+      allowInferenceFromLiveBuffer: Boolean(fallbackReason)
+    });
+
+    const remappedPayload = remapReplayIds(
+      entry.payload,
+      this.stateManager,
+      entry.logTag,
+      null,
+      resolvedLoanApplicationId
+    );
+    const transformedPayload = transformRequest(remappedPayload, entry.logTag);
+    const forwardingRequest = prepareAsyncReplayForwarding(
+      entry,
+      transformedPayload,
+      outboundRequestId,
+      endpointHeaders,
+      this.replayMerchantId || this.config.merchantId || null,
+      this.observedIncomingRequests || [],
+      this.stateManager
+    );
+
+    return makeRequest(
+      this.getServiceBaseUrl(service),
+      api,
+      method,
+      forwardingRequest.payload,
+      outboundRequestId,
+      entry.sourceDestination,
+      entry.logTag,
+      forwardingRequest.merchantId,
+      forwardingRequest.headers,
+      entry.index,
+      this.getServiceUnixSocket(service)
+    );
   }
   
   async replayGatewayLenderPair(entry) {

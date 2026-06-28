@@ -61,13 +61,18 @@ export function createServer(orchestrator) {
       const payload = req.body;
       const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;
       const nextExpectedEntry = orchestrator.validator?.entries?.[orchestrator.validator?.currentIndex] || null;
+      const lookaheadLogTags = orchestrator.validator?.entries
+        ?.slice(orchestrator.validator?.currentIndex || 0, (orchestrator.validator?.currentIndex || 0) + 8)
+        ?.map(entry => entry?.logTag)
+        ?.filter(Boolean) || [];
       
 
       // Determine source/destination and logTag from API endpoint mapping
       const mapping = getApiMapping(api, {
         payload: req.body,
         headers: req.headers,
-        nextExpectedLogTag: nextExpectedEntry?.logTag || null
+        nextExpectedLogTag: nextExpectedEntry?.logTag || null,
+        lookaheadLogTags
       });
       if (!mapping) {
         // Unknown API endpoint - likely a webhook/callback, ignore gracefully

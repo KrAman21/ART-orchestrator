@@ -44,10 +44,15 @@ export function createMultiplexerServer() {
     const previewOrchestrator = registry.findOrchestrator(req.body, req.headers);
     const nextExpectedEntry =
       previewOrchestrator?.validator?.entries?.[previewOrchestrator?.validator?.currentIndex] || null;
+    const lookaheadLogTags = previewOrchestrator?.validator?.entries
+      ?.slice(previewOrchestrator?.validator?.currentIndex || 0, (previewOrchestrator?.validator?.currentIndex || 0) + 8)
+      ?.map(entry => entry?.logTag)
+      ?.filter(Boolean) || [];
     const mapping = getApiMapping(api, {
       payload: req.body,
       headers: req.headers,
-      nextExpectedLogTag: nextExpectedEntry?.logTag || null
+      nextExpectedLogTag: nextExpectedEntry?.logTag || null,
+      lookaheadLogTags
     });
 
     if (!mapping) {

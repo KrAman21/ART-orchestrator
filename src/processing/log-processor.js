@@ -3,6 +3,7 @@ import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
+import { buildReplaySessionHeaders } from '../services/app-core-auth-headers.js';
 import { getAppCoreRequestId } from '../services/app-core-request-id.js';
 import { resolveReplayEndpoint } from '../services/replay-request-resolver.js';
 
@@ -267,6 +268,7 @@ export class LogProcessor {
 
       const customHeaders = {
         ...(endpointConfig?.headers || {}),
+        ...buildReplaySessionHeaders(entry, this.validator.entries, this.stateManager),
         ...buildAppCoreAuthHeaders(entry, this.validator.entries, this.stateManager)
       };
       await ensureAppCorePreconditions(entry, customHeaders, this.stateManager);
