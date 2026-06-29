@@ -424,6 +424,7 @@ export class SeedDataManager {
 
   static extractLineSeedData(logs) {
     const lineSeedData = [];
+    const seenLineDetailIds = new Set();
     const eligibleTags = new Set([
       'LSP-FetchOfferRequest_REQUEST',
       'LSP-FetchOfferSync_REQUEST',
@@ -453,7 +454,15 @@ export class SeedDataManager {
         null;
 
       for (const lineDetail of lineDetailsList) {
-        if (!lineDetail || lineDetail.status === 'CREATED') {
+        const lineDetailId = lineDetail?.lineDetailId || lineDetail?.line_detail_id || null;
+        const seenKey = lineDetailId || `${log?.message?.request_id || log?.message?.client_request_id || 'unknown'}_${lineSeedData.length}`;
+
+        if (!lineDetail || seenLineDetailIds.has(seenKey)) {
+          continue;
+        }
+
+        seenLineDetailIds.add(seenKey);
+        if (lineDetail.status === 'CREATED') {
           continue;
         }
 
@@ -468,7 +477,11 @@ export class SeedDataManager {
     }
 
     logger.info('Extracted line seed data from fetch offer logs', {
-      count: lineSeedData.length
+      count: lineSeedData.length,
+      lineDetailStatuses: lineSeedData.map(item => ({
+        lineDetailId: item?.lineDetail?.lineDetailId || item?.lineDetail?.line_detail_id || null,
+        status: item?.lineDetail?.status || null
+      }))
     });
 
     return lineSeedData;

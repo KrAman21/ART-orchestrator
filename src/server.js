@@ -232,6 +232,23 @@ export function createServer(orchestrator) {
         });
       }
 
+      if (result.skipped) {
+        logger.warn('Skipping log fetch replay for order due to order-context multi-LAID guard', {
+          merchantId,
+          orderId,
+          skipReason: result.skipReason,
+          context: result.context
+        });
+
+        return res.json({
+          success: true,
+          skipped: true,
+          skipReason: result.skipReason,
+          context: result.context,
+          logCount: 0
+        });
+      }
+
       const logsFilePath = resolve(process.cwd(), 'data', 'logs.json');
       await writeFile(logsFilePath, JSON.stringify(result.logs, null, 2), 'utf-8');
 
@@ -361,6 +378,18 @@ export function createServer(orchestrator) {
             outputPath: 'data/logs.json'
           });
           const logsResult = await logsFetcher.fetchLogsForOrder(QAPI_CONFIG.merchantId, orderId);
+
+          if (logsResult.skipped) {
+            orderResultItem.status = 'skipped';
+            orderResultItem.error = logsResult.skipReason;
+            orderResultItem.skipped = true;
+            results.orderResults.push(orderResultItem);
+            logger.warn(`[${i + 1}/${orderIds.length}] Skipping order: ${orderId}`, {
+              skipReason: logsResult.skipReason,
+              context: logsResult.context
+            });
+            continue;
+          }
 
           if (!logsResult.success) {
             orderResultItem.status = 'failed';

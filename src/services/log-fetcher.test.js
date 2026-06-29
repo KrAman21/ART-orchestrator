@@ -62,6 +62,32 @@ test('filterAndSortLogs applies the same timestamp tie-breaker before dedupe', a
   ]);
 });
 
+test('filterAndSortLogs keeps LSP-GetAgreementDataStatus_REQUEST and normalizes missing trace_route to APP_CORE', async () => {
+  const logs = [
+    {
+      messageNumber: 1,
+      message: {
+        created_at: '2026-06-29T10:00:00.000Z',
+        log_tag: 'LSP-GetAgreementDataStatus_REQUEST',
+        trace_route: null,
+        label: 'APP',
+        request_id: 'agreement-status-1',
+        trace_request: null,
+        trace_response: null,
+        trace_error_msg: null,
+        trace_request_ack: null,
+        trace_response_ack: null
+      }
+    }
+  ];
+
+  const filtered = await filterAndSortLogs(logs);
+
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].message.log_tag, 'LSP-GetAgreementDataStatus_REQUEST');
+  assert.equal(filtered[0].message.trace_route, 'APP_CORE');
+});
+
 test('filterOrchestratorSkippableLogs keeps GATEWAY_LSP loan status async pair and drops redundant GATEWAY_CORE echo pair', async () => {
   const logs = [
     buildLog({
@@ -223,6 +249,206 @@ test('filterOrchestratorSkippableLogs leaves correctly ordered UpdateKYC request
       'KYC SERVICE API_REQUEST',
       'KYC SERVICE API_RESPONSE',
       'UpdateKYCRequest-LSP_RESPONSE'
+    ]
+  );
+});
+
+test('filterOrchestratorSkippableLogs synthesizes missing OTP generation request inside trigger-lender-otp block', async () => {
+  const logs = [
+    buildLog({
+      messageNumber: 1,
+      createdAt: '2026-06-29T11:28:41.382Z',
+      logTag: 'TriggerLenderOTPRequest_REQUEST',
+      traceRoute: 'APP_CORE',
+      requestId: 'app-trigger-req'
+    }),
+    buildLog({
+      messageNumber: 2,
+      createdAt: '2026-06-29T11:28:41.408Z',
+      logTag: 'TriggerLenderOTPRequest_RESPONSE',
+      traceRoute: 'APP_CORE',
+      requestId: 'app-trigger-res',
+      payloadField: 'trace_response'
+    }),
+    {
+      messageNumber: 3,
+      message: {
+        created_at: '2026-06-29T11:28:41.421Z',
+        log_tag: 'TriggerLenderOTPRequest-LSP_REQUEST',
+        trace_route: 'CORE_GATEWAY',
+        request_id: 'core-trigger-req',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        trace_request: {
+          loanApplicationId: 'loan-1'
+        }
+      }
+    },
+    buildLog({
+      messageNumber: 4,
+      createdAt: '2026-06-29T11:28:41.432Z',
+      logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+      traceRoute: 'GATEWAY_LSP',
+      requestId: 'fetch-loan-app-req'
+    }),
+    buildLog({
+      messageNumber: 5,
+      createdAt: '2026-06-29T11:28:41.454Z',
+      logTag: 'FECTH_LOAN_APPLICATION_DATA_API_RESPONSE',
+      traceRoute: 'LSP_GATEWAY',
+      requestId: 'fetch-loan-app-res',
+      payloadField: 'trace_response'
+    }),
+    {
+      messageNumber: 6,
+      message: {
+        created_at: '2026-06-29T11:28:41.807Z',
+        log_tag: 'OTP GENERATION API_RESPONSE',
+        trace_route: 'LENDER_GATEWAY',
+        request_id: 'otp-res',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        trace_response: {
+          success: true
+        }
+      }
+    },
+    {
+      messageNumber: 7,
+      message: {
+        created_at: '2026-06-29T11:28:41.821Z',
+        log_tag: 'TriggerLenderOTPRequest-LSP_RESPONSE',
+        trace_route: 'CORE_GATEWAY',
+        request_id: 'core-trigger-res',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        trace_response_ack: {
+          success: true
+        }
+      }
+    }
+  ];
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  assert.deepEqual(
+    filtered.map(log => log.message.log_tag),
+    [
+      'TriggerLenderOTPRequest_REQUEST',
+      'TriggerLenderOTPRequest_RESPONSE',
+      'TriggerLenderOTPRequest-LSP_REQUEST',
+      'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+      'FECTH_LOAN_APPLICATION_DATA_API_RESPONSE',
+      'OTP GENERATION API_REQUEST',
+      'OTP GENERATION API_RESPONSE',
+      'TriggerLenderOTPRequest-LSP_RESPONSE'
+    ]
+  );
+});
+
+test('filterOrchestratorSkippableLogs synthesizes missing OTP authentication request inside verify-lender-otp block', async () => {
+  const logs = [
+    buildLog({
+      messageNumber: 1,
+      createdAt: '2026-06-29T19:00:57.900Z',
+      logTag: 'VerifyLenderOTP_REQUEST',
+      traceRoute: 'APP_CORE',
+      requestId: 'app-verify-req',
+      loanApplicationId: 'loan-1'
+    }),
+    buildLog({
+      messageNumber: 2,
+      createdAt: '2026-06-29T19:00:57.950Z',
+      logTag: 'VerifyLenderOTP_RESPONSE',
+      traceRoute: 'APP_CORE',
+      requestId: 'app-verify-res',
+      payloadField: 'trace_response',
+      loanApplicationId: 'loan-1'
+    }),
+    {
+      messageNumber: 3,
+      message: {
+        created_at: '2026-06-29T19:00:58.000Z',
+        log_tag: 'VerifyLenderOTPRequest-LSP_REQUEST',
+        trace_route: 'CORE_GATEWAY',
+        request_id: 'core-verify-req',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        trace_request: {
+          loanApplicationId: 'loan-1'
+        }
+      }
+    },
+    {
+      messageNumber: 4,
+      message: {
+        created_at: '2026-06-29T19:00:58.249Z',
+        log_tag: 'OTP AUTHENTICATION API_RESPONSE',
+        trace_route: 'GATEWAY_LENDER',
+        request_id: 'otp-auth-res',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        trace_response: {
+          success: true
+        }
+      }
+    },
+    {
+      messageNumber: 5,
+      message: {
+        created_at: '2026-06-29T19:00:58.300Z',
+        log_tag: 'VerifyLenderOTPRequest-LSP_RESPONSE',
+        trace_route: 'CORE_GATEWAY',
+        request_id: 'core-verify-res',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        trace_response_ack: {
+          success: true
+        }
+      }
+    }
+  ];
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  assert.deepEqual(
+    filtered.map(log => log.message.log_tag),
+    [
+      'VerifyLenderOTP_REQUEST',
+      'VerifyLenderOTP_RESPONSE',
+      'VerifyLenderOTPRequest-LSP_REQUEST',
+      'OTP AUTHENTICATION API_REQUEST',
+      'OTP AUTHENTICATION API_RESPONSE',
+      'VerifyLenderOTPRequest-LSP_RESPONSE'
+    ]
+  );
+});
+
+test('filterOrchestratorSkippableLogs synthesizes missing generic gateway-lender request when only response survives filtering', async () => {
+  const logs = [
+    {
+      messageNumber: 1,
+      message: {
+        created_at: '2026-06-29T19:01:00.000Z',
+        log_tag: 'CHECK ELIGIBILITY API_RESPONSE',
+        trace_route: 'GATEWAY_LENDER',
+        request_id: 'eligibility-res',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        trace_response: {
+          success: true
+        }
+      }
+    }
+  ];
+
+  const filtered = await filterOrchestratorSkippableLogs(logs);
+
+  assert.deepEqual(
+    filtered.map(log => [log.message.trace_route, log.message.log_tag]),
+    [
+      ['GATEWAY_LENDER', 'CHECK ELIGIBILITY API_REQUEST'],
+      ['GATEWAY_LENDER', 'CHECK ELIGIBILITY API_RESPONSE']
     ]
   );
 });

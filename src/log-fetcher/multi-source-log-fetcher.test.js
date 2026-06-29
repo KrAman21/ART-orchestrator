@@ -1,43 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldMergeLoanApplicationLogs } from './multi-source-log-fetcher.js';
 
-function buildLog(createdAt) {
-  return {
-    message: {
-      created_at: createdAt
-    }
-  };
-}
+import { shouldSkipReplayForMultipleOrderContextLaids } from './multi-source-log-fetcher.js';
 
-test('shouldMergeLoanApplicationLogs rejects entire LAID set when any LAID log predates order start time', () => {
-  const orderLogs = [
-    buildLog('2026-06-25T10:00:00.000Z'),
-    buildLog('2026-06-25T10:02:00.000Z'),
-    buildLog('2026-06-25T10:05:00.000Z')
-  ];
+test('shouldSkipReplayForMultipleOrderContextLaids returns true only when order-context API resolved more than one LAID', () => {
+  assert.equal(
+    shouldSkipReplayForMultipleOrderContextLaids({
+      success: true,
+      loanApplicationIds: ['LA-1', 'LA-2']
+    }),
+    true
+  );
 
-  const loanApplicationLogs = [
-    buildLog('2026-06-25T09:58:00.000Z'),
-    buildLog('2026-06-25T10:01:00.000Z'),
-    buildLog('2026-06-25T10:03:00.000Z')
-  ];
+  assert.equal(
+    shouldSkipReplayForMultipleOrderContextLaids({
+      success: true,
+      loanApplicationIds: ['LA-1']
+    }),
+    false
+  );
 
-  assert.equal(shouldMergeLoanApplicationLogs(orderLogs, loanApplicationLogs), false);
-});
-
-test('shouldMergeLoanApplicationLogs keeps LAID set only when every LAID log is on or after order start time', () => {
-  const orderLogs = [
-    buildLog('2026-06-25T10:00:00.000Z'),
-    buildLog('2026-06-25T10:02:00.000Z'),
-    buildLog('2026-06-25T10:05:00.000Z')
-  ];
-
-  const loanApplicationLogs = [
-    buildLog('2026-06-25T10:01:00.000Z'),
-    buildLog('2026-06-25T10:03:00.000Z'),
-    buildLog('2026-06-25T10:06:00.000Z')
-  ];
-
-  assert.equal(shouldMergeLoanApplicationLogs(orderLogs, loanApplicationLogs), true);
+  assert.equal(
+    shouldSkipReplayForMultipleOrderContextLaids({
+      success: false,
+      loanApplicationIds: ['LA-1', 'LA-2']
+    }),
+    false
+  );
 });

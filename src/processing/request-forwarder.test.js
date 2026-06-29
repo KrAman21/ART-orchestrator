@@ -114,6 +114,47 @@ test('prepareForwardingRequest rewrites outgoing payload and header loan applica
   assert.equal(prepared.payload.nested.loan_application_id, 'live-la-1');
 });
 
+test('prepareForwardingRequest rewrites top-level and nested request ids using owner logTag replay mapping', () => {
+  const stateManager = new StateManager();
+  stateManager.seedProdRequestIdsFromLogs([
+    {
+      logTag: 'LSP-Eligibility_REQUEST',
+      payload: {
+        requestId: 'prod-req-1'
+      }
+    }
+  ]);
+  stateManager.setReplayRequestIdForLogTag('LSP-Eligibility_REQUEST', 'live-req-1');
+
+  const incoming = {
+    requestId: 'prod-req-1',
+    headers: {
+      'x-request-id': 'prod-req-1'
+    },
+    payload: {
+      requestId: 'prod-req-1',
+      nested: {
+        request_id: 'prod-req-1'
+      }
+    }
+  };
+
+  const expectedEntry = {
+    logTag: 'LSP-Eligibility_REQUEST',
+    sourceDestination: 'CORE_GATEWAY',
+    message: {
+      merchant_id: 'flipkart'
+    }
+  };
+
+  const prepared = prepareForwardingRequest(incoming, expectedEntry, {}, stateManager);
+
+  assert.equal(prepared.requestId, 'live-req-1');
+  assert.equal(prepared.headers['x-request-id'], 'live-req-1');
+  assert.equal(prepared.payload.requestId, 'live-req-1');
+  assert.equal(prepared.payload.nested.request_id, 'live-req-1');
+});
+
 test('prepareForwardingRequest adds SDK headers when log tag contains SDK', () => {
   const incoming = {
     requestId: 'outer-request-id',
@@ -143,6 +184,18 @@ test('RequestForwarder tolerates configured blocking forward timeout using repla
     }
   };
   const stateManager = new StateManager();
+  stateManager.seedProdRequestIdsFromLogs([
+    {
+      logTag: 'GetAgreementDataRequest-LSP_REQUEST',
+      payload: {
+        requestId: 'prod-callback-request-id'
+      }
+    }
+  ]);
+  stateManager.setReplayRequestIdForLogTag(
+    'GetAgreementDataRequest-LSP_REQUEST',
+    'live-callback-request-id'
+  );
   const loggedOutgoing = [];
   const successes = [];
 
@@ -165,7 +218,13 @@ test('RequestForwarder tolerates configured blocking forward timeout using repla
           status: 200,
           statusText: 'OK',
           headers: { 'content-type': 'application/json' },
-          data: { status: 'SUCCESS', agreementUrl: 'https://example.test/agreement' }
+          data: {
+            status: 'SUCCESS',
+            agreementUrl: 'https://example.test/agreement',
+            trace_response: {
+              requestId: 'prod-callback-request-id'
+            }
+          }
         }
       }),
       comparePayloads: () => ({ match: true, differences: {} }),
@@ -218,7 +277,13 @@ test('RequestForwarder tolerates configured blocking forward timeout using repla
 
   assert.deepEqual(result, {
     success: true,
-    payload: { status: 'SUCCESS', agreementUrl: 'https://example.test/agreement' },
+    payload: {
+      status: 'SUCCESS',
+      agreementUrl: 'https://example.test/agreement',
+      trace_response: {
+        requestId: 'live-callback-request-id'
+      }
+    },
     headers: { 'content-type': 'application/json' }
   });
   assert.equal(validator.processedIndices.has(53), true);
@@ -227,7 +292,10 @@ test('RequestForwarder tolerates configured blocking forward timeout using repla
   assert.equal(stateManager.getResponseHeaders('corr-1')['content-type'], 'application/json');
   assert.deepEqual(stateManager.pendingResponses.get('corr-1'), {
     status: 'SUCCESS',
-    agreementUrl: 'https://example.test/agreement'
+    agreementUrl: 'https://example.test/agreement',
+    trace_response: {
+      requestId: 'live-callback-request-id'
+    }
   });
   assert.equal(loggedOutgoing.length, 1);
   assert.equal(loggedOutgoing[0][4].event, 'forward_failed_tolerated');

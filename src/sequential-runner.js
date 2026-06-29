@@ -354,6 +354,35 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
 
         fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
 
+        if (fetchResult.results?.[0]?.skipped) {
+          const skipReason = fetchResult.results[0].skipReason || 'Skipped due to order-context multi-LAID guard';
+          logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - ${skipReason}`, {
+            orderId,
+            orderIndex,
+            totalOrders,
+            phase: 'ORDER_SKIPPED'
+          });
+
+          reportGenerator.finalizeOrder(orderId, {
+            success: true,
+            skipped: true,
+            stopReason: skipReason,
+            logsProcessed: 0,
+            artResults: {
+              passed: 0,
+              failed: 0,
+              processedLogs: [],
+              payloadComparisons: []
+            }
+          });
+
+          return {
+            success: true,
+            skipped: true,
+            logCount: 0
+          };
+        }
+
         if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
           break;
         }

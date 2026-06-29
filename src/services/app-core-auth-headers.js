@@ -13,6 +13,7 @@ function maskValue(value) {
 }
 
 const DEFAULT_X_FORWARDED_FOR = '127.0.0.1';
+const DEFAULT_X_LOGGING_FLAG = 'True';
 
 function findReplayAppCoreAuth(candidate) {
   if (!candidate || typeof candidate !== 'object') {
@@ -64,6 +65,39 @@ function findMatchingGetLenderFlowsResponse(entry, entries = []) {
       candidate.loanApplicationId === loanApplicationId &&
       candidate.payload
     );
+}
+
+function resolveLoanRequestInfoId(entry, merchantId, orderId) {
+  const explicitValue =
+    entry?.message?.loan_request_info_id ||
+    entry?.loanRequestInfoId ||
+    entry?.payload?.loanRequestInfoId ||
+    entry?.payload?.loan_request_info_id ||
+    entry?.headers?.['x-loan-request-info-id'] ||
+    entry?.headers?.['X-LoanRequestInfoId'] ||
+    entry?.headers?.['X-Loan-Request-Info-Id'] ||
+    null;
+
+  if (explicitValue) {
+    return explicitValue;
+  }
+
+  if (!merchantId || !orderId) {
+    return null;
+  }
+
+  return `LRI-${orderId}-${merchantId}`;
+}
+
+function resolveLoggingFlag(entry) {
+  return (
+    entry?.headers?.['x-logging-flag'] ||
+    entry?.headers?.['X-Logging-Flag'] ||
+    entry?.message?.logging_flag ||
+    entry?.payload?.loggingFlag ||
+    entry?.payload?.logging_flag ||
+    DEFAULT_X_LOGGING_FLAG
+  );
 }
 
 export function buildReplaySessionHeaders(entry, entries = [], stateManager = null) {
@@ -121,14 +155,22 @@ export function buildAppCoreAuthHeaders(entry, entries = [], stateManager = null
     ...(merchantId ? { 'x-merchant-id': merchantId } : {}),
     ...(orderId ? { 'x-order-id': orderId } : {})
   };
+  const loanRequestInfoId = resolveLoanRequestInfoId(entry, merchantId, orderId);
+  const loggingFlag = resolveLoggingFlag(entry);
 
   if (!loanApplicationId) {
     logger.info('APP_CORE auth headers resolved without loanApplicationId', {
       logTag: entry.logTag,
       hasMerchantId: Boolean(merchantId),
-      hasOrderId: Boolean(orderId)
+      hasOrderId: Boolean(orderId),
+      hasLoanRequestInfoId: Boolean(loanRequestInfoId),
+      hasLoggingFlag: Boolean(loggingFlag)
     });
-    return baseHeaders;
+    return {
+      ...baseHeaders,
+      ...(loanRequestInfoId ? { 'x-loan-request-info-id': loanRequestInfoId } : {}),
+      ...(loggingFlag ? { 'x-logging-flag': loggingFlag } : {})
+    };
   }
 
   const matchingResponse = findMatchingGetLenderFlowsResponse(entry, entries);
@@ -163,6 +205,8 @@ export function buildAppCoreAuthHeaders(entry, entries = [], stateManager = null
         : matchingResponse?.logTag || null,
     hasMerchantId: Boolean(merchantId),
     hasOrderId: Boolean(orderId),
+    hasLoanRequestInfoId: Boolean(loanRequestInfoId),
+    hasLoggingFlag: Boolean(loggingFlag),
     hasSessionToken: Boolean(sessionToken),
     hasUserId: Boolean(userId),
     hasDeviceTokenId: Boolean(deviceTokenId),
@@ -185,6 +229,8 @@ export function buildAppCoreAuthHeaders(entry, entries = [], stateManager = null
 
   return {
     ...baseHeaders,
+    ...(loanRequestInfoId ? { 'x-loan-request-info-id': loanRequestInfoId } : {}),
+    ...(loggingFlag ? { 'x-logging-flag': loggingFlag } : {}),
     ...(sessionToken ? { 'x-session-token': sessionToken } : {}),
     ...(userId ? { 'x-user-id': userId } : {}),
     ...(deviceTokenId ? { 'x-device-token-id': deviceTokenId } : {}),

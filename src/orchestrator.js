@@ -79,9 +79,11 @@ export class ReplayOrchestrator {
     this.validator = new LogSequenceValidator(logs);
     this.seedDataManager = new SeedDataManager(logs);
     this.stateManager.seedProdLoanApplicationIdsFromLogs(logs);
+    this.stateManager.seedProdAgreementIdsFromLogs(logs);
     this.stateManager.seedProdSessionTokensFromLogs(logs);
     this.stateManager.seedProdTxnRefIdsFromLogs(logs);
     this.stateManager.seedProdCustomerIdsFromLogs(logs);
+    this.stateManager.seedProdRequestIdsFromLogs(logs);
     this.resetState();
   }
 
@@ -640,9 +642,11 @@ export class ReplayOrchestrator {
     );
 
     const observedLoanApplicationIds = this.stateManager.extractProdLoanApplicationIdsFromValue(incoming);
+    const observedAgreementIds = this.stateManager.extractProdAgreementIdsFromValue(incoming);
     const observedSessionTokens = this.stateManager.extractProdSessionTokensFromValue(incoming);
     const observedTxnRefIds = this.stateManager.extractProdTxnRefIdsFromValue(incoming);
     const observedCustomerIds = this.stateManager.extractProdCustomerIdsFromValue(incoming);
+    const observedRequestIds = this.stateManager.extractProdRequestIdsFromValue(incoming);
     const observedLoanApplicationId =
       incoming.loanApplicationId ||
       observedLoanApplicationIds[observedLoanApplicationIds.length - 1] ||
@@ -652,6 +656,10 @@ export class ReplayOrchestrator {
       incoming.headers?.['X-Session-Token'] ||
       observedSessionTokens[observedSessionTokens.length - 1] ||
       null;
+    const observedAgreementId =
+      incoming.agreementId ||
+      observedAgreementIds[observedAgreementIds.length - 1] ||
+      null;
     const observedTxnRefId =
       incoming.txnRefId ||
       observedTxnRefIds[observedTxnRefIds.length - 1] ||
@@ -659,6 +667,12 @@ export class ReplayOrchestrator {
     const observedCustomerId =
       incoming.customerId ||
       observedCustomerIds[observedCustomerIds.length - 1] ||
+      null;
+    const observedRequestId =
+      incoming.requestId ||
+      incoming.headers?.['x-request-id'] ||
+      incoming.headers?.['X-Request-Id'] ||
+      observedRequestIds[observedRequestIds.length - 1] ||
       null;
 
     this.observedIncomingRequests.push({
@@ -681,6 +695,23 @@ export class ReplayOrchestrator {
       this.observedIncomingRequests.splice(0, this.observedIncomingRequests.length - 500);
     }
 
+    if (observedRequestId && shouldTrustLiveLoanApplicationIdSource(incoming)) {
+      this.stateManager.setReplayRequestIdForLogTag(incoming.logTag, observedRequestId, {
+        source: incoming.source,
+        destination: incoming.destination,
+        sourceDestination,
+        requestId: incoming.requestId || null
+      });
+    } else if (observedRequestId) {
+      logger.info('Ignoring observed requestId for replay remap because source is not trusted', {
+        observedRequestId,
+        logTag: incoming.logTag,
+        source: incoming.source || null,
+        destination: incoming.destination || null,
+        sourceDestination
+      });
+    }
+
     if (observedLoanApplicationId && shouldTrustLiveLoanApplicationIdSource(incoming)) {
       this.stateManager.setCurrentReplayLoanApplicationId(observedLoanApplicationId, {
         logTag: incoming.logTag,
@@ -692,6 +723,24 @@ export class ReplayOrchestrator {
     } else if (observedLoanApplicationId) {
       logger.info('Ignoring observed loanApplicationId for replay remap because source is not trusted', {
         observedLoanApplicationId,
+        logTag: incoming.logTag,
+        source: incoming.source || null,
+        destination: incoming.destination || null,
+        sourceDestination
+      });
+    }
+
+    if (observedAgreementId && shouldTrustLiveLoanApplicationIdSource(incoming)) {
+      this.stateManager.setCurrentReplayAgreementId(observedAgreementId, {
+        logTag: incoming.logTag,
+        source: incoming.source,
+        destination: incoming.destination,
+        sourceDestination,
+        requestId: incoming.requestId || null
+      });
+    } else if (observedAgreementId) {
+      logger.info('Ignoring observed agreementId for replay remap because source is not trusted', {
+        observedAgreementId,
         logTag: incoming.logTag,
         source: incoming.source || null,
         destination: incoming.destination || null,

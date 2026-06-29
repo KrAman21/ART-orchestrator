@@ -104,3 +104,79 @@ test('getApiMapping resolves /prod/MOCK_DATA as KFS child request when that tag 
     headers: {}
   });
 });
+
+test('getApiMapping resolves /prod/polling as line-status request when that tag is nearest in replay lookahead', () => {
+  const mapping = getApiMapping('/prod/polling', {
+    payload: {},
+    headers: {},
+    nextExpectedLogTag: 'POLLING API :: LINE_STATUS_REQUEST',
+    lookaheadLogTags: [
+      'POLLING API :: LINE_STATUS_REQUEST',
+      'POLLING API :: FORCE_LOAN_STATUS_SYNC_REQUEST'
+    ]
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'POLLING API :: LINE_STATUS_REQUEST',
+    api: '/prod/polling',
+    sourceDestination: 'GATEWAY_LENDER',
+    headers: {}
+  });
+});
+
+test('getApiMapping resolves /prod/polling as force-loan-status-sync request when that tag is nearest in replay lookahead', () => {
+  const mapping = getApiMapping('/prod/polling', {
+    payload: {},
+    headers: {},
+    nextExpectedLogTag: 'UNRELATED_TAG',
+    lookaheadLogTags: [
+      'SOME_OTHER_TAG',
+      'POLLING API :: FORCE_LOAN_STATUS_SYNC_REQUEST'
+    ]
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'POLLING API :: FORCE_LOAN_STATUS_SYNC_REQUEST',
+    api: '/prod/polling',
+    sourceDestination: 'GATEWAY_LENDER',
+    headers: {}
+  });
+});
+
+test('getApiMapping resolves /telcosprod/telcoauth as otp-generation request when that tag is next in replay lookahead', () => {
+  const mapping = getApiMapping('/telcosprod/telcoauth', {
+    payload: {},
+    headers: {},
+    nextExpectedLogTag: 'OTP GENERATION API_REQUEST',
+    lookaheadLogTags: [
+      'OTP GENERATION API_REQUEST',
+      'OTP AUTHENTICATION API_REQUEST'
+    ]
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'OTP GENERATION API_REQUEST',
+    api: '/telcosprod/telcoauth',
+    sourceDestination: 'GATEWAY_LENDER',
+    headers: {}
+  });
+});
+
+test('getApiMapping resolves /telcosprod/telcoauth as otp-authentication request when that tag is nearest in replay lookahead', () => {
+  const mapping = getApiMapping('/telcosprod/telcoauth', {
+    payload: {},
+    headers: {},
+    nextExpectedLogTag: 'UNRELATED_TAG',
+    lookaheadLogTags: [
+      'SOME_OTHER_TAG',
+      'OTP AUTHENTICATION API_REQUEST'
+    ]
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'OTP AUTHENTICATION API_REQUEST',
+    api: '/telcosprod/telcoauth',
+    sourceDestination: 'GATEWAY_LENDER',
+    headers: {}
+  });
+});

@@ -55,6 +55,35 @@ function buildBasicMerchantAuthorization(merchantId) {
   return merchantId ? `Basic ${merchantId}` : 'Basic flipkart';
 }
 
+const APP_CORE_ENVELOPE_HEADER_KEY_MAP = {
+  'x-merchant-id': 'X-Merchant-Id',
+  'x-session-token': 'X-Session-Token',
+  'x-user-id': 'X-User-Id',
+  'x-order-id': 'X-Order-Id',
+  'x-device-token-id': 'X-Device-Token-Id',
+  'x-forwarded-for': 'X-Forwarded-For',
+  'x-loan-request-info-id': 'X-LoanRequestInfoId',
+  'x-logging-flag': 'X-Logging-Flag',
+  'x-client-auth-token': 'X-Client-Auth-Token',
+  'x-origin': 'X-Origin',
+  'x-version': 'X-Version'
+};
+
+function canonicalizeAppCoreEnvelopeHeaders(customHeaders = {}) {
+  const canonicalHeaders = {};
+
+  for (const [key, value] of Object.entries(customHeaders || {})) {
+    if (value === undefined) {
+      continue;
+    }
+
+    const mappedKey = APP_CORE_ENVELOPE_HEADER_KEY_MAP[key] || key;
+    canonicalHeaders[mappedKey] = value;
+  }
+
+  return canonicalHeaders;
+}
+
 function shouldSendAppCoreAsTextEnvelope(sourceDestination, logTag, method) {
   return (
     sourceDestination === 'APP_CORE' &&
@@ -63,12 +92,14 @@ function shouldSendAppCoreAsTextEnvelope(sourceDestination, logTag, method) {
 }
 
 function buildAppCoreTextEnvelope(payload, requestId, merchantId, customHeaders = {}) {
+  const canonicalHeaders = canonicalizeAppCoreEnvelopeHeaders(customHeaders);
+
   return {
     payload: payload ?? {},
     header: {
       'X-Merchant-Id': merchantId || payload?.merchantId || payload?.merchant_id || 'flipkart',
       ...(payload?.clientAuthToken ? { 'X-Client-Auth-Token': payload.clientAuthToken } : {}),
-      ...customHeaders
+      ...canonicalHeaders
     },
     timeStamp: new Date().toISOString(),
     requestId: requestId || payload?.requestId || crypto.randomUUID()

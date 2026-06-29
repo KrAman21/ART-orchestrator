@@ -72,6 +72,14 @@ function mergeReplayContexts(primary, secondary) {
   return { customerId, loanApplicationIds };
 }
 
+export function shouldSkipReplayForMultipleOrderContextLaids(lspContext = {}) {
+  return Boolean(
+    lspContext?.success &&
+    Array.isArray(lspContext?.loanApplicationIds) &&
+    lspContext.loanApplicationIds.length > 1
+  );
+}
+
 function buildSourceCounts(sourceResults) {
   const counts = {};
 
@@ -105,6 +113,34 @@ export class MultiSourceLogFetcher {
       baseUrl: this.lspLookupBaseUrl || undefined,
       endpoint: this.lspOrderStatusEndpoint || undefined
     });
+
+    if (shouldSkipReplayForMultipleOrderContextLaids(lspContext)) {
+      const skipReason =
+        `Skipping order replay because order-context API returned multiple loanApplicationIds: ${lspContext.loanApplicationIds.join(', ')}`;
+
+      logger.warn(skipReason, {
+        merchantId,
+        orderId,
+        loanApplicationIds: lspContext.loanApplicationIds,
+        customerId: lspContext.customerId
+      });
+
+      return {
+        success: true,
+        skipped: true,
+        skipReason,
+        logs: [],
+        count: 0,
+        merchantId,
+        orderId,
+        context: {
+          customerId: lspContext.customerId,
+          loanApplicationIds: lspContext.loanApplicationIds
+        },
+        sourceCounts: {},
+        sourceResults: []
+      };
+    }
 
     const orderLogsResult = await fetchS3TraceLogsByOrder(merchantId, orderId, this.sessionToken);
 

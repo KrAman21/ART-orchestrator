@@ -272,8 +272,11 @@ export class LogProcessor {
         ...buildAppCoreAuthHeaders(entry, this.validator.entries, this.stateManager)
       };
       await ensureAppCorePreconditions(entry, customHeaders, this.stateManager);
-      const { requestId: outboundRequestId, originalRequestId, normalized } =
-        getAppCoreRequestId(entry);
+      const { requestId: outboundRequestId, originalRequestId, normalized, reusedFromLogTag } =
+        getAppCoreRequestId({
+          ...entry,
+          stateManager: this.stateManager
+        });
       const service = endpointConfig?.service || entry.destination;
       const method = entry.httpMethod || endpointConfig?.method || 'POST';
 
@@ -305,6 +308,11 @@ export class LogProcessor {
         this.stateManager?.getMappedLoanApplicationId?.(entry.loanApplicationId) || entry.loanApplicationId || null
       );
       const transformedPayload = transformRequest(remappedPayload, entry.logTag);
+      this.stateManager?.setReplayRequestIdForLogTag?.(entry.logTag, outboundRequestId, {
+        sourceDestination: entry.sourceDestination,
+        source: entry.source,
+        destination: entry.destination
+      });
 
       // Log API call before making request
       this.logger.logApiCall(entry.source, entry.destination, api, 'REQUEST', entry.index);
@@ -321,6 +329,7 @@ export class LogProcessor {
         requestId: outboundRequestId,
         originalRequestId,
         requestIdNormalizedForAppCore: normalized,
+        requestIdReusedFromLogTag: reusedFromLogTag,
         headers: customHeaders,
         payload: transformedPayload,
         timestamp: new Date().toISOString()

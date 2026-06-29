@@ -2,6 +2,9 @@ import crypto from 'crypto';
 
 const LSP_REQUEST_ID_PREFIX = 'LSP';
 const LSP_REQUEST_ID_TOTAL_LENGTH = 35;
+const APP_CORE_REQUEST_ID_REUSE_MAP = Object.freeze({
+  'LSP-GetAgreementDataStatus_REQUEST': 'GetAgreementDataRequest_REQUEST'
+});
 
 function buildLspStyleRequestId() {
   return `${LSP_REQUEST_ID_PREFIX}${crypto.randomUUID().replaceAll('-', '')}`;
@@ -22,7 +25,23 @@ export function getAppCoreRequestId(entry) {
     return {
       requestId: originalRequestId,
       originalRequestId,
-      normalized: false
+      normalized: false,
+      reusedFromLogTag: null
+    };
+  }
+
+  const reusedTriggerLogTag = APP_CORE_REQUEST_ID_REUSE_MAP[entry.logTag] || null;
+  const replayRequestIdLookup =
+    reusedTriggerLogTag && typeof entry?.stateManager?.getReplayRequestIdForLogTag === 'function'
+      ? entry.stateManager.getReplayRequestIdForLogTag(reusedTriggerLogTag)
+      : null;
+
+  if (isValidLspStyleRequestId(replayRequestIdLookup)) {
+    return {
+      requestId: replayRequestIdLookup,
+      originalRequestId,
+      normalized: false,
+      reusedFromLogTag: reusedTriggerLogTag
     };
   }
 
@@ -30,13 +49,15 @@ export function getAppCoreRequestId(entry) {
     return {
       requestId: originalRequestId,
       originalRequestId,
-      normalized: false
+      normalized: false,
+      reusedFromLogTag: null
     };
   }
 
   return {
     requestId: buildLspStyleRequestId(),
     originalRequestId,
-    normalized: true
+    normalized: true,
+    reusedFromLogTag: null
   };
 }

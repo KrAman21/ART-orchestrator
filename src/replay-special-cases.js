@@ -172,7 +172,9 @@ export const REPLAY_SPECIAL_CASES = [
 export const POLLING_API_LOG_TAGS = new Set([
   'LSP-LoanStatus_REQUEST',
   'FlipKart-GetRedirectionURL_REQUEST',
-  'GetAgreementDataRequest_REQUEST'
+  'GetAgreementDataRequest_REQUEST',
+  'FlipKart-FetchStatus_REQUEST',
+  'LSP-GetAgreementDataStatus_REQUEST'
 ]);
 
 export const SKIPPABLE_ASYNC_API_LOG_TAGS = new Set([

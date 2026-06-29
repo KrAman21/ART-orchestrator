@@ -26,6 +26,36 @@ function getMessageNumber(log) {
   return Number.isFinite(messageNumber) ? messageNumber : Number.POSITIVE_INFINITY;
 }
 
+function normalizeMissingTraceRoute(log) {
+  const message = log?.message;
+  if (!message || typeof message !== 'object') {
+    return log;
+  }
+
+  const logTag = (message.log_tag || '').trim();
+  const traceRoute = message.trace_route || '';
+  const label = (message.label || '').trim();
+
+  if (!traceRoute && (logTag === 'LSP-GetAgreementDataStatus_REQUEST' || label === 'APP')) {
+    return {
+      ...log,
+      message: {
+        ...message,
+        trace_route: 'APP_CORE'
+      }
+    };
+  }
+
+  return log;
+}
+
+function shouldPreserveWithoutPayload(logTag, traceRoute) {
+  return (
+    logTag === 'LSP-GetAgreementDataStatus_REQUEST' &&
+    traceRoute === 'APP_CORE'
+  );
+}
+
 export function compareLogsForReplay(left, right) {
   const createdAtDiff = getCreatedAtTime(left) - getCreatedAtTime(right);
   if (createdAtDiff !== 0) {
@@ -64,7 +94,10 @@ function getPairingGroupKey(tagInfo, traceRoute) {
     tagInfo.baseTag === 'KYC SERVICE API' ||
     tagInfo.baseTag === 'LSP-LoanStatus' ||
     tagInfo.baseTag === 'Lsp-LoanStatusRequest' ||
-    tagInfo.baseTag === 'ORDER_STATUS_API_LS'
+    tagInfo.baseTag === 'ORDER_STATUS_API_LS' ||
+    tagInfo.baseTag === 'FECTH_LOAN_APPLICATION_DATA_API' ||
+    tagInfo.baseTag === 'OTP GENERATION API' ||
+    tagInfo.baseTag === 'OTP AUTHENTICATION API'
   ) {
     return tagInfo.baseTag;
   }
@@ -636,6 +669,63 @@ function reorderFlipkartSmFetchStatusSequence(logs) {
   return changed ? reordered : logs;
 }
 
+function synthesizeMissingGatewayLenderRequests(logs) {
+  const rewritten = [...logs];
+  let changed = false;
+  const pendingRequests = new Map();
+
+  for (let index = 0; index < rewritten.length; index += 1) {
+    const current = rewritten[index];
+    const currentMessage = current?.message || {};
+    const currentTag = (currentMessage.log_tag || '').trim();
+    const traceRoute = (currentMessage.trace_route || '').trim();
+    const tagInfo = getRequestResponseTagInfo(currentTag);
+
+    if (!['GATEWAY_LENDER', 'LENDER_GATEWAY'].includes(traceRoute) || !tagInfo) {
+      continue;
+    }
+
+    const contextKey = extractReplayContextKey(current);
+    const pendingKey = `${contextKey}::${tagInfo.baseTag}`;
+    const pendingCount = pendingRequests.get(pendingKey) || 0;
+
+    if (tagInfo.kind === 'request') {
+      pendingRequests.set(pendingKey, pendingCount + 1);
+      continue;
+    }
+
+    if (pendingCount > 0) {
+      pendingRequests.set(pendingKey, pendingCount - 1);
+      continue;
+    }
+
+    const responseMessage = currentMessage;
+    const syntheticRequest = {
+      ...current,
+      message: {
+        ...responseMessage,
+        log_tag: `${tagInfo.baseTag}_REQUEST`,
+        trace_route: 'GATEWAY_LENDER',
+        trace_request: responseMessage.trace_request || {},
+        trace_response: null,
+        trace_request_ack: null,
+        trace_response_ack: null,
+        trace_error_msg: null
+      }
+    };
+
+    rewritten.splice(index, 0, syntheticRequest);
+    console.log(
+      `Second-level filter: synthesized missing ${tagInfo.baseTag}_REQUEST before ${currentTag} for context ${contextKey}`
+    );
+    changed = true;
+    pendingRequests.set(pendingKey, 0);
+    index += 1;
+  }
+
+  return changed ? rewritten : logs;
+}
+
 function pruneOrphanedGatewayLoanStatusRequests(logs) {
   const availableTriggersByContext = new Map();
   const filtered = [];
@@ -961,7 +1051,8 @@ export async function filterOrchestratorSkippableLogs(logs, outputPath = null) {
 
   const reordered = reorderOutOfOrderKycPairs(filtered);
   const flipkartSmReordered = reorderFlipkartSmFetchStatusSequence(reordered);
-  const fetchStatusTriggerPruned = pruneOrphanedOrderStatusAfterFetchStatus(flipkartSmReordered);
+  const gatewayLenderCompleted = synthesizeMissingGatewayLenderRequests(flipkartSmReordered);
+  const fetchStatusTriggerPruned = pruneOrphanedOrderStatusAfterFetchStatus(gatewayLenderCompleted);
   const lenderLoanStatusPruned = pruneOrphanedHdbLoanStatusFlows(fetchStatusTriggerPruned);
   const balanced = balanceRequestResponsePairs(lenderLoanStatusPruned);
   
@@ -1075,7 +1166,8 @@ export async function filterAndSortLogs(logs, outputPath = null) {
     return [];
   }
 
-  const sortedByTime = [...logs].sort(compareLogsForReplay);
+  const normalizedLogs = logs.map(normalizeMissingTraceRoute);
+  const sortedByTime = [...normalizedLogs].sort(compareLogsForReplay);
   const seen = new Set();
   const duplicates = [];
   const missingPayloadLogs = [];
@@ -1090,8 +1182,9 @@ export async function filterAndSortLogs(logs, outputPath = null) {
     const hasTraceError = msg.trace_error_msg !== undefined && msg.trace_error_msg !== null;
     const hasTraceRequestAck = msg.trace_request_ack !== undefined && msg.trace_request_ack !== null;
     const hasTraceResponseAck = msg.trace_response_ack !== undefined && msg.trace_response_ack !== null;
+    const preserveWithoutPayload = shouldPreserveWithoutPayload(logTag, traceRoute);
 
-    if (!hasTraceRequest && !hasTraceResponse && !hasTraceError && !hasTraceRequestAck && !hasTraceResponseAck) {
+    if (!hasTraceRequest && !hasTraceResponse && !hasTraceError && !hasTraceRequestAck && !hasTraceResponseAck && !preserveWithoutPayload) {
       if (logTag.includes('HardEligibility')) {
         console.log(`First-level filter: dropping hard eligibility log without payload/ack at sorted index ${index}, trace_route: ${traceRoute}, log_tag: ${logTag}, request_id: ${msg.request_id || log?.xRequestId || ''}`);
       }

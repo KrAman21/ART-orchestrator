@@ -261,6 +261,12 @@ export function resolveFallbackGatewayRequestId(entry, observedIncomingRequests 
 
 export function prepareAsyncReplayForwarding(entry, payload, outboundRequestId, endpointHeaders = {}, fallbackMerchantId = null, observedIncomingRequests = [], stateManager = null) {
   const merchantId = resolveReplayMerchantId(entry, payload, fallbackMerchantId);
+  const requestId = stateManager?.rewriteOutgoingRequestIdValue
+    ? stateManager.rewriteOutgoingRequestIdValue(outboundRequestId, {
+      logTag: entry?.logTag,
+      field: 'requestId'
+    })
+    : outboundRequestId;
   const rawHeaders = {
     ...(entry?.headers || {}),
     ...(endpointHeaders || {})
@@ -283,6 +289,7 @@ export function prepareAsyncReplayForwarding(entry, payload, outboundRequestId, 
     headers,
     merchantId,
     payload: normalizedPayload,
+    requestId,
     replayRequestIdCandidate
   };
 }
@@ -1243,6 +1250,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       requestId,
       requestEntry: requestEntry?.toString?.() || null
     });
+
+    const replayBufferedResponseData = this.stateManager?.remapReplayValue
+      ? this.stateManager.remapReplayValue(buffered.response.data, null, { logTag: currentEntry.logTag })
+      : buffered.response.data;
     
     if (buffered.isError) {
       const r = buffered.response;
@@ -1258,7 +1269,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     
     const comparison = this.comparePayloads(
       currentEntry.payload,
-      buffered.response.data,
+      replayBufferedResponseData,
       currentEntry.logTag
     );
     
@@ -1271,7 +1282,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     } else {
       this.stateManager.registerMappingsFromPayloadPair(
         currentEntry.payload,
-        buffered.response.data,
+        replayBufferedResponseData,
         { logTag: currentEntry.logTag }
       );
     }
@@ -1279,12 +1290,12 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     if (currentEntry.logTag === 'GetLenderFlows_RESPONSE') {
       this.stateManager?.updateReplayAppAuthFromResponse?.(
         currentEntry.loanApplicationId || requestEntry?.loanApplicationId || null,
-        buffered.response.data,
+        replayBufferedResponseData,
         { logTag: currentEntry.logTag }
       );
     }
 
-    this.recordObservedProcessedResponse(currentEntry, buffered.response.data);
+    this.recordObservedProcessedResponse(currentEntry, replayBufferedResponseData);
     
     this.validator.advance();
     this.recordSuccess('buffered_response_validation', currentEntry);
@@ -1519,8 +1530,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         ...buildAppCoreAuthHeaders(entry, this.validator.entries, this.stateManager)
       };
       await ensureAppCorePreconditions(entry, endpointHeaders, this.stateManager);
-      const { requestId: outboundRequestId, originalRequestId, normalized } =
-        getAppCoreRequestId(entry);
+      const { requestId: outboundRequestId, originalRequestId, normalized, reusedFromLogTag } =
+        getAppCoreRequestId({
+          ...entry,
+          stateManager: this.stateManager
+        });
       const service = endpointConfig?.service || entry.destination;
       const method = entry.httpMethod || endpointConfig?.method || 'POST';
       const resolvedLoanApplicationId = this.resolveOutboundLoanApplicationIdForReplay(entry, {
@@ -1544,6 +1558,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         this.observedIncomingRequests || [],
         this.stateManager
       );
+      this.stateManager?.setReplayRequestIdForLogTag?.(entry.logTag, forwardingRequest.requestId, {
+        sourceDestination: entry.sourceDestination,
+        source: entry.source,
+        destination: entry.destination
+      });
 
       if (entry.logTag === 'Lsp-LoanStatusRequest_REQUEST' && fallbackReason) {
         const lenderDetailsSeedPayload = buildReplayLenderDetailsSeedPayload(
@@ -1601,9 +1620,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         api,
         method,
         logTag: entry.logTag,
-        requestId: outboundRequestId,
+        requestId: forwardingRequest.requestId,
         originalRequestId,
         requestIdNormalizedForAppCore: normalized,
+        requestIdReusedFromLogTag: reusedFromLogTag,
         merchantId: forwardingRequest.merchantId,
         originalPayloadRequestId:
           transformedPayload && typeof transformedPayload === 'object' && !Array.isArray(transformedPayload)
@@ -1624,7 +1644,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         api,
         method,
         forwardingRequest.payload,
-        outboundRequestId,
+        forwardingRequest.requestId,
         entry.sourceDestination,
         entry.logTag,
         forwardingRequest.merchantId,
@@ -1641,7 +1661,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       }
       
       logger.info('Async request sent, main thread continuing', {
-        requestId: outboundRequestId,
+        requestId: forwardingRequest.requestId,
         originalRequestId,
         logTag: entry.logTag,
         advanceValidator,
@@ -1651,7 +1671,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
       return {
         success: true,
-        requestId: outboundRequestId,
+        requestId: forwardingRequest.requestId,
         originalRequestId
       };
     } catch (error) {
@@ -2100,7 +2120,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     await ensureAppCorePreconditions(entry, endpointHeaders, this.stateManager);
 
-    const { requestId: outboundRequestId } = getAppCoreRequestId(entry);
+    const {
+      requestId: outboundRequestId,
+      originalRequestId,
+      normalized: requestIdNormalizedForAppCore,
+      reusedFromLogTag: requestIdReusedFromLogTag
+    } = getAppCoreRequestId({
+      ...entry,
+      stateManager: this.stateManager
+    });
     const service = endpointConfig?.service || entry.destination;
     const method = entry.httpMethod || endpointConfig?.method || 'POST';
     const resolvedLoanApplicationId = this.resolveOutboundLoanApplicationIdForReplay(entry, {
@@ -2124,13 +2152,28 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       this.observedIncomingRequests || [],
       this.stateManager
     );
+    this.stateManager?.setReplayRequestIdForLogTag?.(entry.logTag, forwardingRequest.requestId, {
+      sourceDestination: entry.sourceDestination,
+      source: entry.source,
+      destination: entry.destination
+    });
+
+    logger.info('Executing blocking replay request', {
+      entry: entry?.toString?.(),
+      logTag: entry?.logTag,
+      requestId: forwardingRequest.requestId,
+      originalRequestId,
+      requestIdNormalizedForAppCore,
+      requestIdReusedFromLogTag,
+      fallbackReason
+    });
 
     return makeRequest(
       this.getServiceBaseUrl(service),
       api,
       method,
       forwardingRequest.payload,
-      outboundRequestId,
+      forwardingRequest.requestId,
       entry.sourceDestination,
       entry.logTag,
       forwardingRequest.merchantId,
@@ -2266,6 +2309,22 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       destination: parts[1]
     };
 
+    const validation = this.validator.validateIncomingRequest({
+      source: normalizedIncoming.source,
+      destination: normalizedIncoming.destination,
+      logTag: normalizedIncoming.logTag,
+      isRequest: true,
+      requestId: normalizedIncoming.requestId,
+      lenderOrgId: normalizedIncoming.lenderOrgId,
+      loanApplicationId: normalizedIncoming.loanApplicationId
+    });
+
+    const directGatewayLenderLookaheadResponse =
+      await this.maybeHandleFutureGatewayLenderRequest(incoming, normalizedIncoming, validation);
+    if (directGatewayLenderLookaheadResponse) {
+      return directGatewayLenderLookaheadResponse;
+    }
+
     // If replay is already complete, ignore late straggler requests gracefully
     if (this.validator.isComplete()) {
       logger.warn('Ignoring late straggler request after replay completion', {
@@ -2359,6 +2418,65 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.bufferManager?.skipWaiter?.(currentEntry);
 
     return response;
+  }
+
+  async maybeHandleFutureGatewayLenderRequest(incoming, normalizedIncoming, validation = null) {
+    const sourceDestination = normalizeSourceDestination(
+      `${incoming.source}_${incoming.destination}`,
+      incoming.logTag
+    );
+    const [source, destination] = sourceDestination.split('_');
+
+    if (source !== 'GATEWAY' || destination !== 'LENDER') {
+      return null;
+    }
+
+    const currentEntry = this.validator.getCurrentEntry();
+    if (!currentEntry) {
+      return null;
+    }
+
+    let effectiveValidation = validation;
+    if (!effectiveValidation) {
+      effectiveValidation = this.validator.validateIncomingRequest({
+        source: normalizedIncoming.source,
+        destination: normalizedIncoming.destination,
+        logTag: normalizedIncoming.logTag,
+        isRequest: true,
+        requestId: normalizedIncoming.requestId,
+        lenderOrgId: normalizedIncoming.lenderOrgId,
+        loanApplicationId: normalizedIncoming.loanApplicationId
+      });
+    }
+
+    let futureEntry = effectiveValidation?.foundInLookahead || null;
+
+    if (!futureEntry && effectiveValidation?.isEarly) {
+      futureEntry = this.validator.entries.find(entry =>
+        entry.index > this.validator.currentIndex &&
+        !this.validator.processedIndices.has(entry.index) &&
+        entry.isRequest &&
+        this.validator.matchesExpected(entry, normalizedIncoming)
+      ) || null;
+    }
+
+    if (!futureEntry) {
+      return null;
+    }
+
+    logger.info('Processing future GATEWAY->LENDER request immediately from lookahead to unblock nested gateway call', {
+      currentEntry: currentEntry.toString(),
+      futureEntry: futureEntry.toString(),
+      requestId: incoming.requestId,
+      logTag: incoming.logTag,
+      lenderOrgId: incoming.lenderOrgId
+    });
+
+    return this.outOfOrderHandler.handleOutOfOrderRequest(incoming, {
+      ...(effectiveValidation || {}),
+      expectedEntry: currentEntry,
+      foundInLookahead: futureEntry
+    });
   }
 
   async waitForAllExternalCalls() {

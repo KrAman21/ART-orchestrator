@@ -57,6 +57,23 @@ export class SequentialLogProcessor {
       try {
         const singleOrderList = [{ merchantId, orderId }];
         const fetchResult = await fetcher.fetchLogsForOrders(singleOrderList);
+        const orderFetchResult = fetchResult.results?.[0] || null;
+
+        if (orderFetchResult?.skipped) {
+          completedOrders++;
+          results.push({
+            orderIndex: i + 1,
+            merchantId,
+            orderId,
+            success: true,
+            skipped: true,
+            skipReason: orderFetchResult.skipReason
+          });
+          logger.warn(`Skipping order ${orderId} due to order-context multi-LAID guard`, {
+            skipReason: orderFetchResult.skipReason
+          });
+          continue;
+        }
 
         if (!fetchResult.success || fetchResult.stats.totalLogs === 0) {
           logger.error(`Failed to fetch logs for order ${orderId}`, {

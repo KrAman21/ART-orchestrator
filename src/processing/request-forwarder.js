@@ -54,6 +54,12 @@ function applySdkHeaders(headers, logTag) {
 
 export function prepareForwardingRequest(incoming, expectedEntry, endpointHeaders = {}, stateManager = null) {
   const merchantId = resolveForwardingMerchantId(incoming, expectedEntry);
+  const requestId = stateManager?.rewriteOutgoingRequestIdValue
+    ? stateManager.rewriteOutgoingRequestIdValue(incoming?.requestId, {
+      logTag: expectedEntry?.logTag,
+      field: 'requestId'
+    })
+    : incoming?.requestId;
   const rawHeaders = {
     ...(incoming?.headers || {}),
     ...(endpointHeaders || {})
@@ -80,7 +86,8 @@ export function prepareForwardingRequest(incoming, expectedEntry, endpointHeader
   return {
     headers,
     payload,
-    merchantId
+    merchantId,
+    requestId
   };
 }
 
@@ -213,16 +220,22 @@ export class RequestForwarder {
       reason: fallbackResponse.reason || 'replay_fallback_response'
     });
 
+    const replayFallbackPayload = remapReplayPayloadForEntry(
+      this.stateManager,
+      fallbackResponse.response.data,
+      expectedResponse || expectedEntry
+    );
+
     if (fallbackResponse.response.headers) {
       this.stateManager.storeResponseHeaders(correlationKey, fallbackResponse.response.headers);
     }
 
-    this.stateManager.handleIncomingResponse(correlationKey, fallbackResponse.response.data);
+    this.stateManager.handleIncomingResponse(correlationKey, replayFallbackPayload);
 
     if (expectedResponse && !this.validator.processedIndices.has(expectedResponse.index)) {
       const comparison = this.callbacks.comparePayloads(
         expectedResponse.payload,
-        fallbackResponse.response.data,
+        replayFallbackPayload,
         expectedResponse.logTag
       );
 
@@ -259,7 +272,7 @@ export class RequestForwarder {
 
     return {
       success: true,
-      payload: fallbackResponse.response.data,
+      payload: replayFallbackPayload,
       headers: fallbackResponse.response.headers || {}
     };
   }
@@ -541,7 +554,7 @@ export class RequestForwarder {
       const correlationKey = this.stateManager.constructor.generateCorrelationKey(
         endpoint,
         expectedEntry.sourceDestination,
-        incoming.requestId
+        forwardingRequest.requestId
       );
 
       // Find the expected response entry (may not be the immediate next entry)
@@ -590,7 +603,7 @@ export class RequestForwarder {
         source: incoming.source,
         destination: incoming.destination,
         api: endpoint,
-        requestId: incoming.requestId,
+        requestId: forwardingRequest.requestId,
         logTag: expectedEntry.logTag,
         sourceDestination: expectedEntry.sourceDestination,
         logIndex: expectedEntry.index,
@@ -600,7 +613,7 @@ export class RequestForwarder {
       this.logger.info('Resolved forwarding request context', {
         logTag: expectedEntry.logTag,
         sourceDestination: expectedEntry.sourceDestination,
-        requestId: incoming.requestId,
+        requestId: forwardingRequest.requestId,
         merchantId: forwardingRequest.merchantId,
         originalPayloadRequestId,
         forwardedPayloadRequestId: isPlainObject(transformedPayload) ? transformedPayload.requestId || null : null,
@@ -613,7 +626,7 @@ export class RequestForwarder {
         endpoint,
         'POST',
         transformedPayload,
-        incoming.requestId,
+        forwardingRequest.requestId,
         sourceDestinationForRequest,
         expectedEntry.logTag,
         forwardingRequest.merchantId,
@@ -626,7 +639,7 @@ export class RequestForwarder {
       this.logger.info('Response received from service', {
         destination,
         api: endpoint,
-        requestId: incoming.requestId,
+        requestId: forwardingRequest.requestId,
         logTag: expectedEntry.logTag,
         status: serviceResponse?.status || null,
         hasError: !!serviceResponse?.error
@@ -634,7 +647,7 @@ export class RequestForwarder {
 
       if (serviceResponse && !serviceResponse.error) {
         this.logger.logFinalOutgoing(incoming.source, incoming.destination, endpoint, transformedPayload, {
-          requestId: incoming.requestId,
+          requestId: forwardingRequest.requestId,
           logTag: expectedEntry.logTag,
           sourceDestination: expectedEntry.sourceDestination,
           logIndex: expectedEntry.index,

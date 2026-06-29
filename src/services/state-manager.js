@@ -2,6 +2,18 @@ import { logger } from '../utils/logger.js';
 
 const IDENTIFIER_TYPE_ALIASES = Object.freeze({
   loanApplicationId: ['loanApplicationId', 'loan_application_id', 'partnerRefNo', 'applicationid', 'ApplicationId', 'applicationId'],
+  agreementId: ['agreementId', 'agreement_id', 'agreementid'],
+  requestId: [
+    'requestId',
+    'request_id',
+    'request-id',
+    'x-request-id',
+    'xRequestId',
+    'traceRequestId',
+    'trace_request_id',
+    'clientRequestId',
+    'client_request_id'
+  ],
   txnRefId: ['txnRefId', 'txnrefid', 'txn_ref_id', '_txnrefid', 'TxnRefId', 'TxnRefID'],
   customerId: ['customerId', 'customer_id', 'customerid', 'merchant_customer_id', 'merchantCustomerId'],
   lineDetailId: ['lineDetailId', 'lineId'],
@@ -117,6 +129,11 @@ const PROD_LOAN_APPLICATION_ID_KEYS = new Set([
   'loanapplicationid'
 ]);
 
+const PROD_AGREEMENT_ID_KEYS = new Set([
+  'agreementid',
+  'agreement_id'
+]);
+
 const PROD_SESSION_TOKEN_KEYS = new Set([
   'sessiontoken',
   'session_token',
@@ -135,6 +152,32 @@ const PROD_CUSTOMER_ID_KEYS = new Set([
   'merchant_customer_id',
   'merchantcustomerid'
 ]);
+
+const PROD_REQUEST_ID_KEYS = new Set([
+  'requestid',
+  'request_id',
+  'request-id',
+  'x-request-id',
+  'xrequestid',
+  'tracerequestid',
+  'trace_request_id'
+]);
+
+function resolveLogTagForRequestIdOwnership(entry = {}) {
+  if (typeof entry?.logTag === 'string' && entry.logTag.trim()) {
+    return entry.logTag.trim();
+  }
+
+  if (typeof entry?.message?.log_tag === 'string' && entry.message.log_tag.trim()) {
+    return entry.message.log_tag.trim();
+  }
+
+  if (typeof entry?.message?.logTag === 'string' && entry.message.logTag.trim()) {
+    return entry.message.logTag.trim();
+  }
+
+  return null;
+}
 
 /**
  * PendingRequest represents an in-flight request waiting for response
@@ -220,6 +263,9 @@ export class StateManager {
     this.prodLoanApplicationIds = new Set();
     this.replayLoanApplicationIdAliases = new Set();
     this.currentReplayLoanApplicationId = null;
+    this.prodAgreementIds = new Set();
+    this.replayAgreementIdAliases = new Set();
+    this.currentReplayAgreementId = null;
     this.prodSessionTokens = new Set();
     this.replaySessionTokenAliases = new Set();
     this.currentReplaySessionToken = null;
@@ -229,6 +275,8 @@ export class StateManager {
     this.prodCustomerIds = new Set();
     this.replayCustomerIdAliases = new Set();
     this.currentReplayCustomerId = null;
+    this.prodRequestIdOwners = new Map();
+    this.replayRequestIdByLogTag = new Map();
     this.replayAppAuthByLoanApplicationId = new Map();
 
     this.config = {
@@ -251,7 +299,10 @@ export class StateManager {
       const earlyResponse = this.pendingResponses.get(correlationId);
       this.pendingResponses.delete(correlationId);
       logger.debug('Using early-arrived response', { correlationId });
-      return Promise.resolve(earlyResponse);
+      const remappedEarlyResponse = expectedLogEntry?.logTag
+        ? this.remapReplayValue(earlyResponse, null, { logTag: expectedLogEntry.logTag })
+        : earlyResponse;
+      return Promise.resolve(remappedEarlyResponse);
     }
 
     // Create new pending request
@@ -296,11 +347,15 @@ export class StateManager {
     // Check if we have a pending request waiting
     const pending = this.pendingRequests.get(correlationId);
     if (pending) {
-      const completed = pending.complete(responseData);
+      const remappedResponseData = pending.expectedLogEntry?.logTag
+        ? this.remapReplayValue(responseData, null, { logTag: pending.expectedLogEntry.logTag })
+        : responseData;
+      const completed = pending.complete(remappedResponseData);
       this.pendingRequests.delete(correlationId);
       logger.debug('Response matched with pending request', {
         correlationId,
-        completed
+        completed,
+        logTag: pending.expectedLogEntry?.logTag || null
       });
       return true;
     }
@@ -429,6 +484,12 @@ export class StateManager {
     this.currentReplayLoanApplicationId = null;
   }
 
+  resetProdAgreementIds() {
+    this.prodAgreementIds.clear();
+    this.replayAgreementIdAliases.clear();
+    this.currentReplayAgreementId = null;
+  }
+
   resetProdSessionTokens() {
     this.prodSessionTokens.clear();
     this.replaySessionTokenAliases.clear();
@@ -445,6 +506,11 @@ export class StateManager {
     this.prodCustomerIds.clear();
     this.replayCustomerIdAliases.clear();
     this.currentReplayCustomerId = null;
+  }
+
+  resetProdRequestIds() {
+    this.prodRequestIdOwners.clear();
+    this.replayRequestIdByLogTag.clear();
   }
 
   extractProdLoanApplicationIdsFromValue(source) {
@@ -493,6 +559,54 @@ export class StateManager {
     });
 
     return this.prodLoanApplicationIds.size;
+  }
+
+  extractProdAgreementIdsFromValue(source) {
+    const agreementIds = [];
+    const seen = new Set();
+
+    const visit = value => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+
+      for (const [key, nestedValue] of Object.entries(value)) {
+        if (
+          typeof nestedValue === 'string' &&
+          PROD_AGREEMENT_ID_KEYS.has(String(key).toLowerCase()) &&
+          !seen.has(nestedValue)
+        ) {
+          seen.add(nestedValue);
+          agreementIds.push(nestedValue);
+        }
+
+        visit(nestedValue);
+      }
+    };
+
+    visit(source);
+    return agreementIds;
+  }
+
+  seedProdAgreementIdsFromLogs(logs = []) {
+    this.resetProdAgreementIds();
+
+    const discoveredAgreementIds = this.extractProdAgreementIdsFromValue(logs);
+    for (const agreementId of discoveredAgreementIds) {
+      this.prodAgreementIds.add(agreementId);
+    }
+
+    logger.info('Seeded PROD agreementIds for replay', {
+      total: this.prodAgreementIds.size,
+      agreementIds: Array.from(this.prodAgreementIds)
+    });
+
+    return this.prodAgreementIds.size;
   }
 
   extractProdSessionTokensFromValue(source) {
@@ -639,12 +753,73 @@ export class StateManager {
     return this.prodCustomerIds.size;
   }
 
+  extractProdRequestIdsFromValue(source) {
+    const requestIds = [];
+    const seen = new Set();
+
+    const visit = value => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+
+      for (const [key, nestedValue] of Object.entries(value)) {
+        if (
+          typeof nestedValue === 'string' &&
+          PROD_REQUEST_ID_KEYS.has(String(key).toLowerCase()) &&
+          !seen.has(nestedValue)
+        ) {
+          seen.add(nestedValue);
+          requestIds.push(nestedValue);
+        }
+
+        visit(nestedValue);
+      }
+    };
+
+    visit(source);
+    return requestIds;
+  }
+
+  seedProdRequestIdsFromLogs(logs = []) {
+    this.resetProdRequestIds();
+
+    for (const entry of Array.isArray(logs) ? logs : []) {
+      const ownerLogTag = resolveLogTagForRequestIdOwnership(entry);
+      if (!ownerLogTag) {
+        continue;
+      }
+
+      const requestIds = this.extractProdRequestIdsFromValue(entry);
+      for (const requestId of requestIds) {
+        if (!this.prodRequestIdOwners.has(requestId)) {
+          this.prodRequestIdOwners.set(requestId, ownerLogTag);
+        }
+      }
+    }
+
+    logger.info('Seeded PROD requestIds for replay with first-seen logTag ownership', {
+      total: this.prodRequestIdOwners.size,
+      ownedLogTags: Array.from(new Set(this.prodRequestIdOwners.values()))
+    });
+
+    return this.prodRequestIdOwners.size;
+  }
+
   getProdLoanApplicationIds() {
     return Array.from(this.prodLoanApplicationIds);
   }
 
   getCurrentReplayLoanApplicationId() {
     return this.currentReplayLoanApplicationId;
+  }
+
+  getCurrentReplayAgreementId() {
+    return this.currentReplayAgreementId;
   }
 
   getCurrentReplaySessionToken() {
@@ -657,6 +832,46 @@ export class StateManager {
 
   getCurrentReplayCustomerId() {
     return this.currentReplayCustomerId;
+  }
+
+  getReplayRequestIdForLogTag(logTag) {
+    if (!logTag || typeof logTag !== 'string') {
+      return null;
+    }
+
+    return this.replayRequestIdByLogTag.get(logTag) || null;
+  }
+
+  getRequestIdOwnerLogTag(requestId) {
+    if (!requestId || typeof requestId !== 'string') {
+      return null;
+    }
+
+    return this.prodRequestIdOwners.get(requestId) || null;
+  }
+
+  setReplayRequestIdForLogTag(logTag, requestId, context = {}) {
+    if (!logTag || typeof logTag !== 'string' || !requestId || typeof requestId !== 'string') {
+      return false;
+    }
+
+    const previousRequestId = this.replayRequestIdByLogTag.get(logTag) || null;
+    if (previousRequestId === requestId) {
+      return false;
+    }
+
+    this.replayRequestIdByLogTag.set(logTag, requestId);
+
+    logger.info('Updated replay requestId for logTag', {
+      logTag,
+      previousRequestId,
+      currentRequestId: requestId,
+      sourceDestination: context?.sourceDestination || null,
+      source: context?.source || null,
+      destination: context?.destination || null
+    });
+
+    return true;
   }
 
   setCurrentReplayLoanApplicationId(loanApplicationId, context = {}) {
@@ -689,6 +904,45 @@ export class StateManager {
       currentLoanApplicationId: loanApplicationId,
       prodLoanApplicationIdCount: this.prodLoanApplicationIds.size,
       replayAliasCount: this.replayLoanApplicationIdAliases.size,
+      sourceDestination: context?.sourceDestination || null,
+      logTag: context?.logTag || null,
+      requestId: context?.requestId || null
+    });
+
+    return true;
+  }
+
+  setCurrentReplayAgreementId(agreementId, context = {}) {
+    if (!agreementId || typeof agreementId !== 'string') {
+      return false;
+    }
+
+    const previousCurrentAgreementId = this.currentReplayAgreementId;
+    if (previousCurrentAgreementId === agreementId) {
+      return false;
+    }
+
+    if (previousCurrentAgreementId) {
+      this.replayAgreementIdAliases.add(previousCurrentAgreementId);
+    }
+
+    this.currentReplayAgreementId = agreementId;
+
+    for (const prodAgreementId of this.prodAgreementIds) {
+      this.replayAgreementIdAliases.add(prodAgreementId);
+      this.registerIdentifierMapping(
+        'agreementId',
+        prodAgreementId,
+        agreementId,
+        { ...context, logTag: context?.logTag || 'GLOBAL_AGREEMENT_ID_REPLAY_MAPPING' }
+      );
+    }
+
+    logger.info('Updated current replay agreementId', {
+      previousAgreementId: previousCurrentAgreementId,
+      currentAgreementId: agreementId,
+      prodAgreementIdCount: this.prodAgreementIds.size,
+      replayAliasCount: this.replayAgreementIdAliases.size,
       sourceDestination: context?.sourceDestination || null,
       logTag: context?.logTag || null,
       requestId: context?.requestId || null
@@ -820,6 +1074,18 @@ export class StateManager {
     return this.prodLoanApplicationIds.has(value) || this.replayLoanApplicationIdAliases.has(value);
   }
 
+  shouldRewriteOutgoingAgreementId(value) {
+    if (!value || typeof value !== 'string') {
+      return false;
+    }
+
+    if (this.currentReplayAgreementId && value === this.currentReplayAgreementId) {
+      return false;
+    }
+
+    return this.prodAgreementIds.has(value) || this.replayAgreementIdAliases.has(value);
+  }
+
   shouldRewriteOutgoingSessionToken(value) {
     if (!value || typeof value !== 'string') {
       return false;
@@ -856,12 +1122,62 @@ export class StateManager {
     return this.prodCustomerIds.has(value) || this.replayCustomerIdAliases.has(value);
   }
 
+  resolveReplayRequestIdForValue(value) {
+    if (!value || typeof value !== 'string') {
+      return null;
+    }
+
+    const ownerLogTag = this.getRequestIdOwnerLogTag(value);
+    if (!ownerLogTag) {
+      return null;
+    }
+
+    const replayRequestId = this.getReplayRequestIdForLogTag(ownerLogTag);
+    if (!replayRequestId || replayRequestId === value) {
+      return null;
+    }
+
+    return {
+      ownerLogTag,
+      replayRequestId
+    };
+  }
+
+  rewriteOutgoingRequestIdValue(value, context = {}) {
+    const resolved = this.resolveReplayRequestIdForValue(value);
+    if (!resolved) {
+      return value;
+    }
+
+    logger.debug('Rewriting outgoing requestId value using logTag-aware owner mapping', {
+      originalValue: value,
+      rewrittenValue: resolved.replayRequestId,
+      ownerLogTag: resolved.ownerLogTag,
+      logTag: context?.logTag || null,
+      field: context?.field || null
+    });
+
+    return resolved.replayRequestId;
+  }
+
   rewriteOutgoingLoanApplicationIds(value, context = {}) {
-    if (!this.currentReplayLoanApplicationId && !this.currentReplaySessionToken && !this.currentReplayTxnRefId && !this.currentReplayCustomerId) {
+    if (
+      !this.currentReplayLoanApplicationId &&
+      !this.currentReplayAgreementId &&
+      !this.currentReplaySessionToken &&
+      !this.currentReplayTxnRefId &&
+      !this.currentReplayCustomerId &&
+      this.replayRequestIdByLogTag.size === 0
+    ) {
       return value;
     }
 
     if (typeof value === 'string') {
+      const rewrittenRequestId = this.rewriteOutgoingRequestIdValue(value, context);
+      if (rewrittenRequestId !== value) {
+        return rewrittenRequestId;
+      }
+
       if (this.currentReplaySessionToken && this.shouldRewriteOutgoingSessionToken(value)) {
         logger.debug('Rewriting outgoing session token value', {
           originalValue: value,
@@ -890,6 +1206,16 @@ export class StateManager {
           field: context?.field || null
         });
         return this.currentReplayCustomerId;
+      }
+
+      if (this.currentReplayAgreementId && this.shouldRewriteOutgoingAgreementId(value)) {
+        logger.debug('Rewriting outgoing agreementId value', {
+          originalValue: value,
+          rewrittenValue: this.currentReplayAgreementId,
+          logTag: context?.logTag || null,
+          field: context?.field || null
+        });
+        return this.currentReplayAgreementId;
       }
 
       if (this.shouldRewriteOutgoingLoanApplicationId(value)) {
@@ -924,7 +1250,18 @@ export class StateManager {
   }
 
   rewriteOutgoingLoanApplicationIdsInEndpoint(endpoint, context = {}) {
-    if ((!this.currentReplayLoanApplicationId && !this.currentReplaySessionToken && !this.currentReplayTxnRefId && !this.currentReplayCustomerId) || typeof endpoint !== 'string' || endpoint.length === 0) {
+    if (
+      (
+        !this.currentReplayLoanApplicationId &&
+        !this.currentReplayAgreementId &&
+        !this.currentReplaySessionToken &&
+        !this.currentReplayTxnRefId &&
+        !this.currentReplayCustomerId &&
+        this.replayRequestIdByLogTag.size === 0
+      ) ||
+      typeof endpoint !== 'string' ||
+      endpoint.length === 0
+    ) {
       return endpoint;
     }
 
@@ -932,6 +1269,13 @@ export class StateManager {
     const rewrittenPath = pathPart
       .split('/')
       .map(segment => {
+        const rewrittenRequestId = this.rewriteOutgoingRequestIdValue(segment, {
+          ...context,
+          field: 'endpoint-path'
+        });
+        if (rewrittenRequestId !== segment) {
+          return rewrittenRequestId;
+        }
         if (this.currentReplaySessionToken && this.shouldRewriteOutgoingSessionToken(segment)) {
           return this.currentReplaySessionToken;
         }
@@ -940,6 +1284,9 @@ export class StateManager {
         }
         if (this.currentReplayCustomerId && this.shouldRewriteOutgoingCustomerId(segment)) {
           return this.currentReplayCustomerId;
+        }
+        if (this.currentReplayAgreementId && this.shouldRewriteOutgoingAgreementId(segment)) {
+          return this.currentReplayAgreementId;
         }
         if (this.shouldRewriteOutgoingLoanApplicationId(segment)) {
           return this.currentReplayLoanApplicationId;
@@ -954,12 +1301,20 @@ export class StateManager {
 
     const params = new URLSearchParams(queryPart);
     for (const [key, value] of params.entries()) {
-      if (this.currentReplaySessionToken && this.shouldRewriteOutgoingSessionToken(value)) {
+      const rewrittenRequestId = this.rewriteOutgoingRequestIdValue(value, {
+        ...context,
+        field: key
+      });
+      if (rewrittenRequestId !== value) {
+        params.set(key, rewrittenRequestId);
+      } else if (this.currentReplaySessionToken && this.shouldRewriteOutgoingSessionToken(value)) {
         params.set(key, this.currentReplaySessionToken);
       } else if (this.currentReplayTxnRefId && this.shouldRewriteOutgoingTxnRefId(value)) {
         params.set(key, this.currentReplayTxnRefId);
       } else if (this.currentReplayCustomerId && this.shouldRewriteOutgoingCustomerId(value)) {
         params.set(key, this.currentReplayCustomerId);
+      } else if (this.currentReplayAgreementId && this.shouldRewriteOutgoingAgreementId(value)) {
+        params.set(key, this.currentReplayAgreementId);
       } else if (this.shouldRewriteOutgoingLoanApplicationId(value)) {
         params.set(key, this.currentReplayLoanApplicationId);
       }
@@ -1216,6 +1571,12 @@ export class StateManager {
     if (typeof value === 'string') {
       const identifierType = this.getIdentifierTypeForKeyInContext(keyHint, context);
       if (identifierType) {
+        if (identifierType === 'requestId') {
+          return this.rewriteOutgoingRequestIdValue(value, {
+            ...context,
+            field: keyHint || context?.field || null
+          });
+        }
         return this.getMappedIdentifier(identifierType, value);
       }
 
@@ -1393,6 +1754,7 @@ export class StateManager {
     this.replayAppAuthByLoanApplicationId.clear();
     this.replaySessionTokenAliases.clear();
     this.currentReplaySessionToken = null;
+    this.replayRequestIdByLogTag.clear();
 
     logger.info('Cleared transient replay state', {
       pendingRequests: 0,
