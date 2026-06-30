@@ -2,6 +2,92 @@ import { isAsyncParallelApi } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { findCorrespondingResponseEntry, matchesRequestContext } from '../services/response-matcher.js';
 
+function getMultiTagEndpointFamily(api, source, destination) {
+  if (source !== 'GATEWAY' || destination !== 'LENDER') {
+    return null;
+  }
+
+  const families = {
+    '/prod/MOCK_DATA': [
+      'KYC SERVICE API_REQUEST',
+      'KFS SERVICE API :: PARENT_REQUEST',
+      'KFS SERVICE API :: CHILD_REQUEST',
+      'KFS SIGNING API :: PARENT_REQUEST',
+      'KFS SIGNING API :: CHILD_REQUEST'
+    ],
+    '/prod/polling': [
+      'POLLING API :: LINE_STATUS_REQUEST',
+      'POLLING API :: FORCE_LOAN_STATUS_SYNC_REQUEST'
+    ],
+    '/MOCK_DATA/polling': [
+      'POLLING API :: LINE_STATUS_REQUEST',
+      'POLLING API :: FORCE_LOAN_STATUS_SYNC_REQUEST'
+    ],
+    '/telcosprod/telcoauth': [
+      'OTP GENERATION API_REQUEST',
+      'OTP AUTHENTICATION API_REQUEST'
+    ]
+  };
+
+  return families[api] || null;
+}
+
+function belongsToSameMultiTagFamily(left, right) {
+  if (!left || !right) {
+    return false;
+  }
+
+  if (left.source !== right.source || left.destination !== right.destination || left.api !== right.api) {
+    return false;
+  }
+
+  const family = getMultiTagEndpointFamily(left.api, left.source, left.destination);
+  if (!family) {
+    return false;
+  }
+
+  return family.includes(left.logTag) && family.includes(right.logTag);
+}
+
+function extractOpportunityId(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (typeof value.opportunityid === 'string' && value.opportunityid) {
+    return value.opportunityid;
+  }
+
+  if (value.payload && typeof value.payload === 'object') {
+    return extractOpportunityId(value.payload);
+  }
+
+  if (value.body && typeof value.body === 'object') {
+    return extractOpportunityId(value.body);
+  }
+
+  return null;
+}
+
+function matchesKfsOpportunityId(left, right) {
+  if (!left || !right) {
+    return true;
+  }
+
+  if (left.api !== '/prod/MOCK_DATA' || right.api !== '/prod/MOCK_DATA') {
+    return true;
+  }
+
+  const leftOpportunityId = extractOpportunityId(left);
+  const rightOpportunityId = extractOpportunityId(right);
+
+  if (!leftOpportunityId || !rightOpportunityId) {
+    return true;
+  }
+
+  return leftOpportunityId === rightOpportunityId;
+}
+
 function transformReplayPayloadForEntry(stateManager, payload, entry) {
   const remappedPayload = stateManager?.remapReplayValue
     ? stateManager.remapReplayValue(payload, null, { logTag: entry?.logTag })
@@ -56,6 +142,21 @@ export class RetryHandler {
       return null;
     }
 
+    if (
+      currentEntry &&
+      currentEntry.isRequest &&
+      belongsToSameMultiTagFamily(currentEntry, incoming) &&
+      currentEntry.logTag !== incoming.logTag
+    ) {
+      this.logger.info('Incoming request belongs to current multi-tag replay family sibling, not treating as retry', {
+        currentEntryIndex: currentEntry.index,
+        currentEntryLogTag: currentEntry.logTag,
+        incomingLogTag: incoming.logTag,
+        api: incoming.api
+      });
+      return null;
+    }
+
     const futureMatch = this.findFutureUnprocessedMatch(incoming);
     const processedMatch = this.findProcessedMatch(incoming);
     if (futureMatch) {
@@ -81,6 +182,25 @@ export class RetryHandler {
         requestEntry.destination === incoming.destination &&
         requestEntry.logTag === incoming.logTag
       ) {
+        if (
+          currentEntry &&
+          currentEntry.isRequest &&
+          belongsToSameMultiTagFamily(requestEntry, currentEntry) &&
+          belongsToSameMultiTagFamily(requestEntry, incoming) &&
+          currentEntry.logTag !== requestEntry.logTag
+        ) {
+          this.logger.info('Skipping retry match for older pending external call because current replay entry expects a different sibling in same endpoint family', {
+            currentEntryIndex: currentEntry.index,
+            currentEntryLogTag: currentEntry.logTag,
+            pendingEntryIndex: requestEntry.index,
+            pendingEntryLogTag: requestEntry.logTag,
+            incomingLogTag: incoming.logTag,
+            api: incoming.api,
+            contextKey
+          });
+          continue;
+        }
+
         // Check context match (loan_application_id, lender_org_id)
         let contextMatches = true;
         if (incoming.loanApplicationId && requestEntry.loanApplicationId) {
@@ -88,6 +208,18 @@ export class RetryHandler {
         }
         if (contextMatches && incoming.lenderOrgId && requestEntry.lenderOrgId) {
           contextMatches = incoming.lenderOrgId === requestEntry.lenderOrgId;
+        }
+
+        if (contextMatches && !matchesKfsOpportunityId(incoming, requestEntry)) {
+          this.logger.info('Skipping retry match because KFS opportunity id differs', {
+            api: incoming.api,
+            contextKey,
+            incomingOpportunityId: extractOpportunityId(incoming),
+            pendingOpportunityId: extractOpportunityId(requestEntry),
+            pendingEntryIndex: requestEntry.index,
+            pendingEntryLogTag: requestEntry.logTag
+          });
+          continue;
         }
 
         // For async parallel calls, lenderOrgId MUST match - don't treat as retry if different lenders
@@ -158,6 +290,24 @@ export class RetryHandler {
         entry.destination === incoming.destination &&
         entry.logTag === incoming.logTag
       ) {
+        if (
+          currentEntry &&
+          currentEntry.isRequest &&
+          belongsToSameMultiTagFamily(entry, currentEntry) &&
+          belongsToSameMultiTagFamily(entry, incoming) &&
+          currentEntry.logTag !== entry.logTag
+        ) {
+          this.logger.info('Skipping completed-retry match because current replay entry expects a different sibling in same endpoint family', {
+            currentEntryIndex: currentEntry.index,
+            currentEntryLogTag: currentEntry.logTag,
+            processedEntryIndex: entry.index,
+            processedEntryLogTag: entry.logTag,
+            incomingLogTag: incoming.logTag,
+            api: incoming.api
+          });
+          continue;
+        }
+
         this.logger.debug('Entry matches source/dest/logTag');
         // Check context match
         let contextMatches = true;
@@ -183,6 +333,17 @@ export class RetryHandler {
         } else if (contextMatches && incoming.lenderOrgId && entry.lenderOrgId) {
           // Non-async calls: lenderOrgId must match if present
           contextMatches = incoming.lenderOrgId === entry.lenderOrgId;
+        }
+
+        if (contextMatches && !matchesKfsOpportunityId(incoming, entry)) {
+          this.logger.info('Skipping completed-retry match because KFS opportunity id differs', {
+            api: incoming.api,
+            incomingOpportunityId: extractOpportunityId(incoming),
+            processedOpportunityId: extractOpportunityId(entry),
+            processedEntryIndex: entry.index,
+            processedEntryLogTag: entry.logTag
+          });
+          continue;
         }
 
         if (contextMatches) {

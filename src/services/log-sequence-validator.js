@@ -3,6 +3,26 @@ import { isAsyncParallelApi, normalizeSourceDestination } from '../config.js';
 import { canonicalRequestLogTag } from './log-tag-normalizer.js';
 import { extractTraceLogMethod, extractTraceLogUrl } from './replay-request-resolver.js';
 
+function extractOpportunityId(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (typeof value.opportunityid === 'string' && value.opportunityid) {
+    return value.opportunityid;
+  }
+
+  if (value.payload && typeof value.payload === 'object') {
+    return extractOpportunityId(value.payload);
+  }
+
+  if (value.body && typeof value.body === 'object') {
+    return extractOpportunityId(value.body);
+  }
+
+  return null;
+}
+
 /**
  * LogEntry represents a parsed log entry from the trace
  */
@@ -505,6 +525,14 @@ export class LogSequenceValidator {
     // Compare lenderOrgId if present in expected entry (for non-async calls)
     if (expected.lenderOrgId && incoming.lenderOrgId) {
       if (expected.lenderOrgId !== incoming.lenderOrgId) {
+        return false;
+      }
+    }
+
+    if (expected.api === '/prod/MOCK_DATA' && incoming.api === '/prod/MOCK_DATA') {
+      const expectedOpportunityId = extractOpportunityId(expected);
+      const incomingOpportunityId = extractOpportunityId(incoming);
+      if (expectedOpportunityId && incomingOpportunityId && expectedOpportunityId !== incomingOpportunityId) {
         return false;
       }
     }

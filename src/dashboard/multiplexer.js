@@ -11,6 +11,68 @@ export function createMultiplexerServer() {
   const app = express();
   const registry = new SessionOrchestratorRegistry();
 
+  function buildBodyPreview(value, limit = 1200) {
+    if (value === undefined) return '<undefined>';
+    try {
+      const serialized = JSON.stringify(value);
+      if (!serialized) return '<empty>';
+      return serialized.length > limit ? `${serialized.slice(0, limit)}...<truncated>` : serialized;
+    } catch (_error) {
+      return '<unserializable>';
+    }
+  }
+
+  function getIncomingHeader(req, headerName) {
+    return req.headers[headerName] || req.headers[headerName.toLowerCase()] || null;
+  }
+
+  function extractIncomingLenderOrgId(req) {
+    return req.body?.lender_org_id ||
+      req.body?.themisDetail?.lenderOrgId ||
+      req.body?.lenderOrgId ||
+      getIncomingHeader(req, 'x-lender-org-id');
+  }
+
+  function resolveMappingFromHeader(api, req) {
+    const headerLogTag = getIncomingHeader(req, 'x-logtag');
+    const headerSourceDestination = getIncomingHeader(req, 'x-source_destination');
+
+    if (!headerLogTag || typeof headerLogTag !== 'string' || !headerLogTag.trim()) {
+      return null;
+    }
+
+    const normalizedHeaderLogTag = headerLogTag.trim().endsWith('_REQUEST')
+      ? headerLogTag.trim()
+      : `${headerLogTag.trim()}_REQUEST`;
+
+    if (headerSourceDestination && typeof headerSourceDestination === 'string' && headerSourceDestination.trim()) {
+      return {
+        logTag: normalizedHeaderLogTag,
+        api,
+        sourceDestination: headerSourceDestination.trim()
+      };
+    }
+
+    const baseMapping = getApiMapping(api, {
+      payload: req.body,
+      headers: req.headers
+    });
+    if (!baseMapping) {
+      return null;
+    }
+
+    let sourceDestination = baseMapping.sourceDestination;
+    if (api === '/lsp/generateKFS' && extractIncomingLenderOrgId(req)) {
+      sourceDestination = 'GATEWAY_LENDER';
+    }
+
+    return {
+      ...baseMapping,
+      logTag: normalizedHeaderLogTag,
+      sourceDestination
+    };
+  }
+
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ extended: true }));
 
@@ -48,12 +110,25 @@ export function createMultiplexerServer() {
       ?.slice(previewOrchestrator?.validator?.currentIndex || 0, (previewOrchestrator?.validator?.currentIndex || 0) + 8)
       ?.map(entry => entry?.logTag)
       ?.filter(Boolean) || [];
-    const mapping = getApiMapping(api, {
+    const lookaheadEntries = previewOrchestrator?.validator?.entries
+      ?.slice(previewOrchestrator?.validator?.currentIndex || 0, (previewOrchestrator?.validator?.currentIndex || 0) + 8)
+      ?.map(entry => ({ logTag: entry?.logTag, index: entry?.index }))
+      ?.filter(entry => entry?.logTag) || [];
+    const headerDerivedMapping = resolveMappingFromHeader(api, req);
+    const configDerivedMapping = getApiMapping(api, {
       payload: req.body,
       headers: req.headers,
       nextExpectedLogTag: nextExpectedEntry?.logTag || null,
-      lookaheadLogTags
+      lookaheadLogTags,
+      lookaheadEntries,
+      currentReplayIndex: previewOrchestrator?.validator?.currentIndex || 0,
+      replayScopeKey:
+        previewOrchestrator?.config?.registrySessionId ||
+        previewOrchestrator?.orderId ||
+        orderId ||
+        'multiplexer-preview'
     });
+    const mapping = headerDerivedMapping || configDerivedMapping;
 
     if (!mapping) {
       logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
@@ -102,6 +177,35 @@ export function createMultiplexerServer() {
     const destination = parts[1];
     const logTag = mapping.logTag;
     const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;
+
+    logger.info('ART_MULTIPLEXER_INCOMING_MAPPING_DEBUG', {
+      api,
+      method: req.method,
+      requestId,
+      rawHeaders: req.headers,
+      rawBodyPreview: buildBodyPreview(req.body),
+      headerDerived: {
+        logTag: getIncomingHeader(req, 'x-logtag'),
+        sourceDestination: getIncomingHeader(req, 'x-source_destination'),
+        mapping: headerDerivedMapping
+      },
+      configDerived: configDerivedMapping,
+      finalized: {
+        logTag,
+        sourceDestination: mapping.sourceDestination,
+        source,
+        destination
+      },
+      nextExpectedEntry: nextExpectedEntry
+        ? {
+            index: nextExpectedEntry.index,
+            logTag: nextExpectedEntry.logTag,
+            sourceDestination: nextExpectedEntry.sourceDestination
+          }
+        : null,
+      lookaheadEntries,
+      activeSessionOrderId: orchestrator?.orderId || null
+    });
 
     try {
       const result = await orchestrator.handleIncomingRequest({

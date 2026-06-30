@@ -435,6 +435,18 @@ export class StateManager {
         data.destination === criteria.destination &&
         data.logTag === criteria.logTag
       ) {
+        if (criteria.opportunityId) {
+          const bufferedOpportunityId =
+            data?.payload?.opportunityid ||
+            data?.payload?.body?.opportunityid ||
+            data?.opportunityid ||
+            data?.body?.opportunityid ||
+            null;
+          if (bufferedOpportunityId && bufferedOpportunityId !== criteria.opportunityId) {
+            continue;
+          }
+        }
+
         // For async parallel calls, also check lenderOrgId if provided
         if (criteria.lenderOrgId && data.lenderOrgId) {
           if (data.lenderOrgId !== criteria.lenderOrgId) {

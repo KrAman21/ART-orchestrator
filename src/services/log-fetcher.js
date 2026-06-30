@@ -56,6 +56,10 @@ function shouldPreserveWithoutPayload(logTag, traceRoute) {
   );
 }
 
+function shouldDropDottedLogTag(logTag) {
+  return typeof logTag === 'string' && logTag.includes('.');
+}
+
 export function compareLogsForReplay(left, right) {
   const createdAtDiff = getCreatedAtTime(left) - getCreatedAtTime(right);
   if (createdAtDiff !== 0) {
@@ -1007,6 +1011,10 @@ function shouldSkipLog(log) {
     return true;
   }
 
+  if (logTag === 'LSP-VerifyLenderOTPStatus_RESPONSE') {
+    return true;
+  }
+
   // Loan status async callback is logged twice in the journey:
   // once as the actionable GATEWAY_LSP pair and again as a redundant
   // GATEWAY_CORE LoanStatusResponse request/response echo.
@@ -1018,6 +1026,10 @@ function shouldSkipLog(log) {
   }
   
   if (!logTag || logTag === '') {
+    return true;
+  }
+
+  if (shouldDropDottedLogTag(logTag)) {
     return true;
   }
   
@@ -1217,6 +1229,11 @@ export async function filterAndSortLogs(logs, outputPath = null) {
         console.log(`First-level filter: dropping checkout hard eligibility log at sorted index ${index}, log_tag: ${logTag}`);
       }
 
+      return false;
+    }
+
+    if (shouldDropDottedLogTag(logTag)) {
+      console.log(`First-level filter: dropping dotted log tag at sorted index ${index}, trace_route: ${traceRoute}, log_tag: ${logTag}`);
       return false;
     }
 

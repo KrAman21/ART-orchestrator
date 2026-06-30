@@ -1,6 +1,6 @@
 import express from 'express';
 import { logger } from './utils/logger.js';
-import { getApiMapping, QAPI_CONFIG } from './config.js';
+import { API_TO_LOGTAG_MAP, getApiMapping, QAPI_CONFIG } from './config.js';
 import { fetchOrderIdsFromQAPI } from './services/http-client.js';
 import { writeFile } from 'fs/promises';
 import { resolve } from 'path';
@@ -16,6 +16,65 @@ import { MultiSourceLogFetcher } from './log-fetcher/multi-source-log-fetcher.js
  */
 export function createServer(orchestrator) {
   const app = express();
+
+  function buildBodyPreview(value, limit = 1200) {
+    if (value === undefined) return '<undefined>';
+    try {
+      const serialized = JSON.stringify(value);
+      if (!serialized) return '<empty>';
+      return serialized.length > limit ? `${serialized.slice(0, limit)}...<truncated>` : serialized;
+    } catch (_error) {
+      return '<unserializable>';
+    }
+  }
+
+  function getIncomingHeader(req, headerName) {
+    return req.headers[headerName] || req.headers[headerName.toLowerCase()] || null;
+  }
+
+  function extractIncomingLenderOrgId(req) {
+    return req.body?.lender_org_id ||
+      req.body?.themisDetail?.lenderOrgId ||
+      req.body?.lenderOrgId ||
+      getIncomingHeader(req, 'x-lender-org-id');
+  }
+
+  function resolveMappingFromHeader(api, req) {
+    const headerLogTag = getIncomingHeader(req, 'x-logtag');
+    const headerSourceDestination = getIncomingHeader(req, 'x-source_destination');
+
+    if (!headerLogTag || typeof headerLogTag !== 'string' || !headerLogTag.trim()) {
+      return null;
+    }
+
+    const normalizedHeaderLogTag = headerLogTag.trim().endsWith('_REQUEST')
+      ? headerLogTag.trim()
+      : `${headerLogTag.trim()}_REQUEST`;
+
+    if (headerSourceDestination && typeof headerSourceDestination === 'string' && headerSourceDestination.trim()) {
+      return {
+        logTag: normalizedHeaderLogTag,
+        api,
+        sourceDestination: headerSourceDestination.trim()
+      };
+    }
+
+    const baseMapping = API_TO_LOGTAG_MAP[api];
+    if (!baseMapping) {
+      return null;
+    }
+
+    let sourceDestination = baseMapping.sourceDestination;
+    if (api === '/lsp/generateKFS' && extractIncomingLenderOrgId(req)) {
+      sourceDestination = 'GATEWAY_LENDER';
+    }
+
+    return {
+      ...baseMapping,
+      logTag: normalizedHeaderLogTag,
+      sourceDestination
+    };
+  }
 
   // Middleware
   app.use(express.json({ limit: '10mb' }));
@@ -65,15 +124,28 @@ export function createServer(orchestrator) {
         ?.slice(orchestrator.validator?.currentIndex || 0, (orchestrator.validator?.currentIndex || 0) + 8)
         ?.map(entry => entry?.logTag)
         ?.filter(Boolean) || [];
+      const lookaheadEntries = orchestrator.validator?.entries
+        ?.slice(orchestrator.validator?.currentIndex || 0, (orchestrator.validator?.currentIndex || 0) + 8)
+        ?.map(entry => ({ logTag: entry?.logTag, index: entry?.index }))
+        ?.filter(entry => entry?.logTag) || [];
       
 
-      // Determine source/destination and logTag from API endpoint mapping
-      const mapping = getApiMapping(api, {
+      const headerLogTag = getIncomingHeader(req, 'x-logtag');
+      const headerSourceDestination = getIncomingHeader(req, 'x-source_destination');
+      const headerDerivedMapping = resolveMappingFromHeader(api, req);
+
+      // Prefer explicit logTag from the request headers. If absent, fall back
+      // to contextual API mapping to infer the logTag from the route.
+      const configDerivedMapping = getApiMapping(api, {
         payload: req.body,
         headers: req.headers,
         nextExpectedLogTag: nextExpectedEntry?.logTag || null,
-        lookaheadLogTags
+        lookaheadLogTags,
+        lookaheadEntries,
+        currentReplayIndex: orchestrator.validator?.currentIndex || 0,
+        replayScopeKey: orchestrator.config?.registrySessionId || orchestrator.orderId || 'single-server'
       });
+      const mapping = headerDerivedMapping || configDerivedMapping;
       if (!mapping) {
         // Unknown API endpoint - likely a webhook/callback, ignore gracefully
         logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
@@ -86,6 +158,34 @@ export function createServer(orchestrator) {
       const destination = parts[1];
       const logTag = mapping.logTag;
 
+      logger.info('ART_INCOMING_MAPPING_DEBUG', {
+        api,
+        method: req.method,
+        requestId,
+        rawHeaders: req.headers,
+        rawBodyPreview: buildBodyPreview(payload),
+        headerDerived: {
+          logTag: headerLogTag,
+          sourceDestination: headerSourceDestination,
+          mapping: headerDerivedMapping
+        },
+        configDerived: configDerivedMapping,
+        finalized: {
+          logTag,
+          sourceDestination: mapping.sourceDestination,
+          source,
+          destination
+        },
+        nextExpectedEntry: nextExpectedEntry
+          ? {
+              index: nextExpectedEntry.index,
+              logTag: nextExpectedEntry.logTag,
+              sourceDestination: nextExpectedEntry.sourceDestination
+            }
+          : null,
+        lookaheadEntries
+      });
+
       // console.log('Request headers: ', req.headers);
       
       // Log incoming request details
@@ -97,6 +197,8 @@ export function createServer(orchestrator) {
         logTag: logTag,
         headers: {
           'x-request-id': req.headers['x-request-id'],
+          'x-logtag': headerLogTag,
+          'x-source_destination': getIncomingHeader(req, 'x-source_destination'),
           'x-art-callback-url': req.headers['x-art-callback-url'],
           'x-art-enabled': req.headers['x-art-enabled'],
           'content-type': req.headers['content-type'],
@@ -110,11 +212,7 @@ export function createServer(orchestrator) {
       // Extract correlation fields from payload for matching
       const loanApplicationId = payload?.loan_application_id || payload?.loanApplicationId || req.headers['x-loan-application-id'];
       // lender_org_id can be at top level, nested in themisDetail, or in headers
-      const lenderOrgId = payload?.lender_org_id ||
-                          payload?.themisDetail?.lenderOrgId ||
-                          payload?.lenderOrgId ||
-                          req.headers['x-lender-org-id'] ||
-                          req.headers['X-Lender-Org-Id'];
+      const lenderOrgId = extractIncomingLenderOrgId(req);
 
       if (api === '/v1.0/fetchOfferResponse') {
         logger.info('FETCH_OFFER_ASYNC callback received on direct server', {
