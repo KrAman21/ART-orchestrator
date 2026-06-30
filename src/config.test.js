@@ -180,3 +180,87 @@ test('getApiMapping resolves /telcosprod/telcoauth as otp-authentication request
     headers: {}
   });
 });
+
+test('getApiMapping resolves repeated /prod/MOCK_DATA calls in replay order using lookahead indices', () => {
+  const firstMapping = getApiMapping('/prod/MOCK_DATA', {
+    payload: {},
+    headers: {},
+    replayScopeKey: 'order-1',
+    currentReplayIndex: 49,
+    nextExpectedLogTag: 'KFS SERVICE API :: PARENT_REQUEST',
+    lookaheadEntries: [
+      { logTag: 'KFS SERVICE API :: PARENT_REQUEST', index: 49 },
+      { logTag: 'KFS SERVICE API :: PARENT_RESPONSE', index: 50 },
+      { logTag: 'KFS SERVICE API :: CHILD_REQUEST', index: 51 }
+    ]
+  });
+
+  const secondMapping = getApiMapping('/prod/MOCK_DATA', {
+    payload: {},
+    headers: {},
+    replayScopeKey: 'order-1',
+    currentReplayIndex: 51,
+    nextExpectedLogTag: 'KFS SERVICE API :: CHILD_REQUEST',
+    lookaheadEntries: [
+      { logTag: 'KFS SERVICE API :: PARENT_REQUEST', index: 49 },
+      { logTag: 'KFS SERVICE API :: CHILD_REQUEST', index: 51 },
+      { logTag: 'KFS SERVICE API :: CHILD_RESPONSE', index: 52 }
+    ]
+  });
+
+  assert.deepEqual(firstMapping, {
+    logTag: 'KFS SERVICE API :: PARENT_REQUEST',
+    api: '/prod/MOCK_DATA',
+    sourceDestination: 'GATEWAY_LENDER',
+    headers: {}
+  });
+
+  assert.deepEqual(secondMapping, {
+    logTag: 'KFS SERVICE API :: CHILD_REQUEST',
+    api: '/prod/MOCK_DATA',
+    sourceDestination: 'GATEWAY_LENDER',
+    headers: {}
+  });
+});
+
+test('getApiMapping keeps /prod/MOCK_DATA multitag cursor isolated per replay scope', () => {
+  const firstOrderParent = getApiMapping('/prod/MOCK_DATA', {
+    payload: {},
+    headers: {},
+    replayScopeKey: 'order-a',
+    currentReplayIndex: 53,
+    nextExpectedLogTag: 'KFS SERVICE API :: PARENT_REQUEST',
+    lookaheadEntries: [
+      { logTag: 'KFS SERVICE API :: PARENT_REQUEST', index: 53 },
+      { logTag: 'KFS SERVICE API :: CHILD_REQUEST', index: 57 }
+    ]
+  });
+
+  const secondOrderParent = getApiMapping('/prod/MOCK_DATA', {
+    payload: {},
+    headers: {},
+    replayScopeKey: 'order-b',
+    currentReplayIndex: 53,
+    nextExpectedLogTag: 'KFS SERVICE API :: PARENT_REQUEST',
+    lookaheadEntries: [
+      { logTag: 'KFS SERVICE API :: PARENT_REQUEST', index: 53 },
+      { logTag: 'KFS SERVICE API :: CHILD_REQUEST', index: 57 }
+    ]
+  });
+
+  const firstOrderChild = getApiMapping('/prod/MOCK_DATA', {
+    payload: {},
+    headers: {},
+    replayScopeKey: 'order-a',
+    currentReplayIndex: 57,
+    nextExpectedLogTag: 'KFS SERVICE API :: CHILD_REQUEST',
+    lookaheadEntries: [
+      { logTag: 'KFS SERVICE API :: PARENT_REQUEST', index: 53 },
+      { logTag: 'KFS SERVICE API :: CHILD_REQUEST', index: 57 }
+    ]
+  });
+
+  assert.equal(firstOrderParent.logTag, 'KFS SERVICE API :: PARENT_REQUEST');
+  assert.equal(secondOrderParent.logTag, 'KFS SERVICE API :: PARENT_REQUEST');
+  assert.equal(firstOrderChild.logTag, 'KFS SERVICE API :: CHILD_REQUEST');
+});

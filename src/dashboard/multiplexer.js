@@ -48,11 +48,22 @@ export function createMultiplexerServer() {
       ?.slice(previewOrchestrator?.validator?.currentIndex || 0, (previewOrchestrator?.validator?.currentIndex || 0) + 8)
       ?.map(entry => entry?.logTag)
       ?.filter(Boolean) || [];
+    const lookaheadEntries = previewOrchestrator?.validator?.entries
+      ?.slice(previewOrchestrator?.validator?.currentIndex || 0, (previewOrchestrator?.validator?.currentIndex || 0) + 8)
+      ?.map(entry => ({ logTag: entry?.logTag, index: entry?.index }))
+      ?.filter(entry => entry?.logTag) || [];
     const mapping = getApiMapping(api, {
       payload: req.body,
       headers: req.headers,
       nextExpectedLogTag: nextExpectedEntry?.logTag || null,
-      lookaheadLogTags
+      lookaheadLogTags,
+      lookaheadEntries,
+      currentReplayIndex: previewOrchestrator?.validator?.currentIndex || 0,
+      replayScopeKey:
+        previewOrchestrator?.config?.registrySessionId ||
+        previewOrchestrator?.orderId ||
+        orderId ||
+        'multiplexer-preview'
     });
 
     if (!mapping) {

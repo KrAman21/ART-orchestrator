@@ -88,6 +88,27 @@ test('filterAndSortLogs keeps LSP-GetAgreementDataStatus_REQUEST and normalizes 
   assert.equal(filtered[0].message.trace_route, 'APP_CORE');
 });
 
+test('filterAndSortLogs drops dotted log tags at first level', async () => {
+  const logs = [
+    {
+      messageNumber: 1,
+      message: {
+        created_at: '2026-06-29T10:00:00.000Z',
+        log_tag: 'TRANSACTION.READY_FOR_LOAN_CREATION',
+        trace_route: 'CORE_APP',
+        request_id: 'txn-ready-1',
+        trace_response: {
+          ok: true
+        }
+      }
+    }
+  ];
+
+  const filtered = await filterAndSortLogs(logs);
+
+  assert.equal(filtered.length, 0);
+});
+
 test('filterOrchestratorSkippableLogs keeps GATEWAY_LSP loan status async pair and drops redundant GATEWAY_CORE echo pair', async () => {
   const logs = [
     buildLog({

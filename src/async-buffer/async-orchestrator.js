@@ -38,6 +38,26 @@ function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
   return merchantSpecificEndpoints[merchantId]?.[entry.logTag] || endpointConfig?.endpoint || null;
 }
 
+function extractOpportunityId(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (typeof value.opportunityid === 'string' && value.opportunityid) {
+    return value.opportunityid;
+  }
+
+  if (value.payload && typeof value.payload === 'object') {
+    return extractOpportunityId(value.payload);
+  }
+
+  if (value.body && typeof value.body === 'object') {
+    return extractOpportunityId(value.body);
+  }
+
+  return null;
+}
+
 function shouldPreserveReplayLenderId(logTag, keyHint) {
   return logTag === 'GetLenderFlows_REQUEST' && keyHint === 'lenderId';
 }
@@ -492,6 +512,168 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       this.requestForwarder.callbacks.shouldAutoProcessNextLogEntry = () => false;
       this.requestForwarder.callbacks.shouldBlockOnHeldExternalRequest = () => false;
     }
+  }
+
+  getMultiTagEndpointFamily(api, source, destination) {
+    if (source !== 'GATEWAY' || destination !== 'LENDER') {
+      return null;
+    }
+
+    const families = {
+      '/prod/MOCK_DATA': [
+        'KYC SERVICE API_REQUEST',
+        'KFS SERVICE API :: PARENT_REQUEST',
+        'KFS SERVICE API :: CHILD_REQUEST',
+        'KFS SIGNING API :: PARENT_REQUEST',
+        'KFS SIGNING API :: CHILD_REQUEST'
+      ],
+      '/prod/polling': [
+        'POLLING API :: LINE_STATUS_REQUEST',
+        'POLLING API :: FORCE_LOAN_STATUS_SYNC_REQUEST'
+      ],
+      '/MOCK_DATA/polling': [
+        'POLLING API :: LINE_STATUS_REQUEST',
+        'POLLING API :: FORCE_LOAN_STATUS_SYNC_REQUEST'
+      ],
+      '/telcosprod/telcoauth': [
+        'OTP GENERATION API_REQUEST',
+        'OTP AUTHENTICATION API_REQUEST'
+      ]
+    };
+
+    return families[api] || null;
+  }
+
+  findNextUnprocessedMultiTagEntry(api, source, destination, familyLogTags = []) {
+    if (!api || !Array.isArray(familyLogTags) || familyLogTags.length === 0) {
+      return null;
+    }
+
+    for (const entry of this.validator.entries) {
+      if (entry.index < this.validator.currentIndex) continue;
+      if (this.validator.processedIndices.has(entry.index)) continue;
+      if (!entry.isRequest) continue;
+      if (entry.source !== source || entry.destination !== destination) continue;
+      if (entry.api !== api) continue;
+      if (!familyLogTags.includes(entry.logTag)) continue;
+      return entry;
+    }
+
+    return null;
+  }
+
+  findUnprocessedMultiTagEntryByOpportunityId(api, source, destination, familyLogTags = [], opportunityId = null) {
+    if (!api || !opportunityId || !Array.isArray(familyLogTags) || familyLogTags.length === 0) {
+      return null;
+    }
+
+    for (const entry of this.validator.entries) {
+      if (entry.index < this.validator.currentIndex) continue;
+      if (this.validator.processedIndices.has(entry.index)) continue;
+      if (!entry.isRequest) continue;
+      if (entry.source !== source || entry.destination !== destination) continue;
+      if (entry.api !== api) continue;
+      if (!familyLogTags.includes(entry.logTag)) continue;
+
+      const expectedOpportunityId = extractOpportunityId(entry);
+      if (expectedOpportunityId && expectedOpportunityId === opportunityId) {
+        return entry;
+      }
+    }
+
+    return null;
+  }
+
+  maybeRemapIncomingMultiTagSibling(incoming) {
+    const normalizedSourceDestination = normalizeSourceDestination(
+      `${incoming.source}_${incoming.destination}`,
+      incoming.logTag
+    );
+    const [source, destination] = normalizedSourceDestination.split('_');
+    const familyLogTags = this.getMultiTagEndpointFamily(incoming.api, source, destination);
+
+    if (!familyLogTags || !familyLogTags.includes(incoming.logTag)) {
+      return incoming;
+    }
+
+    const incomingOpportunityId = extractOpportunityId(incoming);
+    const opportunityMatchedEntry = this.findUnprocessedMultiTagEntryByOpportunityId(
+      incoming.api,
+      source,
+      destination,
+      familyLogTags,
+      incomingOpportunityId
+    );
+
+    if (opportunityMatchedEntry && opportunityMatchedEntry.logTag !== incoming.logTag) {
+      logger.info('Reclassified incoming multi-tag lender request by exact opportunity id before retry handling', {
+        api: incoming.api,
+        opportunityId: incomingOpportunityId,
+        originalLogTag: incoming.logTag,
+        remappedLogTag: opportunityMatchedEntry.logTag,
+        currentReplayIndex: this.validator.currentIndex,
+        targetReplayIndex: opportunityMatchedEntry.index,
+        requestId: incoming.requestId,
+        loanApplicationId: incoming.loanApplicationId || null,
+        lenderOrgId: incoming.lenderOrgId || null
+      });
+
+      return {
+        ...incoming,
+        logTag: opportunityMatchedEntry.logTag
+      };
+    }
+
+    const nextFamilyEntry = this.findNextUnprocessedMultiTagEntry(
+      incoming.api,
+      source,
+      destination,
+      familyLogTags
+    );
+
+    if (!nextFamilyEntry || nextFamilyEntry.logTag === incoming.logTag) {
+      return incoming;
+    }
+
+    const pendingSameTag = Array.from(this.pendingExternalRequests.values()).some(pendingInfo => {
+      const requestEntry = pendingInfo?.requestEntry;
+      return (
+        requestEntry?.source === source &&
+        requestEntry?.destination === destination &&
+        requestEntry?.api === incoming.api &&
+        requestEntry?.logTag === incoming.logTag &&
+        (
+          !incoming.loanApplicationId ||
+          !requestEntry.loanApplicationId ||
+          incoming.loanApplicationId === requestEntry.loanApplicationId
+        ) &&
+        (
+          !incoming.lenderOrgId ||
+          !requestEntry.lenderOrgId ||
+          incoming.lenderOrgId === requestEntry.lenderOrgId
+        )
+      );
+    });
+
+    if (!pendingSameTag) {
+      return incoming;
+    }
+
+    logger.info('Reclassified incoming multi-tag lender request to next replay sibling before retry handling', {
+      api: incoming.api,
+      originalLogTag: incoming.logTag,
+      remappedLogTag: nextFamilyEntry.logTag,
+      currentReplayIndex: this.validator.currentIndex,
+      targetReplayIndex: nextFamilyEntry.index,
+      requestId: incoming.requestId,
+      loanApplicationId: incoming.loanApplicationId || null,
+      lenderOrgId: incoming.lenderOrgId || null
+    });
+
+    return {
+      ...incoming,
+      logTag: nextFamilyEntry.logTag
+    };
   }
 
   markStuckEntryResolved(entryOrIndex, reason = 'explicit_resolution') {
@@ -2214,76 +2396,78 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       throw new Error('Orchestrator not running');
     }
 
-    this.recordObservedIncomingRequest(incoming);
+    const effectiveIncoming = this.maybeRemapIncomingMultiTagSibling(incoming);
+
+    this.recordObservedIncomingRequest(effectiveIncoming);
 
     const normalizedSourceDestination = normalizeSourceDestination(
-      `${incoming.source}_${incoming.destination}`,
-      incoming.logTag
+      `${effectiveIncoming.source}_${effectiveIncoming.destination}`,
+      effectiveIncoming.logTag
     );
 
     logger.info('ASYNC_ORCH_RECEIVING', {
-      source: incoming.source,
-      destination: incoming.destination,
-      api: incoming.api,
-      requestId: incoming.requestId,
-      logTag: incoming.logTag,
-      lenderOrgId: incoming.lenderOrgId
+      source: effectiveIncoming.source,
+      destination: effectiveIncoming.destination,
+      api: effectiveIncoming.api,
+      requestId: effectiveIncoming.requestId,
+      logTag: effectiveIncoming.logTag,
+      lenderOrgId: effectiveIncoming.lenderOrgId
     });
 
-    logger.logFinalIncoming(incoming.source, incoming.destination, incoming.api, incoming.payload, {
-      requestId: incoming.requestId,
-      logTag: incoming.logTag,
-      lenderOrgId: incoming.lenderOrgId,
-      loanApplicationId: incoming.loanApplicationId,
+    logger.logFinalIncoming(effectiveIncoming.source, effectiveIncoming.destination, effectiveIncoming.api, effectiveIncoming.payload, {
+      requestId: effectiveIncoming.requestId,
+      logTag: effectiveIncoming.logTag,
+      lenderOrgId: effectiveIncoming.lenderOrgId,
+      loanApplicationId: effectiveIncoming.loanApplicationId,
       sourceDestination: normalizedSourceDestination
     });
 
-    if (isThemisEligibilitySpecialCase(incoming.logTag) && incoming.source === 'GATEWAY' &&
-        (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
-      return await this.handleThemisEligibilityBatchAsync(incoming);
+    if (isThemisEligibilitySpecialCase(effectiveIncoming.logTag) && effectiveIncoming.source === 'GATEWAY' &&
+        (effectiveIncoming.destination === 'LENDER' || effectiveIncoming.destination === 'LSP' || effectiveIncoming.destination === 'THEMIS')) {
+      return await this.handleThemisEligibilityBatchAsync(effectiveIncoming);
     }
 
-    if (isThemisKfsSpecialCase(incoming.logTag) && incoming.source === 'GATEWAY' &&
-        (incoming.destination === 'LENDER' || incoming.destination === 'LSP' || incoming.destination === 'THEMIS')) {
-      return await this.handleThemisKFSBatchAsync(incoming);
+    if (isThemisKfsSpecialCase(effectiveIncoming.logTag) && effectiveIncoming.source === 'GATEWAY' &&
+        (effectiveIncoming.destination === 'LENDER' || effectiveIncoming.destination === 'LSP' || effectiveIncoming.destination === 'THEMIS')) {
+      return await this.handleThemisKFSBatchAsync(effectiveIncoming);
     }
 
-    const syntheticCompatibilityResponse = this.maybeHandleSyntheticFibeGenerateToken(incoming);
+    const syntheticCompatibilityResponse = this.maybeHandleSyntheticFibeGenerateToken(effectiveIncoming);
     if (syntheticCompatibilityResponse) {
       logger.info('Handled incoming request with synthetic compatibility response', {
-        source: incoming.source,
-        destination: incoming.destination,
-        logTag: incoming.logTag,
-        lenderOrgId: incoming.lenderOrgId,
-        requestId: incoming.requestId
+        source: effectiveIncoming.source,
+        destination: effectiveIncoming.destination,
+        logTag: effectiveIncoming.logTag,
+        lenderOrgId: effectiveIncoming.lenderOrgId,
+        requestId: effectiveIncoming.requestId
       });
       return syntheticCompatibilityResponse;
     }
 
-    const syntheticCheckoutStatusResponse = this.maybeHandleSyntheticFibeCheckoutStatus(incoming);
+    const syntheticCheckoutStatusResponse = this.maybeHandleSyntheticFibeCheckoutStatus(effectiveIncoming);
     if (syntheticCheckoutStatusResponse) {
       logger.info('Handled FIBE checkout status with synthetic compatibility response', {
-        source: incoming.source,
-        destination: incoming.destination,
-        logTag: incoming.logTag,
-        lenderOrgId: incoming.lenderOrgId,
-        requestId: incoming.requestId
+        source: effectiveIncoming.source,
+        destination: effectiveIncoming.destination,
+        logTag: effectiveIncoming.logTag,
+        lenderOrgId: effectiveIncoming.lenderOrgId,
+        requestId: effectiveIncoming.requestId
       });
       return syntheticCheckoutStatusResponse;
     }
 
-    const loanApplicationDataResponse = await this.maybePassThroughFetchLoanApplicationData(incoming);
+    const loanApplicationDataResponse = await this.maybePassThroughFetchLoanApplicationData(effectiveIncoming);
     if (loanApplicationDataResponse) {
       logger.info('Handled fetchLoanApplicationData with LSP pass-through response', {
-        source: incoming.source,
-        destination: incoming.destination,
-        logTag: incoming.logTag,
-        requestId: incoming.requestId
+        source: effectiveIncoming.source,
+        destination: effectiveIncoming.destination,
+        logTag: effectiveIncoming.logTag,
+        requestId: effectiveIncoming.requestId
       });
       return loanApplicationDataResponse;
     }
 
-    const directGatewayLenderResponse = await this.maybeHandleCurrentGatewayLenderRequest(incoming);
+    const directGatewayLenderResponse = await this.maybeHandleCurrentGatewayLenderRequest(effectiveIncoming);
     if (directGatewayLenderResponse) {
       return directGatewayLenderResponse;
     }
@@ -2291,20 +2475,20 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     // Let retry detection run before buffering.
     // Some lender callbacks legitimately repeat requests that were already
     // satisfied from replay logs, and those should reuse the cached response.
-    const retryResult = this.retryHandler.handleRetryRequest(incoming);
+    const retryResult = this.retryHandler.handleRetryRequest(effectiveIncoming);
     if (retryResult) {
       logger.info('Handled retried request asynchronously', {
-        source: incoming.source,
-        destination: incoming.destination,
-        api: incoming.api,
-        logTag: incoming.logTag
+        source: effectiveIncoming.source,
+        destination: effectiveIncoming.destination,
+        api: effectiveIncoming.api,
+        logTag: effectiveIncoming.logTag
       });
       return retryResult;
     }
 
     const parts = normalizedSourceDestination.split('_');
     const normalizedIncoming = {
-      ...incoming,
+      ...effectiveIncoming,
       source: parts[0],
       destination: parts[1]
     };
@@ -2320,7 +2504,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     });
 
     const directGatewayLenderLookaheadResponse =
-      await this.maybeHandleFutureGatewayLenderRequest(incoming, normalizedIncoming, validation);
+      await this.maybeHandleFutureGatewayLenderRequest(effectiveIncoming, normalizedIncoming, validation);
     if (directGatewayLenderLookaheadResponse) {
       return directGatewayLenderLookaheadResponse;
     }

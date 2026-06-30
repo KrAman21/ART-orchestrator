@@ -412,6 +412,7 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_GATEWAY|UpdateKYCRequest-LSP_REQUEST' : {endpoint: '/gateway/v3.3/kyc/updateKYCRequest', service: 'GW', method: 'POST', headers: {}},
   'CORE_GATEWAY|ProcessStatus_REQUEST' : {endpoint: '/v1.0/processStatus', method: 'POST', service: 'GW', headers: {}},
   'CORE_GATEWAY|VerifyLenderOTPRequest-LSP_REQUEST': {endpoint: '/gateway/v3.3/loan/verifyLoanAcceptanceRequest', method: 'POST', service: 'GW', headers: {}},
+  'CORE_GATEWAY|Capture_REQUEST':{endpoint :'/gateway/v3.3/capture', method: 'POST', service: 'GW', headers: {}},
   
   // ==================== GATEWAY_CORE (Gateway to Core - Responses/Callbacks) ====================
   'GATEWAY_CORE|LSP-Eligibility_INCOMING': { endpoint: '/v1/themis/eligibility/callback', method: 'POST', service: 'LSP', headers: {} },
@@ -1430,6 +1431,7 @@ export const API_TO_LOGTAG_MAP = {
   '/gateway/v1.0/hardEligibility': { logTag: 'LSP-HardEligibility_OUTGOING', api: '/gateway/v1.0/hardEligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v3.3/loan/triggerLoanAcceptanceRequest' :{logTag: 'TriggerLenderOTPRequest-LSP_REQUEST', api: '/gateway/v3.3/loan/triggerLoanAcceptanceRequest', sourceDestination: 'CORE_GATEWAY', headers: {}},
   '/gateway/v3.3/loan/verifyLoanAcceptanceRequest': {logTag: 'VerifyLenderOTPRequest-LSP_REQUEST', api: '/gateway/v3.3/loan/verifyLoanAcceptanceRequest', sourceDestination: 'CORE_GATEWAY', headers: {}},
+  '/gateway/v3.3/capture':{logTag:'Capture_REQUEST', api:'/gateway/v3.3/capture', sourceDestination:'CORE_GATEWAY', headers:{}},
   
   // REQUEST variants (used by logs.json)
   '/gateway/v1.0/eligibility-request': { logTag: 'LSP-Eligibility_REQUEST', api: '/gateway/v1.0/eligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },
@@ -1732,6 +1734,79 @@ function selectNearestLookaheadLogTag(preferredLogTags = [], lookaheadLogTags = 
   return null;
 }
 
+const MULTITAG_ENDPOINT_CURSOR_STATE = new Map();
+
+function buildMultitagCursorScopeKey(api, context = {}) {
+  const replayScopeKey =
+    context?.replayScopeKey ||
+    context?.sessionId ||
+    context?.orderId ||
+    context?.loanApplicationId ||
+    'global';
+
+  return `${api}::${replayScopeKey}`;
+}
+
+function buildLookaheadEntriesFromTags(lookaheadLogTags = [], currentReplayIndex = 0) {
+  if (!Array.isArray(lookaheadLogTags) || lookaheadLogTags.length === 0) {
+    return [];
+  }
+
+  return lookaheadLogTags
+    .filter(Boolean)
+    .map((logTag, offset) => ({
+      logTag,
+      index: Number(currentReplayIndex) + offset
+    }));
+}
+
+function selectNearestLookaheadLogTagWithCursor(api, preferredLogTags = [], context = {}) {
+  if (!api || !Array.isArray(preferredLogTags) || preferredLogTags.length === 0) {
+    return null;
+  }
+
+  const currentReplayIndex = Number.isFinite(context?.currentReplayIndex)
+    ? context.currentReplayIndex
+    : 0;
+  const lookaheadEntries = Array.isArray(context?.lookaheadEntries) && context.lookaheadEntries.length > 0
+    ? context.lookaheadEntries.filter(entry => entry && typeof entry.logTag === 'string')
+    : buildLookaheadEntriesFromTags(context?.lookaheadLogTags, currentReplayIndex);
+
+  if (lookaheadEntries.length === 0) {
+    return null;
+  }
+
+  const stateKey = buildMultitagCursorScopeKey(api, context);
+  const state = MULTITAG_ENDPOINT_CURSOR_STATE.get(stateKey);
+  if (state && Number.isFinite(state.lastReplayIndex) && currentReplayIndex < state.lastReplayIndex) {
+    MULTITAG_ENDPOINT_CURSOR_STATE.delete(stateKey);
+  }
+
+  const effectiveState = MULTITAG_ENDPOINT_CURSOR_STATE.get(stateKey) || {
+    lastResolvedIndex: -1,
+    lastReplayIndex: -1
+  };
+
+  const matchingEntries = lookaheadEntries.filter(entry =>
+    preferredLogTags.includes(entry.logTag)
+  );
+
+  if (matchingEntries.length === 0) {
+    return null;
+  }
+
+  const candidate =
+    matchingEntries.find(entry => Number.isFinite(entry.index) && entry.index > effectiveState.lastResolvedIndex) ||
+    matchingEntries[0];
+
+  MULTITAG_ENDPOINT_CURSOR_STATE.set(stateKey, {
+    lastResolvedIndex: Number.isFinite(candidate.index) ? candidate.index : effectiveState.lastResolvedIndex,
+    lastReplayIndex: currentReplayIndex
+  });
+
+  return candidate.logTag;
+}
+
 /**
  * Get full mapping info for an API endpoint
  * @param {string} api - API endpoint path
@@ -1750,6 +1825,12 @@ export function getApiMapping(api, context = {}) {
   const lookaheadLogTags = Array.isArray(context?.lookaheadLogTags)
     ? context.lookaheadLogTags.filter(Boolean)
     : [];
+  const currentReplayIndex = Number.isFinite(context?.currentReplayIndex)
+    ? context.currentReplayIndex
+    : 0;
+  const lookaheadEntries = Array.isArray(context?.lookaheadEntries)
+    ? context.lookaheadEntries.filter(entry => entry && typeof entry.logTag === 'string')
+    : buildLookaheadEntriesFromTags(lookaheadLogTags, currentReplayIndex);
 
   if (
     ['/api/v1/status-check', '/prod/status-check', '/MOCK_DATA/status-check'].includes(api) &&
@@ -1765,7 +1846,8 @@ export function getApiMapping(api, context = {}) {
   }
 
   if (api === '/prod/MOCK_DATA') {
-    const contextualMockDataLogTag = selectNearestLookaheadLogTag(
+    const contextualMockDataLogTag = selectNearestLookaheadLogTagWithCursor(
+      api,
       [
         'KFS SERVICE API :: PARENT_REQUEST',
         'KYC SERVICE API_REQUEST',
@@ -1773,10 +1855,15 @@ export function getApiMapping(api, context = {}) {
         'KFS SIGNING API :: CHILD_REQUEST',
         'KFS SIGNING API :: PARENT_REQUEST'
       ],
-      [
-        nextExpectedLogTag,
-        ...lookaheadLogTags
-      ]
+      {
+        currentReplayIndex,
+        replayScopeKey: context?.replayScopeKey,
+        lookaheadEntries: [
+          ...(nextExpectedLogTag ? [{ logTag: nextExpectedLogTag, index: currentReplayIndex }] : []),
+          ...lookaheadEntries
+        ],
+        lookaheadLogTags
+      }
     );
 
     if (contextualMockDataLogTag) {
@@ -1788,15 +1875,21 @@ export function getApiMapping(api, context = {}) {
   }
 
   if (['/pb-uat-polling', '/prod/polling', '/MOCK_DATA/polling'].includes(api)) {
-    const contextualPollingLogTag = selectNearestLookaheadLogTag(
+    const contextualPollingLogTag = selectNearestLookaheadLogTagWithCursor(
+      api,
       [
         'POLLING API :: LINE_STATUS_REQUEST',
         'POLLING API :: FORCE_LOAN_STATUS_SYNC_REQUEST'
       ],
-      [
-        nextExpectedLogTag,
-        ...lookaheadLogTags
-      ]
+      {
+        currentReplayIndex,
+        replayScopeKey: context?.replayScopeKey,
+        lookaheadEntries: [
+          ...(nextExpectedLogTag ? [{ logTag: nextExpectedLogTag, index: currentReplayIndex }] : []),
+          ...lookaheadEntries
+        ],
+        lookaheadLogTags
+      }
     );
 
     if (contextualPollingLogTag) {
@@ -1808,15 +1901,21 @@ export function getApiMapping(api, context = {}) {
   }
 
   if (api === '/telcosprod/telcoauth') {
-    const contextualTelcoAuthLogTag = selectNearestLookaheadLogTag(
+    const contextualTelcoAuthLogTag = selectNearestLookaheadLogTagWithCursor(
+      api,
       [
         'OTP GENERATION API_REQUEST',
         'OTP AUTHENTICATION API_REQUEST'
       ],
-      [
-        nextExpectedLogTag,
-        ...lookaheadLogTags
-      ]
+      {
+        currentReplayIndex,
+        replayScopeKey: context?.replayScopeKey,
+        lookaheadEntries: [
+          ...(nextExpectedLogTag ? [{ logTag: nextExpectedLogTag, index: currentReplayIndex }] : []),
+          ...lookaheadEntries
+        ],
+        lookaheadLogTags
+      }
     );
 
     if (contextualTelcoAuthLogTag) {

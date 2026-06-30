@@ -65,6 +65,10 @@ export function createServer(orchestrator) {
         ?.slice(orchestrator.validator?.currentIndex || 0, (orchestrator.validator?.currentIndex || 0) + 8)
         ?.map(entry => entry?.logTag)
         ?.filter(Boolean) || [];
+      const lookaheadEntries = orchestrator.validator?.entries
+        ?.slice(orchestrator.validator?.currentIndex || 0, (orchestrator.validator?.currentIndex || 0) + 8)
+        ?.map(entry => ({ logTag: entry?.logTag, index: entry?.index }))
+        ?.filter(entry => entry?.logTag) || [];
       
 
       // Determine source/destination and logTag from API endpoint mapping
@@ -72,7 +76,10 @@ export function createServer(orchestrator) {
         payload: req.body,
         headers: req.headers,
         nextExpectedLogTag: nextExpectedEntry?.logTag || null,
-        lookaheadLogTags
+        lookaheadLogTags,
+        lookaheadEntries,
+        currentReplayIndex: orchestrator.validator?.currentIndex || 0,
+        replayScopeKey: orchestrator.config?.registrySessionId || orchestrator.orderId || 'single-server'
       });
       if (!mapping) {
         // Unknown API endpoint - likely a webhook/callback, ignore gracefully

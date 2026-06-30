@@ -554,7 +554,8 @@ export class ReplayOrchestrator {
     const buffered = this.stateManager.findBufferedRequest({
       source: expectedEntry.source,
       destination: expectedEntry.destination,
-      logTag: expectedEntry.logTag
+      logTag: expectedEntry.logTag,
+      opportunityId: extractOpportunityId(expectedEntry)
     });
 
     if (buffered) {
@@ -1604,3 +1605,22 @@ export class ReplayOrchestrator {
 }
 
 export default ReplayOrchestrator;
+function extractOpportunityId(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (typeof value.opportunityid === 'string' && value.opportunityid) {
+    return value.opportunityid;
+  }
+
+  if (value.payload && typeof value.payload === 'object') {
+    return extractOpportunityId(value.payload);
+  }
+
+  if (value.body && typeof value.body === 'object') {
+    return extractOpportunityId(value.body);
+  }
+
+  return null;
+}
