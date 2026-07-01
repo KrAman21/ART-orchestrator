@@ -145,6 +145,20 @@ export const REPLAY_SPECIAL_CASES = [
     ]
   },
   {
+    logTag: 'CHECK ELIGIBILITY API_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow the lender eligibility request to be skipped when the real-time eligibility replay branch has already advanced into the later fetch-offer path without emitting the intermediate eligibility callback.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: false,
+    requireBranchAdvance: true,
+    advanceWhenSeenLogTags: [
+      'LSP-FetchOfferSync_REQUEST',
+      'LSP-FetchOfferSync_RESPONSE',
+      'FlipKart-RealTimeEligibility_RESPONSE',
+      'OFFER API_REQUEST'
+    ]
+  },
+  {
     logTag: 'HARD_ELIGIBILITY_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow repeated hard-eligibility lender calls to be skipped when replay already advanced into profile-ingestion or fetch-offer steps for the same context.',
