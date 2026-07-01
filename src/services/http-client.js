@@ -5,6 +5,8 @@ import { unixSocketRequest } from './unix-socket-client.js';
 import crypto from 'crypto';
 import { isAbsoluteUrl, resolveReplayEndpoint } from './replay-request-resolver.js';
 
+const ART_WORKER_ROUTE_ID = process.env.ART_WORKER_ROUTE_ID || process.env.ART_WORKER_INDEX || null;
+
 function buildRequestUrl(baseUrl, endpoint) {
   if (isAbsoluteUrl(endpoint)) {
     const parsed = new URL(endpoint);
@@ -182,6 +184,10 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     headers['x-merchant-id'] = resolvedMerchantId;
   }
 
+  if (ART_WORKER_ROUTE_ID !== null && ART_WORKER_ROUTE_ID !== '') {
+    headers['x-art-worker-id'] = ART_WORKER_ROUTE_ID;
+  }
+
   try {
     let body = method !== 'GET' ? JSON.stringify(payload ?? {}) : undefined;
     const usesSdkWrapperTextEnvelope =
@@ -237,7 +243,27 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       contentType: headers['Content-Type']
     });
 
-    const sendRequest = async (requestBody) => {
+    const sendRequest = async (requestBody, attempt = 'primary') => {
+      logger.logRequestFlow('outgoing', {
+        event: 'request_sent',
+        service: 'art-orchestrator',
+        transport: unixSocket ? 'unix-socket' : 'http',
+        attempt,
+        baseUrl,
+        endpoint,
+        url,
+        socketEndpoint,
+        method,
+        requestId,
+        source,
+        destination: dest,
+        sourceDestination,
+        logTag,
+        merchantId,
+        headers,
+        payload: requestBody
+      });
+
       if (unixSocket) {
         logger.info('Using Unix socket for request', { socket: unixSocket, serviceUrl: url, timeoutMs });
         const socketResponse = await unixSocketRequest(unixSocket, baseUrl, socketEndpoint, {
@@ -267,6 +293,21 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
 
     let data = await response.json().catch(() => null);
 
+    logger.logRequestFlow('outgoing', {
+      event: 'response_received',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method,
+      requestId,
+      source,
+      destination: dest,
+      sourceDestination,
+      logTag,
+      status: response.status,
+      statusText: response.statusText
+    });
+
     logger.info('HTTP_RESPONSE_FULL_BODY', {
       requestId,
       url,
@@ -293,8 +334,24 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
         envelopeRequestId: requestPayload.requestId
       });
 
-      response = await sendRequest(retryBody);
+      response = await sendRequest(retryBody, 'APP_CORE_UNENCRYPTED_JWT_TEXT');
       data = await response.json().catch(() => null);
+
+      logger.logRequestFlow('outgoing', {
+        event: 'response_received',
+        service: 'art-orchestrator',
+        endpoint,
+        url,
+        method,
+        requestId,
+        source,
+        destination: dest,
+        sourceDestination,
+        logTag,
+        status: response.status,
+        statusText: response.statusText,
+        retry: 'APP_CORE_UNENCRYPTED_JWT_TEXT'
+      });
 
       logger.info('HTTP_RESPONSE_FULL_BODY', {
         requestId,
@@ -319,6 +376,21 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       headers: Object.fromEntries(response.headers.entries())
     };
   } catch (error) {
+    logger.logRequestFlow('outgoing', {
+      event: 'request_failed',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method,
+      requestId,
+      source,
+      destination: dest,
+      sourceDestination,
+      logTag,
+      error: error.message,
+      errorType: error.constructor?.name
+    });
+
     logger.error('HTTP request failed', {
       url,
       method,
@@ -368,6 +440,18 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
 
   try {
     let response;
+    logger.logRequestFlow('outgoing', {
+      event: 'request_sent',
+      service: 'art-orchestrator',
+      transport: gwUnixSocket ? 'unix-socket' : 'http',
+      endpoint,
+      url,
+      method,
+      headers,
+      payload,
+      lenderOrgId
+    });
+
     if (gwUnixSocket) {
       logger.info('Using Unix socket for webhook request', { socket: gwUnixSocket, url });
       const socketResponse = await unixSocketRequest(gwUnixSocket, gwBaseUrl, socketEndpoint, {
@@ -399,6 +483,17 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
 
     const data = await response.json().catch(() => null);
 
+    logger.logRequestFlow('outgoing', {
+      event: 'response_received',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method,
+      lenderOrgId,
+      status: response.status,
+      statusText: response.statusText
+    });
+
     logger.info('Webhook triggered successfully', {
       endpoint,
       status: response.status
@@ -411,6 +506,17 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
       success: response.ok
     };
   } catch (error) {
+    logger.logRequestFlow('outgoing', {
+      event: 'request_failed',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method,
+      lenderOrgId,
+      error: error.message,
+      errorType: error.constructor?.name
+    });
+
     logger.error('Failed to trigger webhook', {
       url,
       error: error.message
@@ -430,6 +536,19 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
 export async function checkHealth(serviceConfig) {
   try {
     let response;
+    const endpoint = '/health';
+    const url = `${serviceConfig.baseUrl}${endpoint}`;
+
+    logger.logRequestFlow('outgoing', {
+      event: 'request_sent',
+      service: 'art-orchestrator',
+      transport: serviceConfig.unixSocket ? 'unix-socket' : 'http',
+      endpoint,
+      url,
+      method: 'GET',
+      destination: serviceConfig.name
+    });
+
     if (serviceConfig.unixSocket) {
       const socketResponse = await unixSocketRequest(serviceConfig.unixSocket, serviceConfig.baseUrl, '/health', {
         method: 'GET',
@@ -444,10 +563,29 @@ export async function checkHealth(serviceConfig) {
     }
 
     const healthy = response.ok;
+    logger.logRequestFlow('outgoing', {
+      event: 'response_received',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method: 'GET',
+      destination: serviceConfig.name,
+      healthy
+    });
     logger.logHealthCheck(serviceConfig.name, healthy);
 
     return healthy;
   } catch (error) {
+    logger.logRequestFlow('outgoing', {
+      event: 'request_failed',
+      service: 'art-orchestrator',
+      endpoint: '/health',
+      url: `${serviceConfig.baseUrl}/health`,
+      method: 'GET',
+      destination: serviceConfig.name,
+      error: error.message,
+      errorType: error.constructor?.name
+    });
     logger.logHealthCheck(serviceConfig.name, false);
     return false;
   }
@@ -530,6 +668,22 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = nu
   };
 
   try {
+    logger.logRequestFlow('outgoing', {
+      event: 'request_sent',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': QAPI_CONFIG.authorization,
+        'Consumer-Credit-Dashboard': 'Consumer-Credit-Dashboard',
+        'Referer': 'https://dashboard.credit.juspay.in/'
+      },
+      payload
+    });
+
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -544,6 +698,15 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = nu
 
     if (!response.ok) {
       const errorText = await response.text();
+      logger.logRequestFlow('outgoing', {
+        event: 'response_received',
+        service: 'art-orchestrator',
+        endpoint,
+        url,
+        method: 'POST',
+        status: response.status,
+        statusText: response.statusText
+      });
       logger.error('Failed to fetch order IDs from QAPI', {
         status: response.status,
         statusText: response.statusText,
@@ -557,6 +720,15 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = nu
     }
 
     const responseText = await response.text();
+    logger.logRequestFlow('outgoing', {
+      event: 'response_received',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method: 'POST',
+      status: response.status,
+      statusText: response.statusText
+    });
     let data;
     
     try {
@@ -656,6 +828,16 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = nu
     };
 
   } catch (error) {
+    logger.logRequestFlow('outgoing', {
+      event: 'request_failed',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method: 'POST',
+      error: error.message,
+      errorType: error.constructor?.name
+    });
+
     logger.error('Exception while fetching order IDs from QAPI', {
       startDate,
       endDate,

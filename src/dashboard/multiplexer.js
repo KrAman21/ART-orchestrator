@@ -3,7 +3,7 @@ import { createServer as createHttpServer } from 'http';
 import { logger } from '../utils/logger.js';
 import { getApiMapping } from '../config.js';
 import { setupUnixSocket, configureSocketPermissions } from '../utils/socket-utils.js';
-import SessionOrchestratorRegistry from './session-registry.js';
+import SessionOrchestratorRegistry, { extractRoutingIdentifiers } from './session-registry.js';
 
 const MULTIPLEXER_UNIX_SOCKET = process.env.MULTIPLEXER_UNIX_SOCKET || null;
 
@@ -143,7 +143,32 @@ export function createMultiplexerServer() {
       return res.json('Webhook ignored');
     }
 
+    const payload = req.body;
+    const { loanApplicationId, orderId } = extractRoutingIdentifiers(payload, req.headers);
+    const lenderOrgId = payload?.lender_org_id ||
+                         payload?.themisDetail?.lenderOrgId ||
+                         payload?.lenderOrgId ||
+                         req.headers['x-lender-org-id'] ||
+                         req.headers['X-Lender-Org-Id'];
+
     const orchestrator = previewOrchestrator;
+    const matchedSession = registry.findSessionForRequest?.(payload, req.headers) || null;
+    const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;
+
+    logger.info('ART_MUX_ROUTE_DECISION', {
+      api,
+      requestId,
+      loanApplicationId,
+      orderId,
+      lenderOrgId,
+      matched: !!orchestrator,
+      matchedSessionId: matchedSession?.sessionId || null,
+      matchedOrderIds: matchedSession ? Array.from(matchedSession.orderIds || []) : [],
+      matchedLoanApplicationCount: matchedSession?.loanApplicationIds?.size || 0,
+      matchedOrchestratorRunning: !!orchestrator?.isRunning,
+      matchedCurrentEntry: orchestrator?.validator?.getCurrentEntry?.()?.toString?.() || null,
+      activeSessions: registry.getAllSessions()
+    });
 
     if (api === '/v1.0/fetchOfferResponse') {
       logger.info('FETCH_OFFER_ASYNC callback routing', {
@@ -175,7 +200,6 @@ export function createMultiplexerServer() {
     const source = parts[0];
     const destination = parts[1];
     const logTag = mapping.logTag;
-    const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;
 
     logger.info('ART_MULTIPLEXER_INCOMING_MAPPING_DEBUG', {
       api,

@@ -198,6 +198,89 @@ export class BufferManager {
       headers: expectedEntry.headers
     });
   }
+
+  summarizeRequestForDiagnostics(request = {}) {
+    const ids = this.extractCorrelationIdentifiers(request);
+    return {
+      logTag: request.logTag || null,
+      source: request.source || null,
+      destination: request.destination || null,
+      sourceDestination: request.sourceDestination || null,
+      requestId: ids.requestId,
+      clientRequestId: ids.clientRequestId,
+      traceId: ids.traceId,
+      sequenceId: ids.sequenceId,
+      loanApplicationId: ids.loanApplicationId,
+      lenderOrgId: ids.lenderOrgId,
+      orderId: ids.orderId,
+      api: request.api || null
+    };
+  }
+
+  summarizeExpectedForDiagnostics(expectedEntry = {}) {
+    const ids = this.extractExpectedIdentifiers(expectedEntry);
+    return {
+      entry: expectedEntry?.toString?.() || null,
+      index: expectedEntry?.index ?? null,
+      logTag: expectedEntry?.logTag || null,
+      source: expectedEntry?.source || null,
+      destination: expectedEntry?.destination || null,
+      sourceDestination: expectedEntry?.sourceDestination || null,
+      requestId: ids.requestId,
+      clientRequestId: ids.clientRequestId,
+      traceId: ids.traceId,
+      sequenceId: ids.sequenceId,
+      loanApplicationId: ids.loanApplicationId,
+      lenderOrgId: ids.lenderOrgId,
+      orderId: ids.orderId
+    };
+  }
+
+  getIncomingBufferDiagnostics(expectedEntry = null, limit = 25) {
+    const expectedSummary = expectedEntry
+      ? this.summarizeExpectedForDiagnostics(expectedEntry)
+      : null;
+
+    const entries = Array.from(this.incomingRequests.entries()).map(([key, entry]) => {
+      const matchDetails = expectedEntry
+        ? this._buildRequestMatchDetails(entry.request, expectedEntry)
+        : null;
+
+      return {
+        key,
+        state: entry.state,
+        ageMs: Date.now() - entry.timestamp,
+        claimedAgeMs: entry.claimedAt ? Date.now() - entry.claimedAt : null,
+        preservedOnRewind: !!entry.preservedOnRewind,
+        request: this.summarizeRequestForDiagnostics(entry.request),
+        match: matchDetails
+          ? {
+              matches: matchDetails.matches,
+              score: matchDetails.score,
+              differenceCount: matchDetails.differenceCount,
+              exactSignals: matchDetails.exactSignals,
+              exactMatchCount: matchDetails.exactMatchCount,
+              mismatchReason: matchDetails.mismatchReason || null
+            }
+          : null
+      };
+    });
+
+    entries.sort((a, b) => {
+      if (a.match && b.match && b.match.score !== a.match.score) {
+        return b.match.score - a.match.score;
+      }
+      return b.ageMs - a.ageMs;
+    });
+
+    return {
+      expected: expectedSummary,
+      bufferSize: this.incomingRequests.size,
+      waiterCount: this.requestWaiters.size,
+      entries: entries.slice(0, limit),
+      truncated: entries.length > limit
+    };
+  }
   
   generateKey(request) {
     const ids = this.extractCorrelationIdentifiers(request);
@@ -227,6 +310,12 @@ export class BufferManager {
   async addIncomingRequest(request) {
     let key = this.generateKey(request);
     const existing = this.incomingRequests.get(key);
+
+    logger.info('ART_BUFFER_INCOMING_ADD_ATTEMPT', {
+      key,
+      bufferSizeBefore: this.incomingRequests.size,
+      request: this.summarizeRequestForDiagnostics(request)
+    });
 
     if (existing && !this._isTerminalRequestState(existing.state)) {
       if (existing.preservedOnRewind) {
@@ -273,13 +362,15 @@ export class BufferManager {
     
     this.incomingRequests.set(key, entry);
     
-    logger.info('Request buffered', {
+    logger.info('ART_BUFFER_INCOMING_ADDED', {
       key,
       bufferSize: this.incomingRequests.size,
       requestId: request.requestId || null,
       logTag: request.logTag,
       source: request.source,
-      destination: request.destination
+      destination: request.destination,
+      request: this.summarizeRequestForDiagnostics(request),
+      pendingWaiters: this.getPendingRequestWaiters()
     });
     
     // Notify matching waiters AFTER logging to ensure proper ordering
@@ -291,6 +382,13 @@ export class BufferManager {
 
   async waitForMatchingRequest(expectedEntry, timeoutMs = this.config.defaultTimeoutMs) {
     const shouldPreferFreshGatewayLender = this._isGatewayLenderRequest(expectedEntry);
+    logger.info('ART_BUFFER_WAIT_START', {
+      expected: this.summarizeExpectedForDiagnostics(expectedEntry),
+      timeoutMs,
+      shouldPreferFreshGatewayLender,
+      diagnostics: this.getIncomingBufferDiagnostics(expectedEntry, 15)
+    });
+
     const claimed = this._claimOldestMatchingRequest(expectedEntry, {
       includePreserved: !shouldPreferFreshGatewayLender
     });
@@ -378,13 +476,15 @@ export class BufferManager {
         }
         
         // Enhanced logging to debug matching issues
-        const bufferedRequests = Array.from(this.incomingRequests.entries()).map(([key, entry]) => ({
-          key,
+        const bufferDiagnostics = this.getIncomingBufferDiagnostics(expectedEntry, 50);
+        const bufferedRequests = bufferDiagnostics.entries.map(entry => ({
+          key: entry.key,
           logTag: entry.request.logTag,
           source: entry.request.source,
           destination: entry.request.destination,
           state: entry.state,
-          requestId: entry.request.requestId || null
+          requestId: entry.request.requestId || null,
+          match: entry.match
         }));
 
         this.lastMatchTimeout = {
@@ -395,17 +495,19 @@ export class BufferManager {
           expectedDestination: expectedEntry.destination,
           timeoutMs: effectiveTimeoutMs,
           bufferedRequests,
-          bufferSize: this.incomingRequests.size
+          bufferSize: this.incomingRequests.size,
+          bufferDiagnostics
         };
         
-        logger.error('Timeout waiting for matching request', {
+        logger.error('ART_BUFFER_WAIT_TIMEOUT', {
           expected: expectedEntry.toString(),
           expectedLogTag: expectedEntry.logTag,
           expectedSource: expectedEntry.source,
           expectedDestination: expectedEntry.destination,
           timeoutMs: effectiveTimeoutMs,
           bufferedRequests,
-          bufferSize: this.incomingRequests.size
+          bufferSize: this.incomingRequests.size,
+          bufferDiagnostics
         });
         resolve(null);
       }, effectiveTimeoutMs);
@@ -454,10 +556,14 @@ export class BufferManager {
     this._storeIncomingReplayFallback(entry);
     this.clearWaitDiagnostics(entry.request, 'incoming_request_completed');
 
-    logger.info('Response delivered', {
+    logger.info('ART_BUFFER_INCOMING_COMPLETED', {
       key,
       requestId: entry.request.requestId || null,
-      logTag: entry.request.logTag
+      logTag: entry.request.logTag,
+      ageMs: entry.completedAt - entry.timestamp,
+      request: this.summarizeRequestForDiagnostics(entry.request),
+      responseStatus: response?.status || response?.payload?.status || null,
+      responseSuccess: response?.success ?? null
     });
 
     this.incomingRequests.delete(key);
@@ -497,6 +603,15 @@ export class BufferManager {
       return;
     }
     
+    const existing = this.responseBuffer.get(requestId);
+    if (existing) {
+      logger.warn('ART_BUFFER_RESPONSE_OVERWRITE', {
+        requestId,
+        existingMetadata: existing.metadata || {},
+        newMetadata: metadata || {}
+      });
+    }
+
     this.responseBuffer.set(requestId, {
       response,
       isError,
@@ -510,10 +625,11 @@ export class BufferManager {
       ? { error: response.message, status: response.statusCode, data: response.data }
       : { status: response.status, statusText: response.statusText, data: response.data };
     
-    logger.info('Added response to buffer', { 
+    logger.info('ART_BUFFER_RESPONSE_ADDED', { 
       requestId, 
       bufferSize: this.responseBuffer.size,
       isError,
+      metadata,
       response: responsePreview
     });
   }
@@ -983,13 +1099,15 @@ export class BufferManager {
   }
 
   _buildExpectedEntryMatchDetails(leftExpectedEntry, rightExpectedEntry) {
-    if (!this._matchesRequest(leftExpectedEntry, rightExpectedEntry)) {
+    const mismatchReason = this._getRequestShapeMismatch(leftExpectedEntry, rightExpectedEntry);
+    if (mismatchReason) {
       return {
         matches: false,
         score: Number.NEGATIVE_INFINITY,
         differenceCount: Number.POSITIVE_INFINITY,
         exactSignals: [],
-        exactMatchCount: 0
+        exactMatchCount: 0,
+        mismatchReason
       };
     }
 
@@ -1009,18 +1127,21 @@ export class BufferManager {
       score,
       differenceCount,
       exactSignals,
-      exactMatchCount: exactSignals.length
+      exactMatchCount: exactSignals.length,
+      mismatchReason: null
     };
   }
 
   _buildRequestMatchDetails(incoming, expectedEntry) {
-    if (!this._matchesRequest(incoming, expectedEntry)) {
+    const mismatchReason = this._getRequestShapeMismatch(incoming, expectedEntry);
+    if (mismatchReason) {
       return {
         matches: false,
         score: Number.NEGATIVE_INFINITY,
         differenceCount: Number.POSITIVE_INFINITY,
         exactSignals: [],
-        exactMatchCount: 0
+        exactMatchCount: 0,
+        mismatchReason
       };
     }
 
@@ -1084,7 +1205,8 @@ export class BufferManager {
       score,
       differenceCount,
       exactSignals,
-      exactMatchCount: exactSignals.length
+      exactMatchCount: exactSignals.length,
+      mismatchReason: null
     };
   }
 
@@ -1307,6 +1429,19 @@ export class BufferManager {
     const matchingWaiters = [];
     for (const waiter of this.requestWaiters) {
       const matchDetails = this._buildRequestMatchDetails(entry.request, waiter.expectedEntry);
+      logger.info('ART_BUFFER_WAITER_CANDIDATE_CHECK', {
+        incomingKey: entry.key,
+        incoming: this.summarizeRequestForDiagnostics(entry.request),
+        expected: this.summarizeExpectedForDiagnostics(waiter.expectedEntry),
+        match: {
+          matches: matchDetails.matches,
+          score: matchDetails.score,
+          differenceCount: matchDetails.differenceCount,
+          exactSignals: matchDetails.exactSignals,
+          exactMatchCount: matchDetails.exactMatchCount,
+          mismatchReason: matchDetails.mismatchReason || null
+        }
+      });
       if (!matchDetails.matches) {
         continue;
       }
@@ -1315,6 +1450,12 @@ export class BufferManager {
     }
 
     if (matchingWaiters.length === 0) {
+      logger.warn('ART_BUFFER_NO_WAITER_MATCH_FOR_INCOMING', {
+        key: entry.key,
+        incoming: this.summarizeRequestForDiagnostics(entry.request),
+        waiterCount: this.requestWaiters.size,
+        pendingWaiters: this.getPendingRequestWaiters()
+      });
       return;
     }
 

@@ -572,7 +572,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     );
     
     this.isPolling = false;
-    this.pollIntervalMs = config.pollIntervalMs || 800;
+    this.pollIntervalMs = config.pollIntervalMs || 50;
+    this.maxBackoffMs = config.maxBackoffMs || 50;
     this.shouldStop = false;
     this.orderId = config.orderId;
     this.resolvedStuckEntrySignals = new Set();
@@ -1070,7 +1071,6 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   async pollingLoop() {
     this.isPolling = true;
     let consecutiveNoWork = 0;
-    const maxBackoffMs = 1000;
     
     while (this.isRunning && !this.shouldStop) {
       try {
@@ -1078,7 +1078,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         
         if (!didWork) {
           consecutiveNoWork++;
-          const backoffMs = Math.min(this.pollIntervalMs * Math.pow(1.5, consecutiveNoWork), maxBackoffMs);
+          const backoffMs = Math.min(this.pollIntervalMs * Math.pow(1.5, consecutiveNoWork), this.maxBackoffMs);
           await this.sleep(backoffMs);
         } else {
           consecutiveNoWork = 0;
@@ -1859,14 +1859,30 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
           return this.triggerMissingExpectedRequestFallback(entry, effectiveTimeoutMs);
         }
 
-        logger.warn('Replay request still missing after buffer wait timeout; keeping entry pending', {
+        logger.warn('ASYNC_ORCH_REPLAY_WAIT_MISSING', {
           entry: entry.toString(),
-          timeoutMs: effectiveTimeoutMs
+          timeoutMs: effectiveTimeoutMs,
+          orderId: this.orderId,
+          bufferDiagnostics: this.bufferManager?.getIncomingBufferDiagnostics?.(entry, 50) || null,
+          pendingWaiters: this.bufferManager?.getPendingRequestWaiters?.() || []
         });
         return false;
       }
 
       try {
+        logger.info('ASYNC_ORCH_REPLAY_CLAIMED_BUFFERED_REQUEST', {
+          orderId: this.orderId,
+          expectedEntry: entry.toString(),
+          expectedIndex: entry.index,
+          bufferKey: buffered.key,
+          bufferedAgeMs: Date.now() - buffered.timestamp,
+          bufferedRequest: this.bufferManager?.summarizeRequestForDiagnostics?.(buffered.request) || {
+            source: buffered.request?.source,
+            destination: buffered.request?.destination,
+            logTag: buffered.request?.logTag,
+            requestId: buffered.request?.requestId || null
+          }
+        });
         const response = await super.handleIncomingRequest(buffered.request);
         this.bufferManager.completeIncomingRequest(buffered.key, response);
         return true;
@@ -2062,6 +2078,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
             hasLenderRedirectionUrl: Boolean(lenderDetailsSeedPayload.lenderRedirectionUrl)
           });
 
+          const lenderDetailsSeedStart = this.orderProfiler?.enabled ? this.orderProfiler.now() : 0;
           const lenderDetailsSeedResponse = await makeRequest(
             SERVICE_MAP.LSP.baseUrl,
             '/art/lender-details/set',
@@ -2076,6 +2093,16 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
             SERVICE_MAP.LSP.unixSocket,
             10000
           );
+          this.orderProfiler?.recordDownstreamCall({
+            destination: 'LSP',
+            endpoint: '/art/lender-details/set',
+            logTag: 'ART_SET_LENDER_DETAILS_REPLAY',
+            logIndex: null,
+            requestId: lenderDetailsSeedPayload.requestId,
+            status: lenderDetailsSeedResponse?.status ?? null,
+            success: Boolean(lenderDetailsSeedResponse && !lenderDetailsSeedResponse.error && lenderDetailsSeedResponse.status === 200),
+            durationMs: this.orderProfiler.now() - lenderDetailsSeedStart
+          });
 
           logger.info('Gateway lender details priming completed', {
             logTag: entry.logTag,
@@ -2733,12 +2760,20 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     );
 
     logger.info('ASYNC_ORCH_RECEIVING', {
+      orderId: this.orderId,
+      registrySessionId: this.config?.registrySessionId || null,
       source: effectiveIncoming.source,
       destination: effectiveIncoming.destination,
       api: effectiveIncoming.api,
       requestId: effectiveIncoming.requestId,
       logTag: effectiveIncoming.logTag,
-      lenderOrgId: effectiveIncoming.lenderOrgId
+      lenderOrgId: effectiveIncoming.lenderOrgId,
+      loanApplicationId: effectiveIncoming.loanApplicationId || effectiveIncoming.payload?.loanApplicationId || effectiveIncoming.payload?.loan_application_id || null,
+      incomingOrderId: effectiveIncoming.orderId || effectiveIncoming.headers?.['x-order-id'] || effectiveIncoming.payload?.orderId || effectiveIncoming.payload?.order_id || null,
+      currentEntry: this.validator?.getCurrentEntry?.()?.toString?.() || null,
+      currentIndex: this.validator?.currentIndex ?? null,
+      bufferStats: this.bufferManager?.getStats?.() || null,
+      pendingWaiters: this.bufferManager?.getPendingRequestWaiters?.() || []
     });
 
     logger.logFinalIncoming(effectiveIncoming.source, effectiveIncoming.destination, effectiveIncoming.api, effectiveIncoming.payload, {
@@ -2877,9 +2912,16 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     const buffered = await this.bufferManager.addIncomingRequest(normalizedIncoming);
     
-    logger.info('Request buffered for async processing', {
+    logger.info('ASYNC_ORCH_REQUEST_BUFFERED_FOR_PROCESSING', {
+      orderId: this.orderId,
+      registrySessionId: this.config?.registrySessionId || null,
       requestId: normalizedIncoming.requestId,
-      bufferKey: buffered.key
+      bufferKey: buffered.key,
+      normalizedSource: normalizedIncoming.source,
+      normalizedDestination: normalizedIncoming.destination,
+      normalizedSourceDestination,
+      currentEntry: this.validator?.getCurrentEntry?.()?.toString?.() || null,
+      bufferStats: this.bufferManager?.getStats?.() || null
     });
     
     try {
@@ -3864,6 +3906,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   getResults() {
     return {
       ...super.getResults(),
+      failedFlowRequests: this.httpClient.failedRequests || [],
       failedBufferRequests: this.httpClient.failedRequests || []
     };
   }
