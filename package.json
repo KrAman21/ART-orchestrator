@@ -7,8 +7,9 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
+    "fetch-orders": "node src/fetch-order-ids.js",
     "test": "node --test",
-    "test-syntax": "node --check src/index.js && node --check src/dashboard/multiplexer.js && node --check src/services/http-client.js"
+    "test-syntax": "node --check src/index.js && node --check src/fetch-order-ids.js && node --check src/merge-reports.js && node --check src/dashboard/multiplexer.js && node --check src/services/http-client.js && node --check src/services/order-list.js"
   },
   "dependencies": {
     "dotenv": "^17.4.1",

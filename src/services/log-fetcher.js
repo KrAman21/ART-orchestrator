@@ -1144,12 +1144,18 @@ export async function fetchLogsFromJSONFile(filePath) {
     const fileContent = await readFile(absolutePath, 'utf-8');
     const data = JSON.parse(fileContent);
 
-    if (!Array.isArray(data)) {
+    const logs = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.logs)
+        ? data.logs
+        : null;
+
+    if (!Array.isArray(logs)) {
       throw new Error('Invalid JSON format: expected array of logs');
     }
 
     // Sort logs by messageNumber
-    const sortedLogs = data.sort(compareLogsForReplay);
+    const sortedLogs = logs.sort(compareLogsForReplay);
 
     console.log(`Loaded ${sortedLogs.length} logs from ${filePath}`);
     return sortedLogs;

@@ -81,11 +81,38 @@ export function createServer(orchestrator) {
   app.use(express.urlencoded({ extended: true }));
 
   // Request logging middleware
-  app.use((req, _res, next) => {
+  app.use((req, res, next) => {
+    const startedAt = Date.now();
+    const requestId = req.headers['x-request-id'] || req.body?.request_id || req.body?.requestId || null;
+
+    logger.logRequestFlow('incoming', {
+      event: 'request_received',
+      service: 'art-orchestrator',
+      method: req.method,
+      endpoint: req.originalUrl,
+      path: req.path,
+      requestId,
+      headers: req.headers,
+      payload: req.body
+    });
+
+    res.on('finish', () => {
+      logger.logRequestFlow('incoming', {
+        event: 'response_sent',
+        service: 'art-orchestrator',
+        method: req.method,
+        endpoint: req.originalUrl,
+        path: req.path,
+        requestId,
+        status: res.statusCode,
+        durationMs: Date.now() - startedAt
+      });
+    });
+
     logger.debug('Incoming request', {
       method: req.method,
       path: req.path,
-      headers: req.headers['x-request-id']
+      requestId
     });
     next();
   });
@@ -128,6 +155,22 @@ export function createServer(orchestrator) {
         ?.slice(orchestrator.validator?.currentIndex || 0, (orchestrator.validator?.currentIndex || 0) + 8)
         ?.map(entry => ({ logTag: entry?.logTag, index: entry?.index }))
         ?.filter(entry => entry?.logTag) || [];
+
+      logger.info('ART_DIRECT_INCOMING_REQUEST', {
+        api,
+        method: req.method,
+        requestId,
+        headers: {
+          'x-request-id': req.headers['x-request-id'],
+          'x-art-worker-id': req.headers['x-art-worker-id'],
+          'x-art-session-id': req.headers['x-art-session-id'],
+          'x-order-id': req.headers['x-order-id'],
+          'x-loan-application-id': req.headers['x-loan-application-id'],
+          'x-lender-org-id': req.headers['x-lender-org-id']
+        },
+        orchestratorRunning: !!orchestrator?.isRunning,
+        currentEntry: orchestrator?.validator?.getCurrentEntry?.()?.toString?.() || null
+      });
       
 
       const headerLogTag = getIncomingHeader(req, 'x-logtag');

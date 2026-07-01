@@ -6,7 +6,7 @@ import { NonBlockingHttpClient } from './non-blocking-http.js';
 test('recordFailure keeps structured API error description and code', () => {
   const recordedFailures = [];
   const reportGenerator = {
-    recordBufferFailure(orderId, failureInfo) {
+    recordFlowFailure(orderId, failureInfo) {
       recordedFailures.push({ orderId, failureInfo });
     }
   };

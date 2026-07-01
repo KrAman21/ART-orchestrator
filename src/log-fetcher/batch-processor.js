@@ -11,6 +11,7 @@ export class BatchLogFetcher {
     this.maxRetries = options.maxRetries || 3;
     this.retryDelay = options.retryDelay || 2000;
     this.batchSize = options.batchSize || 1;
+    this.useOrderContextLookup = options.useOrderContextLookup;
   }
 
   async fetchLogsForOrder(merchantId, orderId, retries = 0) {
@@ -19,7 +20,8 @@ export class BatchLogFetcher {
       outputPath: this.outputPath,
       delayBetweenRequests: this.delayBetweenRequests,
       maxRetries: this.maxRetries,
-      retryDelay: this.retryDelay
+      retryDelay: this.retryDelay,
+      useOrderContextLookup: this.useOrderContextLookup
     });
 
     return fetcher.fetchLogsForOrder(merchantId, orderId, retries);

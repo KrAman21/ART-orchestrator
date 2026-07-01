@@ -338,7 +338,7 @@ export class LogProcessor {
 
       let response;
       const maxRetries = 10;
-      const retryIntervalMs = 5000;
+      const retryIntervalMs = parseInt(process.env.ELIGIBILITY_STATUS_RETRY_INTERVAL_MS, 10) || 1000;
 
       if (entry.logTag === 'FlipKart-EligibilityStatus_REQUEST') {
         this.logger.info('POLLING_START: Starting polling for FlipKart-EligibilityStatus_REQUEST', {
@@ -354,7 +354,8 @@ export class LogProcessor {
             logTag: entry.logTag
           });
 
-      response = await makeRequest(
+          const pollingRequestStart = this.config?.orderProfiler?.enabled ? this.config.orderProfiler.now() : 0;
+          response = await makeRequest(
             this.callbacks.getServiceBaseUrl(service),
             api,
             method,
@@ -367,6 +368,16 @@ export class LogProcessor {
             entry.index,
             this.callbacks.getServiceUnixSocket(service)
           );
+          this.config?.orderProfiler?.recordDownstreamCall({
+            destination: service,
+            endpoint: api,
+            logTag: entry.logTag,
+            logIndex: entry.index,
+            requestId: outboundRequestId,
+            status: response?.status ?? null,
+            success: Boolean(response && !response.error && response.status === 200),
+            durationMs: this.config.orderProfiler.now() - pollingRequestStart
+          });
 
           let responseData = response?.data;
           if (typeof responseData === 'string') {
@@ -406,7 +417,14 @@ export class LogProcessor {
               nextAttempt: attempt + 1,
               waitMs: retryIntervalMs
             });
+            const pollingWaitStart = this.config?.orderProfiler?.enabled ? this.config.orderProfiler.now() : 0;
             await new Promise(resolve => setTimeout(resolve, retryIntervalMs));
+            this.config?.orderProfiler?.endSection('replay_poll_sleep', pollingWaitStart, {
+              currentLogTag: entry.logTag,
+              currentLogIndex: entry.index,
+              reason: 'eligibility_status_retry',
+              attempt
+            });
           } else {
             this.logger.error('POLLING_FAILED: Max retries reached without success and lender_eligibilities', {
               attempts: maxRetries,
@@ -421,8 +439,15 @@ export class LogProcessor {
             logTag: entry.logTag,
             delayMs: 1000
           });
+          const createLoanDelayStart = this.config?.orderProfiler?.enabled ? this.config.orderProfiler.now() : 0;
           await new Promise(resolve => setTimeout(resolve, 1000));
+          this.config?.orderProfiler?.endSection('replay_poll_sleep', createLoanDelayStart, {
+            currentLogTag: entry.logTag,
+            currentLogIndex: entry.index,
+            reason: 'create_loan_delay'
+          });
         }
+        const externalRequestStart = this.config?.orderProfiler?.enabled ? this.config.orderProfiler.now() : 0;
         response = await makeRequest(
           this.callbacks.getServiceBaseUrl(service),
           api,
@@ -436,6 +461,16 @@ export class LogProcessor {
           entry.index,
           this.callbacks.getServiceUnixSocket(service)
         );
+        this.config?.orderProfiler?.recordDownstreamCall({
+          destination: service,
+          endpoint: api,
+          logTag: entry.logTag,
+          logIndex: entry.index,
+          requestId: outboundRequestId,
+          status: response?.status ?? null,
+          success: Boolean(response && !response.error && response.status === 200),
+          durationMs: this.config.orderProfiler.now() - externalRequestStart
+        });
       }
 
       // Log detailed response

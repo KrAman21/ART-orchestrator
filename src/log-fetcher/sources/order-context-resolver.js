@@ -17,9 +17,32 @@ function pushCandidate(target, value) {
   target.push(normalized);
 }
 
+function pushCandidates(target, value) {
+  if (Array.isArray(value)) {
+    value.forEach(item => pushCandidate(target, item));
+    return;
+  }
+
+  pushCandidate(target, value);
+}
+
 function scanValueForContext(value, bucket) {
   if (Array.isArray(value)) {
     value.forEach(item => scanValueForContext(item, bucket));
+    return;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed || !['{', '['].includes(trimmed[0])) {
+      return;
+    }
+
+    try {
+      scanValueForContext(JSON.parse(trimmed), bucket);
+    } catch (_error) {
+      // Not every string that starts like JSON is valid JSON. Ignore and keep scanning siblings.
+    }
     return;
   }
 
@@ -29,15 +52,20 @@ function scanValueForContext(value, bucket) {
 
   for (const [key, nestedValue] of Object.entries(value)) {
     if (key === 'customerId' || key === 'customer_id' || key === 'merchant_customer_id' || key === 'merchantCustomerId') {
-      pushCandidate(bucket.customerIds, nestedValue);
+      pushCandidates(bucket.customerIds, nestedValue);
     }
 
-    if (key === 'loanApplicationId' || key === 'loan_application_id') {
-      pushCandidate(bucket.loanApplicationIds, nestedValue);
+    if (
+      key === 'loanApplicationId' ||
+      key === 'loan_application_id' ||
+      key === 'loanApplicationIds' ||
+      key === 'loan_application_ids'
+    ) {
+      pushCandidates(bucket.loanApplicationIds, nestedValue);
     }
 
     if (key === 'laid' || key === 'laId' || key === 'la_id') {
-      pushCandidate(bucket.loanApplicationIds, nestedValue);
+      pushCandidates(bucket.loanApplicationIds, nestedValue);
     }
 
     scanValueForContext(nestedValue, bucket);
