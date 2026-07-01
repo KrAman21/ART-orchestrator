@@ -557,6 +557,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.lastIdleExternalEntryKey = null;
     this.idleExternalEntryCycles = 0;
     this.activeLoanSettlementPtTriggers = new Set();
+    this.hasWaitedForInitialLoanSettlementPtTrigger = false;
     if (this.requestForwarder?.callbacks) {
       this.requestForwarder.callbacks.shouldAutoProcessNextLogEntry = () => false;
       this.requestForwarder.callbacks.shouldBlockOnHeldExternalRequest = () => false;
@@ -593,12 +594,20 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.activeLoanSettlementPtTriggers.add(triggerKey);
 
     try {
-      logger.info('Waiting briefly before triggering loan settlement PT replay helper to allow PT creation to complete', {
-        entry: entry.toString(),
-        loanApplicationId,
-        waitMs: 1000
-      });
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (!this.hasWaitedForInitialLoanSettlementPtTrigger) {
+        logger.info('Waiting briefly before first loan settlement PT replay helper trigger to allow PT creation to complete', {
+          entry: entry.toString(),
+          loanApplicationId,
+          waitMs: 1000
+        });
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        this.hasWaitedForInitialLoanSettlementPtTrigger = true;
+      } else {
+        logger.info('Skipping extra wait before subsequent loan settlement PT replay helper trigger', {
+          entry: entry.toString(),
+          loanApplicationId
+        });
+      }
 
       logger.info('Triggering loan settlement PT replay helper before waiting for expected CORE→GATEWAY request', {
         entry: entry.toString(),

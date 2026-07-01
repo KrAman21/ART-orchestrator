@@ -3,6 +3,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { EnvironmentController } from './services/environment-controller.js';
+import { log } from 'console';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -325,6 +326,12 @@ export const API_TO_ENDPOINT_MAP = {
   'APP_CORE|TriggerLenderOTPRequest_REQUEST': {endpoint :'/api/v3.3/esign/otp/trigger', method: 'POST', service: 'LSP', headers: {} },
   'APP_CORE|VerifyLenderOTP_REQUEST':{endpoint :'/api/v3.3/esign/otp/verify/trigger', method: 'POST', service: 'LSP', headers: {} },
   'APP_CORE|LSP-GetAgreementDataStatus_REQUEST': { endpoint: '/api/v3.3/loan/offers/getAgreementData/status', method: 'POST', service: 'LSP', headers: {} },
+  'APP_CORE|GetRepaymentMethodRequest_REQUEST':{endpoint : '/api/v4.0/repayment/getRepaymentMethod/trigger', method: 'POST', service: 'LSP', headers: {} },
+  'APP_CORE|GetRepaymentMethodStatus_REQUEST':{endpoint : '/api/v4.0/repayment/getRepaymentMethod/status', method: 'POST', service: 'LSP', headers: {} },
+  'APP_CORE|SetRepaymentPlanRequest_REQUEST':{endpoint : '/api/v3.3/repayment/repayment/trigger', method: 'POST', service: 'LSP', headers: {} },
+  'APP_CORE|LSP-SetRepaymentPlanStatus_REQUEST':{endpoint : '/api/v3.3/repayment/repayment/status', method: 'POST', service: 'LSP', headers: {} },
+  'APP_CORE|SetRepaymentPlanStatusRequest_REQUEST': {endpoint :'/api/v3.3/repayment/repaymentStatus/trigger', method: 'POST', service: 'LSP', headers: {} },
+  'APP_CORE|CheckSetRepaymentPlanStatus_REQUEST': {endpoint :'/api/v3.3/repayment/repaymentStatus/status', method: 'POST', service: 'LSP', headers: {} },
   
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing/REQUEST) ====================
   // REQUEST variants (used by logs.json)
@@ -416,6 +423,7 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_GATEWAY|ProcessStatus_REQUEST' : {endpoint: '/v1.0/processStatus', method: 'POST', service: 'GW', headers: {}},
   'CORE_GATEWAY|VerifyLenderOTPRequest-LSP_REQUEST': {endpoint: '/gateway/v3.3/loan/verifyLoanAcceptanceRequest', method: 'POST', service: 'GW', headers: {}},
   'CORE_GATEWAY|Capture_REQUEST':{endpoint :'/gateway/v3.3/capture', method: 'POST', service: 'GW', headers: {}},
+  'CORE_GATEWAY|SetRepaymentPlanStatusRequest-LSP_REQUEST': {endpoint : '/gateway/v3.3/repayment/setRepaymentPlanStatusRequest', method: 'POST', service: 'GW', headers: {}},
   
   // ==================== GATEWAY_CORE (Gateway to Core - Responses/Callbacks) ====================
   'GATEWAY_CORE|LSP-Eligibility_INCOMING': { endpoint: '/v1/themis/eligibility/callback', method: 'POST', service: 'LSP', headers: {} },
@@ -1397,7 +1405,11 @@ export const API_TO_LOGTAG_MAP = {
   '/api/v3.3/loan/status': { logTag: 'LSP-LoanStatus_REQUEST', api: '/api/v3.3/loan/status', sourceDestination: 'APP_CORE', headers: {} },
   '/api/v3.3/esign/otp/trigger': {logTag: 'TriggerLenderOTPRequest_REQUEST', api: '/api/v3.3/esign/otp/trigger', sourceDestination: 'APP_CORE', headers: {} },
   '/api/v3.3/loan/offers/getAgreementData/status': {logTag: 'LSP-GetAgreementDataStatus_REQUEST', api: '/api/v3.3/loan/offers/getAgreementData/status', sourceDestination: 'APP_CORE', headers: {} },
-  
+  '/api/v4.0/repayment/getRepaymentMethod/trigger': {logTag : 'GetRepaymentMethodRequest_REQUEST', api : '/api/v4.0/repayment/getRepaymentMethod/trigger', sourceDestination: 'APP_CORE', headers: {} },
+  '/api/v4.0/repayment/getRepaymentMethod/status': {logTag :'LSP-GetRepaymentMethodStatus_REQUEST', api : '/api/v4.0/repayment/getRepaymentMethod/status', sourceDestination: 'APP_CORE', headers: {} },
+  '/api/v3.3/repayment/repayment/trigger': {logTag :'SetRepaymentPlanRequest_REQUEST', api : '/api/v3.3/repayment/repayment/trigger', sourceDestination: 'APP_CORE', headers: {} },
+  '/api/v3.3/repayment/repayment/status': {logTag : 'LSP-SetRepaymentPlanStatus_REQUEST', api : '/api/v3.3/repayment/repayment/status', sourceDestination: 'APP_CORE', headers: {} },
+
   // ==================== CORE_GATEWAY (Core to Gateway/Lender - Outgoing) ====================
   '/v4.0/loanStatusResponse':{logTag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST', api: '/v4.0/loanStatusResponse', sourceDestination: 'GATEWAY_LSP', headers: {}},
   '/v4.0/loanStatusRequest':{logTag: 'Lsp-LoanStatusRequest_REQUEST', api: '/v4.0/loanStatusRequest', sourceDestination: 'CORE_GATEWAY', headers: {}},
@@ -1465,6 +1477,8 @@ export const API_TO_LOGTAG_MAP = {
   '/api/fetch/loanApplicationData': { logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST', api: '/api/fetch/loanApplicationData', sourceDestination: 'GATEWAY_LSP', headers: {} },
   '/gateway/v3.3/fetchLoanStatus':{logTag: 'LSP-GetStatus_REQUEST', api: '/gateway/v3.3/fetchLoanStatus', sourceDestination: 'CORE_GATEWAY', headers: {} },
   '/gateway/v3.3/loan/getLoanAgreementRequest': { logTag: 'GetAgreementDataRequest-LSP_REQUEST', api: '/gateway/v3.3/loan/getLoanAgreementRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v3.3/repayment/setRepaymentPlanRequest': {logTag : 'SetRepaymentPlanRequest-LSP_REQUEST',api : '/gateway/v3.3/repayment/setRepaymentPlanRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v3.3/repayment/setRepaymentPlanStatusRequest' : {logTag : 'SetRepaymentPlanStatusRequest-LSP_REQUEST', api : '/gateway/v3.3/repayment/setRepaymentPlanStatusRequest', sourceDestination: 'CORE_GATEWAY', headers: {} },
   
   // ==================== GATEWAY_CORE (Gateway to Core - Responses/Callbacks) ====================
   '/v1/themis/eligibility/callback': { logTag: 'LSP-Eligibility_INCOMING', api: '/v1/themis/eligibility/callback', sourceDestination: 'GATEWAY_CORE', headers: {} },
@@ -1639,11 +1653,18 @@ export const ORCHESTRATOR_CONFIG = {
 };
 
 // Retry configuration for stuck log entries
-// RETRY_INTERVAL_MS: how often to poll (250ms = 4 times/sec)
+// RETRY_INTERVAL_MS: how often to poll (100ms = 10 times/sec)
 // MAX_RETRY_SECONDS: how long to wait on the same entry before giving up
 export const RETRY_CONFIG = {
-  retryIntervalMs: parseInt(process.env.RETRY_INTERVAL_MS, 10) || 250,
+  retryIntervalMs: parseInt(process.env.RETRY_INTERVAL_MS, 10) || 50,
   maxRetrySeconds: parseInt(process.env.MAX_RETRY_SECONDS, 10) || 2,
+};
+
+export const ASYNC_ORCHESTRATOR_CONFIG = {
+  pollIntervalMs:
+    parseInt(process.env.ASYNC_ORCHESTRATOR_POLL_INTERVAL_MS, 10) || RETRY_CONFIG.retryIntervalMs,
+  maxBackoffMs:
+    parseInt(process.env.ASYNC_ORCHESTRATOR_MAX_BACKOFF_MS, 10) || 50,
 };
 
 export const RETRY_TIMEOUT_OVERRIDES = {

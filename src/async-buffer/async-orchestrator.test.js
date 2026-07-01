@@ -305,7 +305,7 @@ test('resolveOutboundLoanApplicationIdForReplay keeps current replay loan applic
   assert.equal(resolved, 'live-la');
 });
 
-test('maybePrimeLoanSettlementPt waits before triggering replay helper', async () => {
+test('maybePrimeLoanSettlementPt waits only before the first replay helper trigger', async () => {
   const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
   orchestrator.stateManager = new StateManager();
   orchestrator.stateManager.seedProdLoanApplicationIdsFromLogs([
@@ -322,6 +322,7 @@ test('maybePrimeLoanSettlementPt waits before triggering replay helper', async (
   orchestrator.config = { merchantId: 'flipkart' };
   orchestrator.validator = { currentIndex: 10 };
   orchestrator.activeLoanSettlementPtTriggers = new Set();
+  orchestrator.hasWaitedForInitialLoanSettlementPtTrigger = false;
   orchestrator.resolveOutboundLoanApplicationIdForReplay = () => 'live-la';
 
   const originalSetTimeout = global.setTimeout;
@@ -338,11 +339,19 @@ test('maybePrimeLoanSettlementPt waits before triggering replay helper', async (
       isRequest: true,
       toString: () => '[12] LOAN_SETTLEMENT_PT_REQUEST CORE→GATEWAY'
     });
+
+    orchestrator.validator.currentIndex = 11;
+    await orchestrator.maybePrimeLoanSettlementPt({
+      index: 13,
+      logTag: 'LOAN_SETTLEMENT_PT_REQUEST',
+      isRequest: true,
+      toString: () => '[13] LOAN_SETTLEMENT_PT_REQUEST CORE→GATEWAY'
+    });
   } finally {
     global.setTimeout = originalSetTimeout;
   }
 
-  assert.equal(timeouts.includes(1000), true);
+  assert.equal(timeouts.filter(ms => ms === 1000).length, 1);
 });
 
 test('prepareAsyncReplayForwarding preserves loan-status payload requestId during fallback replay', () => {
