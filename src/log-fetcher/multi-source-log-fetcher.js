@@ -11,6 +11,27 @@ import {
 } from './sources/order-context-resolver.js';
 import { logger } from '../utils/logger.js';
 
+function parseBooleanOption(value, defaultValue = true) {
+  if (value === undefined || value === null || value === '') {
+    return defaultValue;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['false', '0', 'no', 'n', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return defaultValue;
+}
+
 function getCreatedAtTime(log) {
   const createdAt = log?.message?.created_at;
   const timestamp = createdAt ? new Date(createdAt).getTime() : Number.NaN;
@@ -100,19 +121,66 @@ export class MultiSourceLogFetcher {
     this.retryDelay = options.retryDelay || 2000;
     this.lspLookupBaseUrl = options.lspLookupBaseUrl || process.env.LSP_LOOKUP_BASE_URL || null;
     this.lspOrderStatusEndpoint = options.lspOrderStatusEndpoint || process.env.LSP_ORDER_STATUS_ENDPOINT || null;
+    this.useOrderContextLookup = options.useOrderContextLookup ?? parseBooleanOption(
+      process.env.USE_FETCH_ORDER_CONTEXT ??
+        process.env.FETCH_ORDER_CONTEXT_ENABLED ??
+        process.env.ART_FETCH_ORDER_CONTEXT_ENABLED,
+      true
+    );
   }
 
   async fetchLogsForOrder(merchantId, orderId, retries = 0) {
     logger.info(`Fetching replay logs for order: ${merchantId}/${orderId}`, {
       merchantId,
       orderId,
-      attempt: retries + 1
+      attempt: retries + 1,
+      useOrderContextLookup: this.useOrderContextLookup
     });
 
-    const lspContext = await resolveOrderContextFromLsp(merchantId, orderId, {
-      baseUrl: this.lspLookupBaseUrl || undefined,
-      endpoint: this.lspOrderStatusEndpoint || undefined
-    });
+    const orderLogsResult = await fetchS3TraceLogsByOrder(merchantId, orderId, this.sessionToken);
+
+    if (!orderLogsResult.success) {
+      const fallbackContext = { customerId: null, loanApplicationIds: [] };
+
+      if (this.useOrderContextLookup) {
+        const lspContext = await resolveOrderContextFromLsp(merchantId, orderId, {
+          baseUrl: this.lspLookupBaseUrl || undefined,
+          endpoint: this.lspOrderStatusEndpoint || undefined
+        });
+
+        if (lspContext.success) {
+          fallbackContext.customerId = lspContext.customerId;
+          fallbackContext.loanApplicationIds = lspContext.loanApplicationIds;
+        }
+      }
+
+      if (retries < this.maxRetries) {
+        logger.warn(`Order log fetch failed for ${orderId}, retrying (${retries + 1}/${this.maxRetries})...`, {
+          error: orderLogsResult.error
+        });
+        await this.sleep(this.retryDelay * (retries + 1));
+        return this.fetchLogsForOrder(merchantId, orderId, retries + 1);
+      }
+
+      return {
+        success: false,
+        error: orderLogsResult.error,
+        logs: [],
+        count: 0,
+        merchantId,
+        orderId,
+        context: fallbackContext,
+        sourceCounts: {}
+      };
+    }
+
+    const logContext = extractReplayContextFromLogs(orderLogsResult.logs);
+    const lspContext = this.useOrderContextLookup
+      ? await resolveOrderContextFromLsp(merchantId, orderId, {
+        baseUrl: this.lspLookupBaseUrl || undefined,
+        endpoint: this.lspOrderStatusEndpoint || undefined
+      })
+      : { success: false, customerId: null, loanApplicationIds: [] };
 
     if (shouldSkipReplayForMultipleOrderContextLaids(lspContext)) {
       const skipReason =
@@ -142,33 +210,6 @@ export class MultiSourceLogFetcher {
       };
     }
 
-    const orderLogsResult = await fetchS3TraceLogsByOrder(merchantId, orderId, this.sessionToken);
-
-    if (!orderLogsResult.success) {
-      if (retries < this.maxRetries) {
-        logger.warn(`Order log fetch failed for ${orderId}, retrying (${retries + 1}/${this.maxRetries})...`, {
-          error: orderLogsResult.error
-        });
-        await this.sleep(this.retryDelay * (retries + 1));
-        return this.fetchLogsForOrder(merchantId, orderId, retries + 1);
-      }
-
-      return {
-        success: false,
-        error: orderLogsResult.error,
-        logs: [],
-        count: 0,
-        merchantId,
-        orderId,
-        context: lspContext.success ? {
-          customerId: lspContext.customerId,
-          loanApplicationIds: lspContext.loanApplicationIds
-        } : { customerId: null, loanApplicationIds: [] },
-        sourceCounts: {}
-      };
-    }
-
-    const logContext = extractReplayContextFromLogs(orderLogsResult.logs);
     const replayContext = mergeReplayContexts(
       lspContext.success ? lspContext : { customerId: null, loanApplicationIds: [] },
       logContext
@@ -220,6 +261,7 @@ export class MultiSourceLogFetcher {
       orderId,
       customerId: replayContext.customerId,
       loanApplicationIds: replayContext.loanApplicationIds,
+      orderContextSource: this.useOrderContextLookup ? 'fetchOrderContext+order_s3_logs' : 'order_s3_logs',
       preservedLoanApplicationIds,
       discardedLoanApplicationIds,
       sourceCounts,

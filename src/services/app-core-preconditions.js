@@ -27,6 +27,15 @@ function buildLspStyleId() {
   return `LSP${crypto.randomUUID().replaceAll('-', '')}`;
 }
 
+function isDedicatedBackingServicesEnabled() {
+  const rawValue = process.env.EULER_ART_DEDICATED_BACKING_SERVICES;
+  if (typeof rawValue !== 'string') {
+    return false;
+  }
+
+  return ['1', 'true', 'yes', 'on'].includes(rawValue.trim().toLowerCase());
+}
+
 function getLspDbSocketDir() {
   if (process.env.ART_LSP_DB_SOCKET_DIR) {
     return process.env.ART_LSP_DB_SOCKET_DIR;
@@ -36,6 +45,20 @@ function getLspDbSocketDir() {
   if (lspUnixSocket) {
     if (lspUnixSocket.endsWith('/data/el/el.sock')) {
       return lspUnixSocket.replace(/\/data\/el\/el\.sock$/, '/data/lsp-db');
+    }
+
+    const podSocketMatch = lspUnixSocket.match(/^(.*)\/data\/lsp-pods\/pod-(\d+)\/lsp\.sock$/);
+    if (podSocketMatch) {
+      const [, repoRoot, podNumber] = podSocketMatch;
+
+      if (isDedicatedBackingServicesEnabled()) {
+        const dedicatedDbDir = `${repoRoot}/data/lsp-db-pod-${podNumber}`;
+        if (fs.existsSync(dedicatedDbDir)) {
+          return dedicatedDbDir;
+        }
+      }
+
+      return `${repoRoot}/data/lsp-db`;
     }
 
     return lspUnixSocket.replace(/\/euler-lsp\/euler-lsp\.sock$/, '/lsp-db');

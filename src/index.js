@@ -8,10 +8,24 @@ import { createInterface } from 'readline';
 import { logger } from './utils/logger.js';
 import { runSequentialArt } from './sequential-runner.js';
 import { fetchOrderIdsFromQAPI } from './services/http-client.js';
+import { loadOrderListFromFile, shardOrderList } from './services/order-list.js';
 import { startMultiplexerServer } from './dashboard/multiplexer.js';
 import { stopProcessCompose } from './utils/process-compose.js';
 
 uninstallEarlyProcessComposeStop();
+
+function parseOptionalInt(value, envName) {
+  if (value === undefined || value === '') {
+    return null;
+  }
+
+  const parsed = parseInt(value, 10);
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`${envName} must be an integer`);
+  }
+
+  return parsed;
+}
 
 const CONFIG = {
   ART_UNIX_SOCKET_PATH: process.env.ART_UNIX_SOCKET_PATH || null,
@@ -20,10 +34,18 @@ const CONFIG = {
   AUTO_START: process.env.AUTO_START !== 'false',
   USE_ASYNC_ORCHESTRATOR: process.env.USE_ASYNC_ORCHESTRATOR === 'true',
   AUTO_FETCH_LOGS: process.env.AUTO_FETCH_LOGS === 'true',
+  USE_ART_FINAL_STORE_LOGS: process.env.USE_ART_FINAL_STORE_LOGS === 'true',
+  ART_FINAL_STORE_DIR: process.env.ART_FINAL_STORE_DIR || 'data/art-final-store',
+  ART_FINAL_STORE_ORDER_LIST_PATH: process.env.ART_FINAL_STORE_ORDER_LIST_PATH || null,
   AUTO_FETCH_ORDER_IDS: process.env.AUTO_FETCH_ORDER_IDS === 'true',
   QAPI_LOOKBACK_MINUTES: parseInt(process.env.QAPI_LOOKBACK_MINUTES, 10) || null,
   QAPI_ORDER_LIMIT: parseInt(process.env.QAPI_ORDER_LIMIT, 10) || null,
   MERCHANT_ID: process.env.MERCHANT_ID || process.env.QAPI_MERCHANT_ID || 'flipkart',
+  MULTI_ART_ENABLED: process.env.MULTI_ART_ENABLED === 'true',
+  ART_ORDER_FILE_MODE: process.env.ART_ORDER_FILE_MODE || 'shared-shard',
+  ORDER_FILE: process.env.ORDER_FILE || process.env.MULTI_ART_ORDER_FILE || 'data/order-ids.json',
+  ART_WORKER_INDEX: parseOptionalInt(process.env.ART_WORKER_INDEX, 'ART_WORKER_INDEX') ?? 0,
+  ART_WORKER_COUNT: parseOptionalInt(process.env.ART_WORKER_COUNT, 'ART_WORKER_COUNT') ?? 1,
   FILTERED_LOGS_PATH: process.env.FILTERED_LOGS_PATH || 'data/filtered-logs.json',
   FINAL_FILTERED_LOGS_PATH: process.env.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json',
   ORDER_LIST: process.env.ORDER_LIST 
@@ -34,7 +56,9 @@ const CONFIG = {
   LAST_MINUTES: process.env.LAST_MINUTES ? parseInt(process.env.LAST_MINUTES, 10) : null,
   SESSION_TOKEN: process.env.SESSION_TOKEN || '',
   REPORT_PATH: process.env.REPORT_PATH || 'report.json',
+  ENABLE_ORDER_PROFILING: process.env.ENABLE_ORDER_PROFILING === 'true',
   KEEP_ORDER_TEMP_FILES: process.env.KEEP_ORDER_TEMP_FILES === 'true',
+  PARALLEL_ORDERS: parseInt(process.env.PARALLEL_ORDERS, 10) || 10,
   ENABLE_BATCH_PROCESSING: process.env.ENABLE_BATCH_PROCESSING !== 'false',
   SKIP_LENDER_ORG_IDS: process.env.SKIP_LENDER_ORG_IDS
     ? process.env.SKIP_LENDER_ORG_IDS.split(',').map(s => s.trim()).filter(Boolean)
@@ -138,6 +162,85 @@ function getConfiguredFetchInputs() {
 }
 
 async function resolveOrderList() {
+  if (CONFIG.USE_ART_FINAL_STORE_LOGS) {
+    const orderListPath = CONFIG.ART_FINAL_STORE_ORDER_LIST_PATH || `${CONFIG.ART_FINAL_STORE_DIR}/latest-order-list.json`;
+
+    console.log('\n========================================');
+    console.log('Using ART Final Store ORDER_LIST');
+    console.log('========================================');
+    console.log(`Order List File: ${resolve(orderListPath)}`);
+    console.log(`Store Root: ${resolve(CONFIG.ART_FINAL_STORE_DIR)}`);
+    console.log('ClickHouse/QAPI order fetching: disabled');
+
+    const allOrders = await loadOrderListFromFile(orderListPath, CONFIG.MERCHANT_ID);
+    const workerOrders = CONFIG.ART_WORKER_COUNT > 1
+      ? shardOrderList(allOrders, CONFIG.ART_WORKER_INDEX, CONFIG.ART_WORKER_COUNT)
+      : allOrders;
+
+    if (CONFIG.ART_WORKER_COUNT > 1) {
+      console.log(`Worker: ${CONFIG.ART_WORKER_INDEX + 1}/${CONFIG.ART_WORKER_COUNT}`);
+      console.log(`Total Orders In Store List: ${allOrders.length}`);
+    }
+    console.log(`Orders For This Worker: ${workerOrders.length}`);
+    workerOrders.slice(0, 5).forEach((order, index) => {
+      console.log(`  ${index + 1}. ${order.orderId} (${order.merchantId})`);
+    });
+    if (workerOrders.length > 5) {
+      console.log(`  ... and ${workerOrders.length - 5} more`);
+    }
+    console.log('========================================\n');
+
+    return workerOrders;
+  }
+
+  if (CONFIG.ART_ORDER_FILE_MODE === 'worker-file') {
+    console.log('\n========================================');
+    console.log('Using Worker ORDER_FILE');
+    console.log('========================================');
+    console.log(`Order File: ${CONFIG.ORDER_FILE}`);
+    console.log(`Worker: ${CONFIG.ART_WORKER_INDEX + 1}/${CONFIG.ART_WORKER_COUNT}`);
+
+    const workerOrders = await loadOrderListFromFile(CONFIG.ORDER_FILE, CONFIG.MERCHANT_ID);
+
+    console.log(`Orders For This Worker: ${workerOrders.length}`);
+    workerOrders.slice(0, 5).forEach((order, index) => {
+      console.log(`  ${index + 1}. ${order.orderId} (${order.merchantId})`);
+    });
+    if (workerOrders.length > 5) {
+      console.log(`  ... and ${workerOrders.length - 5} more`);
+    }
+    console.log('========================================\n');
+
+    return workerOrders;
+  }
+
+  if (CONFIG.MULTI_ART_ENABLED) {
+    console.log('\n========================================');
+    console.log('Using Multi-ART ORDER_FILE');
+    console.log('========================================');
+    console.log(`Order File: ${CONFIG.ORDER_FILE}`);
+    console.log(`Worker: ${CONFIG.ART_WORKER_INDEX + 1}/${CONFIG.ART_WORKER_COUNT}`);
+
+    const allOrders = await loadOrderListFromFile(CONFIG.ORDER_FILE, CONFIG.MERCHANT_ID);
+    const workerOrders = shardOrderList(
+      allOrders,
+      CONFIG.ART_WORKER_INDEX,
+      CONFIG.ART_WORKER_COUNT
+    );
+
+    console.log(`Total Orders In File: ${allOrders.length}`);
+    console.log(`Orders For This Worker: ${workerOrders.length}`);
+    workerOrders.slice(0, 5).forEach((order, index) => {
+      console.log(`  ${index + 1}. ${order.orderId} (${order.merchantId})`);
+    });
+    if (workerOrders.length > 5) {
+      console.log(`  ... and ${workerOrders.length - 5} more`);
+    }
+    console.log('========================================\n');
+
+    return workerOrders;
+  }
+
   if (CONFIG.ORDER_LIST.length > 0) {
     console.log('\n========================================');
     console.log('Using Explicit ORDER_LIST');
@@ -237,12 +340,21 @@ async function fetchOrderListFromQAPI(answers) {
 async function main() {
   const logUnexpectedProcessError = async (kind, error) => {
     const normalizedError = error instanceof Error ? error : new Error(String(error));
+    const reportGenerator = globalThis.__ART_REPORT_GENERATOR__;
 
     console.error(`\n${kind}:`, normalizedError.message);
     logger.error(kind, {
       error: normalizedError.message,
       stack: normalizedError.stack
     });
+
+    if (reportGenerator?.writePartialFailureReport) {
+      try {
+        reportGenerator.writePartialFailureReport(`${kind}: ${normalizedError.message}`);
+      } catch (reportError) {
+        console.error('Failed to write partial ART report:', reportError.message);
+      }
+    }
 
     await stopProcessCompose(kind);
   };

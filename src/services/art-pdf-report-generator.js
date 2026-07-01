@@ -110,6 +110,10 @@ export function generatePdfReport(report, jsonReportPath) {
     px += pill(px, py, `${summary.totalPayloadMismatches ?? 0} mismatches`, (summary.totalPayloadMismatches ?? 0) > 0 ? '#450a0a' : '#14532d', (summary.totalPayloadMismatches ?? 0) > 0 ? C.red : C.green);
     if ((summary.totalBufferFailures ?? 0) > 0)
       pill(px, py, `${summary.totalBufferFailures} buffer failures`, '#451a03', C.yellow);
+    if ((summary.totalFlowFailures ?? 0) > 0)
+      pill(px, py + 20, `${summary.totalFlowFailures} flow failures`, '#450a0a', C.red);
+    if ((summary.totalArtFailures ?? 0) > 0)
+      pill(px + 150, py + 20, `${summary.totalArtFailures} art failures`, '#1e293b', C.yellow);
 
     // order outcomes table
     let y = 122;
@@ -127,6 +131,7 @@ export function generatePdfReport(report, jsonReportPath) {
       doc.fillColor(C.heading).text(order.orderId, 54, y, { lineBreak: false, width: 180 });
       doc.fillColor(C.sub).text(order.status, 240, y, { lineBreak: false, width: 70 });
       doc.fillColor(C.sub).text(order.logTag || '—', 316, y, { lineBreak: false, width: 120 });
+      doc.fillColor(C.sub).text(order.processingTimeMs != null ? `${(order.processingTimeMs / 1000).toFixed(1)}s` : '—', 442, y, { lineBreak: false, width: 40 });
       if (!ok && order.failureReason) {
         y += 10;
         doc.fontSize(7).font('Helvetica').fillColor(C.red)

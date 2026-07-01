@@ -116,8 +116,9 @@ export class ReplayOrchestrator {
     this.isRunning = false;
     this.failureReason = null;
     this.reportGenerator = config.reportGenerator || null;
+    this.orderProfiler = config.orderProfiler || null;
     this.orderId = config.orderId || null;
-    this.bufferFailures = [];
+    this.flowFailures = [];
 
     this.loadLogs(logs);
   }
@@ -170,7 +171,7 @@ export class ReplayOrchestrator {
     this.asyncCallTracker.clear();
     this.observedIncomingRequests = [];
     this.observedProcessedResponses = [];
-    this.bufferFailures = [];
+    this.flowFailures = [];
     this.failureReason = null;
 
     this.results.processedLogs = this.results.processedLogs.filter(log => {
@@ -254,11 +255,15 @@ export class ReplayOrchestrator {
         shouldBlockOnHeldExternalRequest: () => true,
         trackAsyncCompletion: this.trackAsyncCompletion.bind(this),
         fail: this.fail.bind(this),
-        recordBufferFailure: this.recordBufferFailure.bind(this),
+        recordBufferFailure:
+          typeof this.recordBufferFailure === 'function'
+            ? this.recordBufferFailure.bind(this)
+            : null,
         buildFailureFallbackResponse:
           typeof this.buildFailureFallbackResponse === 'function'
             ? this.buildFailureFallbackResponse.bind(this)
-            : null
+            : null,
+        recordFlowFailure: this.recordFlowFailure.bind(this)
       }
     });
 
@@ -344,9 +349,23 @@ export class ReplayOrchestrator {
     const customerSeedData = ReplayOrchestrator.extractCustomerSeedData(this.logs);
     const lineSeedData = ReplayOrchestrator.extractLineSeedData(this.logs);
 
-    await this.clearLspData(merchantId, orderId);
+    if (this.orderProfiler?.enabled) {
+      await this.orderProfiler.measure('clear_lsp_data', () => this.clearLspData(merchantId, orderId), {
+        merchantId,
+        orderId
+      });
+    } else {
+      await this.clearLspData(merchantId, orderId);
+    }
     // Set Onboarding data for the merchant to ensure LSP is ready for the replay session
-    await this.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData);
+    if (this.orderProfiler?.enabled) {
+      await this.orderProfiler.measure('onboard_seed_data', () => this.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData), {
+        merchantId,
+        lenderOrgCount: Object.keys(lenderOrgIdToIdMap || {}).length
+      });
+    } else {
+      await this.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData);
+    }
 
     logger.info('Replay orchestrator started', {
       totalLogs: this.logs.length,
@@ -479,6 +498,22 @@ export class ReplayOrchestrator {
 
     const expectedEntry = this.validator.getCurrentEntry();
 
+    logger.info('ORCH_CURRENT_EXPECTATION', {
+      orderId: this.orderId,
+      incoming: {
+        source: incoming.source,
+        destination: incoming.destination,
+        logTag: incoming.logTag,
+        requestId: incoming.requestId,
+        lenderOrgId: incoming.lenderOrgId || null,
+        loanApplicationId: incoming.loanApplicationId || incoming.payload?.loanApplicationId || incoming.payload?.loan_application_id || null,
+        orderId: incoming.orderId || incoming.headers?.['x-order-id'] || incoming.payload?.orderId || incoming.payload?.order_id || null
+      },
+      expectedEntry: expectedEntry?.toString?.() || null,
+      currentIndex: this.validator?.currentIndex ?? null,
+      processedCount: this.validator?.processedIndices?.size || 0
+    });
+
     if (!expectedEntry) {
       // If the polling loop has already completed, this is a late straggler arriving
       // after all logs were processed — ignore it gracefully instead of failing.
@@ -526,6 +561,29 @@ export class ReplayOrchestrator {
       isRequest: true,
       requestId: normalizedIncoming.requestId,
       lenderOrgId: normalizedIncoming.lenderOrgId
+    });
+
+    logger.info('ORCH_INCOMING_VALIDATION_RESULT', {
+      orderId: this.orderId,
+      incoming: {
+        source: normalizedIncoming.source,
+        destination: normalizedIncoming.destination,
+        logTag: normalizedIncoming.logTag,
+        requestId: normalizedIncoming.requestId,
+        lenderOrgId: normalizedIncoming.lenderOrgId || null,
+        loanApplicationId: normalizedIncoming.loanApplicationId || normalizedIncoming.payload?.loanApplicationId || normalizedIncoming.payload?.loan_application_id || null,
+        orderId: normalizedIncoming.orderId || normalizedIncoming.headers?.['x-order-id'] || normalizedIncoming.payload?.orderId || normalizedIncoming.payload?.order_id || null
+      },
+      expectedEntry: expectedEntry?.toString?.() || null,
+      validation: {
+        valid: validation.valid,
+        error: validation.error || null,
+        alreadyProcessed: validation.alreadyProcessed || false,
+        isEarly: validation.isEarly || false,
+        isAsyncParallelCall: validation.isAsyncParallelCall || false,
+        expectedEntry: validation.expectedEntry?.toString?.() || null,
+        foundInLookahead: validation.foundInLookahead?.toString?.() || null
+      }
     });
 
     if (incoming.source === 'LENDER' && incoming.destination === 'GW') {
@@ -1210,6 +1268,7 @@ export class ReplayOrchestrator {
       currentEntry: this.validator.getCurrentEntry()?.toString()
     });
 
+    const lspPassThroughStart = this.orderProfiler?.enabled ? this.orderProfiler.now() : 0;
     const serviceResponse = await makeRequest(
       this.getServiceBaseUrl('LSP'),
       '/api/fetch/loanApplicationData',
@@ -1224,6 +1283,16 @@ export class ReplayOrchestrator {
       this.getServiceUnixSocket('LSP'),
       this.config.timeoutMs || 10000
     );
+    this.orderProfiler?.recordDownstreamCall({
+      destination: 'LSP',
+      endpoint: '/api/fetch/loanApplicationData',
+      logTag: incoming.logTag,
+      logIndex: null,
+      requestId: incoming.requestId,
+      status: serviceResponse?.status ?? null,
+      success: Boolean(serviceResponse && !serviceResponse.error && serviceResponse.status >= 200 && serviceResponse.status < 300),
+      durationMs: this.orderProfiler.now() - lspPassThroughStart
+    });
 
     if (serviceResponse?.error || serviceResponse?.status < 200 || serviceResponse?.status >= 300) {
       logger.error('fetchLoanApplicationData pass-through failed', {
@@ -1632,11 +1701,11 @@ export class ReplayOrchestrator {
     };
   }
 
-  recordBufferFailure(failureInfo) {
-    this.bufferFailures.push(failureInfo);
+  recordFlowFailure(failureInfo) {
+    this.flowFailures.push(failureInfo);
     
     if (this.reportGenerator && this.orderId) {
-      this.reportGenerator.recordBufferFailure(this.orderId, failureInfo);
+      this.reportGenerator.recordFlowFailure(this.orderId, failureInfo);
     }
   }
 
@@ -1657,8 +1726,10 @@ export class ReplayOrchestrator {
       ...this.results,
       progress: this.validator.getProgress(),
       state: this.stateManager.getState(),
-      bufferFailures: this.bufferFailures,
-      failedBufferRequests: this.bufferFailures,
+      flowFailures: this.flowFailures,
+      failedFlowRequests: this.flowFailures,
+      bufferFailures: this.flowFailures,
+      failedBufferRequests: this.flowFailures,
       failureReason: this.failureReason
     };
   }

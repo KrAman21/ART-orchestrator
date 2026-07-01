@@ -2,14 +2,15 @@ import { fetchLogsFromJSONFile, filterAndSortLogs, filterOrchestratorSkippableLo
 import { ReplayOrchestrator } from './orchestrator.js';
 import { AsyncReplayOrchestrator } from './async-buffer/async-orchestrator.js';
 import { createMockController } from './mocks/index.js';
-import { MOCK_CONFIG, SERVICE_MAP, RETRY_CONFIG, RETRY_TIMEOUT_OVERRIDES } from './config.js';
+import { ASYNC_ORCHESTRATOR_CONFIG, MOCK_CONFIG, SERVICE_MAP, RETRY_CONFIG, RETRY_TIMEOUT_OVERRIDES } from './config.js';
 import { BatchLogFetcher } from './log-fetcher/index.js';
 import { ArtReportGenerator } from './services/art-report-generator.js';
 import { logger } from './utils/logger.js';
-import { basename, dirname, extname, join } from 'path';
-import { unlink } from 'fs/promises';
+import { basename, dirname, extname, join, resolve } from 'path';
+import { access, unlink } from 'fs/promises';
 import { REPLAY_SPECIAL_CASES, getOptionalRepeatPolicy, isPollingApiLogTag, isSelfTriggerFallbackApiLogTag } from './replay-special-cases.js';
 import { findCorrespondingResponseEntry } from './services/response-matcher.js';
+import { createOrderProfiler } from './utils/order-profiler.js';
 
 function extractReadableFailureMessage(value) {
   if (!value) {
@@ -45,8 +46,10 @@ export async function runSequentialArt(orderList, config) {
     ? 1
     : requestedParallelOrders;
   const reportGenerator = new ArtReportGenerator({
-    reportPath: config.REPORT_PATH || 'report.json'
+    reportPath: config.REPORT_PATH || 'report.json',
+    enableOrderProfiling: config.ENABLE_ORDER_PROFILING === true
   });
+  globalThis.__ART_REPORT_GENERATOR__ = reportGenerator;
 
   let shutdownRequested = false;
 
@@ -64,6 +67,9 @@ export async function runSequentialArt(orderList, config) {
   const cleanupHandlers = () => {
     process.off('SIGINT', onShutdown);
     process.off('SIGTERM', onShutdown);
+    if (globalThis.__ART_REPORT_GENERATOR__ === reportGenerator) {
+      delete globalThis.__ART_REPORT_GENERATOR__;
+    }
   };
 
   if (requestedParallelOrders > 1 && parallelOrders === 1) {
@@ -79,21 +85,36 @@ export async function runSequentialArt(orderList, config) {
   console.log(`Total Orders: ${orderList.length}`);
   console.log(`Max Concurrent Orders: ${parallelOrders}`);
   console.log(`Max Journey Time: ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes`);
+  console.log(`Order Profiling: ${config.ENABLE_ORDER_PROFILING === true ? 'enabled' : 'disabled'}`);
   console.log(`========================================\n`);
 
   reportGenerator.startExecution();
 
-  // Start all S3 fetches concurrently in the background — returns a Map of Promises.
-  // Workers await only their own order's promise, so replay and fetching overlap.
-  console.log(`\n[PREFETCH] Starting background log fetch for all ${orderList.length} orders...`);
+  // Start all log preparation concurrently in the background. In normal mode this
+  // fetches from S3; in final-store mode it loads cron-produced final logs.
+  const logPreparationLabel = config.USE_ART_FINAL_STORE_LOGS ? 'final-store log load' : 'background log fetch';
+  console.log(`\n[PREFETCH] Starting ${logPreparationLabel} for all ${orderList.length} orders...`);
+  if (config.USE_ART_FINAL_STORE_LOGS) {
+    console.log(`[FINAL-STORE] Enabled: reading final logs from ${resolve(process.cwd(), config.ART_FINAL_STORE_DIR || 'data/art-final-store')}`);
+    logger.info('[FINAL-STORE] ART worker will load cron-produced final logs and skip fetching/filtering', {
+      storeRoot: resolve(process.cwd(), config.ART_FINAL_STORE_DIR || 'data/art-final-store'),
+      totalOrders: orderList.length,
+      phase: 'FINAL_STORE_MODE_ENABLED'
+    });
+  }
   const prefetchPromises = startPrefetchPromises(orderList, config);
-  console.log(`[PREFETCH] Workers starting — fetching and replaying will run concurrently.\n`);
+  console.log(`[PREFETCH] Workers starting — log preparation and replay will run concurrently.\n`);
 
   const results = new Array(orderList.length);
   let nextOrderIndex = 0;
 
   const runOrderAtIndex = async (absoluteIndex) => {
     const { merchantId, orderId } = orderList[absoluteIndex];
+    const orderProfiler = createOrderProfiler({
+      enabled: config.ENABLE_ORDER_PROFILING === true,
+      orderId,
+      merchantId
+    });
 
     console.log(`\n========================================`);
     console.log(`Playing Order ${absoluteIndex + 1}/${orderList.length}`);
@@ -110,6 +131,13 @@ export async function runSequentialArt(orderList, config) {
     });
 
     try {
+      const prefetchWaitStart = orderProfiler.enabled ? orderProfiler.now() : 0;
+      const prefetchedData = await (prefetchPromises?.get(orderId) ?? Promise.resolve(null));
+      orderProfiler.endSection('prefetch_wait', prefetchWaitStart, {
+        source: prefetchedData?.source || (prefetchedData ? 'PREFETCH' : 'NONE'),
+        completedWithError: Boolean(prefetchedData?.error)
+      });
+
       const orderResult = await processSingleOrder(
         merchantId,
         orderId,
@@ -118,7 +146,8 @@ export async function runSequentialArt(orderList, config) {
         orderList.length,
         maxJourneyTimeMs,
         reportGenerator,
-        await (prefetchPromises?.get(orderId) ?? Promise.resolve(null))
+        prefetchedData,
+        orderProfiler
       );
 
       const result = {
@@ -251,6 +280,76 @@ async function fetchAndFilterOrderLogs(merchantId, orderId, config, logsFilePath
   return finalFilteredLogs;
 }
 
+function sanitizeStorePathSegment(value) {
+  return String(value || 'unknown')
+    .trim()
+    .replace(/[^a-zA-Z0-9._=-]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'unknown';
+}
+
+function getLegacyArtFinalStoreLogsPath(config, merchantId, orderId) {
+  return join(
+    config.ART_FINAL_STORE_DIR || 'data/art-final-store',
+    'artifacts',
+    sanitizeStorePathSegment(merchantId),
+    sanitizeStorePathSegment(orderId),
+    'final-filtered-logs.json'
+  );
+}
+
+function getFlatArtFinalStoreLogsPath(config, orderId) {
+  return join(
+    config.ART_FINAL_STORE_DIR || 'data/art-final-store',
+    `${sanitizeStorePathSegment(orderId)}.json`
+  );
+}
+
+async function getArtFinalStoreLogsPath(config, merchantId, orderId) {
+  const flatPath = getFlatArtFinalStoreLogsPath(config, orderId);
+  const absoluteFlatPath = resolve(process.cwd(), flatPath);
+
+  try {
+    await access(absoluteFlatPath);
+    return flatPath;
+  } catch {
+    return getLegacyArtFinalStoreLogsPath(config, merchantId, orderId);
+  }
+}
+
+async function loadFinalStoreOrderLogs(merchantId, orderId, config) {
+  const finalFilteredLogsPath = await getArtFinalStoreLogsPath(config, merchantId, orderId);
+  const absoluteFinalFilteredLogsPath = resolve(process.cwd(), finalFilteredLogsPath);
+
+  console.log(`[FINAL-STORE] Loading final logs for ${merchantId}/${orderId} from ${absoluteFinalFilteredLogsPath}`);
+  logger.info('[FINAL-STORE] Loading cron-produced final logs for ART replay', {
+    merchantId,
+    orderId,
+    finalFilteredLogsPath: absoluteFinalFilteredLogsPath,
+    phase: 'FINAL_STORE_LOAD_START'
+  });
+
+  const finalFilteredLogs = await fetchLogsFromJSONFile(finalFilteredLogsPath);
+
+  if (finalFilteredLogs.length === 0) {
+    throw new Error(`No final logs found in ${finalFilteredLogsPath}`);
+  }
+
+  logger.info('[FINAL-STORE] Loaded cron-produced final logs for ART replay', {
+    merchantId,
+    orderId,
+    finalFilteredLogsPath: absoluteFinalFilteredLogsPath,
+    logCount: finalFilteredLogs.length,
+    phase: 'FINAL_STORE_LOAD_SUCCESS'
+  });
+
+  return {
+    finalFilteredLogs,
+    finalFilteredLogsPath: absoluteFinalFilteredLogsPath,
+    source: 'ART_FINAL_STORE',
+    cleanupTempFiles: false
+  };
+}
+
 /**
  * Prefetch pipeline: fetches and filters S3 logs for ALL orders concurrently.
  * Returns a Map<orderId, { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath }>
@@ -263,6 +362,31 @@ function startPrefetchPromises(orderList, config) {
   const promises = new Map();
 
   for (const { merchantId, orderId } of orderList) {
+    if (config.USE_ART_FINAL_STORE_LOGS) {
+      const p = loadFinalStoreOrderLogs(merchantId, orderId, config).then(
+        data => {
+          console.log(`[FINAL-STORE] ✓ ${orderId}: ${data.finalFilteredLogs.length} logs loaded from store (${data.finalFilteredLogsPath})`);
+          return data;
+        },
+        async error => {
+          console.log(`[FINAL-STORE] ✗ ${orderId}: ${error.message}`);
+          logger.warn(`[FINAL-STORE] Failed for order ${orderId}`, { orderId, error: error.message });
+          return {
+            error: error.message,
+            finalFilteredLogsPath: resolve(
+              process.cwd(),
+              await getArtFinalStoreLogsPath(config, merchantId, orderId)
+            ),
+            source: 'ART_FINAL_STORE',
+            cleanupTempFiles: false
+          };
+        }
+      );
+
+      promises.set(orderId, p);
+      continue;
+    }
+
     // idx matches position in orderList, same as what processSingleOrder uses
     const orderIndex = orderList.findIndex(o => o.orderId === orderId) + 1;
     const logsFilePath          = getPerOrderFilePath(config.LOGS_FILE_PATH             || 'data/logs.json',              orderId, orderIndex, config);
@@ -290,19 +414,20 @@ function startPrefetchPromises(orderList, config) {
   return promises;
 }
 
-async function processSingleOrder(merchantId, orderId, config, orderIndex, totalOrders, maxJourneyTimeMs, reportGenerator, prefetchedData = null) {
+async function processSingleOrder(merchantId, orderId, config, orderIndex, totalOrders, maxJourneyTimeMs, reportGenerator, prefetchedData = null, orderProfiler = null) {
   let server = null;
   let orchestrator = null;
   let mocks = null;
   let progressInterval = null;
   const registrySessionId = getRegistrySessionId(config, orderId);
-  const logsFilePath = prefetchedData?.logsFilePath ?? getPerOrderFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex, config);
-  const filteredLogsPath = prefetchedData?.filteredLogsPath ?? getPerOrderFilePath(config.FILTERED_LOGS_PATH || 'data/filtered-logs.json', orderId, orderIndex, config);
+  const usingFinalStoreLogs = prefetchedData?.source === 'ART_FINAL_STORE';
+  const logsFilePath = prefetchedData?.logsFilePath ?? (usingFinalStoreLogs ? null : getPerOrderFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex, config));
+  const filteredLogsPath = prefetchedData?.filteredLogsPath ?? (usingFinalStoreLogs ? null : getPerOrderFilePath(config.FILTERED_LOGS_PATH || 'data/filtered-logs.json', orderId, orderIndex, config));
   const finalFilteredLogsPath = prefetchedData?.finalFilteredLogsPath ?? getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json', orderId, orderIndex, config);
 
   console.log(`Replay artifacts for ${orderId}:`);
-  console.log(`  Raw logs: ${logsFilePath}`);
-  console.log(`  Filtered logs: ${filteredLogsPath}`);
+  if (logsFilePath) console.log(`  Raw logs: ${logsFilePath}`);
+  if (filteredLogsPath) console.log(`  Filtered logs: ${filteredLogsPath}`);
   console.log(`  Final filtered logs: ${finalFilteredLogsPath}`);
 
   const orderReport = reportGenerator.addOrder({
@@ -311,22 +436,60 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     orderIndex,
     totalOrders
   });
+  const getOrderProfile = () => orderProfiler?.snapshot?.() || null;
 
   try {
     let finalFilteredLogs;
 
     if (prefetchedData?.finalFilteredLogs) {
+      const usePrefetchStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
       finalFilteredLogs = prefetchedData.finalFilteredLogs;
-      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Using pre-fetched logs`, {
+      const sourceLabel = usingFinalStoreLogs ? 'cron final-store logs' : 'pre-fetched logs';
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Using ${sourceLabel}`, {
         orderId,
         orderIndex,
         totalOrders,
         logCount: finalFilteredLogs.length,
-        phase: 'PREFETCH_HIT'
+        finalFilteredLogsPath,
+        phase: usingFinalStoreLogs ? 'FINAL_STORE_HIT' : 'PREFETCH_HIT'
       });
-      console.log(`[PREFETCH] Using ${finalFilteredLogs.length} pre-fetched logs for order ${orderId}`);
+      if (usingFinalStoreLogs) {
+        console.log(`[FINAL-STORE] Using ${finalFilteredLogs.length} logs from store for order ${orderId}`);
+        console.log(`[FINAL-STORE] Source file: ${finalFilteredLogsPath}`);
+      } else {
+        console.log(`[PREFETCH] Using ${finalFilteredLogs.length} ${sourceLabel} for order ${orderId}`);
+      }
+      orderProfiler?.endSection('use_prefetched_logs', usePrefetchStart, {
+        logCount: finalFilteredLogs.length,
+        source: prefetchedData.source || 'PREFETCH'
+      });
     } else {
       if (prefetchedData?.error) {
+        if (usingFinalStoreLogs || config.USE_ART_FINAL_STORE_LOGS) {
+          const error = `Final-store logs unavailable: ${prefetchedData.error}`;
+          logger.warn(`[FINAL-STORE] ${error}`, {
+            orderId,
+            finalFilteredLogsPath
+          });
+          reportGenerator.recordArtFailure(orderId, {
+            error: true,
+            errorMessage: error,
+            failureType: 'LOG_UNAVAILABLE',
+            step: 'final_store_fetch'
+          });
+          reportGenerator.finalizeOrder(orderId, {
+            success: false,
+            stopReason: error,
+            logsProcessed: 0,
+            orderProfile: getOrderProfile()
+          });
+          return {
+            success: false,
+            logCount: 0,
+            error
+          };
+        }
+
         logger.warn(`[PREFETCH] Pre-fetch failed for order ${orderId}, falling back to inline fetch`, {
           orderId,
           error: prefetchedData.error
@@ -343,6 +506,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       let fetchResult = null;
       const maxFetchAttempts = 5;
       const fetchRetryIntervalMs = 2000;
+      const fetchLogsStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
 
       for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
         const fetcher = new BatchLogFetcher({
@@ -396,17 +560,33 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
 
         if (attempt < maxFetchAttempts) {
           console.log(`  Log fetch attempt ${attempt}/${maxFetchAttempts} returned 0 logs, retrying in 2s...`);
+          const retryWaitStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
           await new Promise(resolve => setTimeout(resolve, fetchRetryIntervalMs));
+          orderProfiler?.endSection('inline_fetch_retry_wait', retryWaitStart, {
+            attempt,
+            retryIntervalMs: fetchRetryIntervalMs
+          });
         }
       }
+      orderProfiler?.endSection('inline_fetch_logs', fetchLogsStart, {
+        attempts: fetchResult?.stats?.totalLogs > 0 ? 'completed' : 'exhausted',
+        totalLogs: fetchResult?.stats?.totalLogs || 0
+      });
 
       if (!fetchResult.success || fetchResult.stats.totalLogs === 0) {
         const error = `No logs found after ${maxFetchAttempts} attempts`;
         console.log(`  Failed to fetch logs for order ${orderId} after ${maxFetchAttempts} attempts, skipping.`);
+        reportGenerator.recordArtFailure(orderId, {
+          error: true,
+          errorMessage: error,
+          failureType: 'LOG_FETCH_FAILED',
+          step: 'fetch_logs'
+        });
         reportGenerator.finalizeOrder(orderId, {
           success: false,
           stopReason: error,
-          logsProcessed: 0
+          logsProcessed: 0,
+          orderProfile: getOrderProfile()
         });
         return {
           success: false,
@@ -424,37 +604,64 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         phase: 'FILTER_LOGS'
       });
 
+      const loadLogsStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
       const logs = await fetchLogsFromJSONFile(logsFilePath);
+      orderProfiler?.endSection('load_logs', loadLogsStart, { logCount: logs.length });
 
       if (logs.length === 0) {
+        reportGenerator.recordArtFailure(orderId, {
+          error: true,
+          errorMessage: 'No logs to process',
+          failureType: 'LOGS_EMPTY',
+          step: 'load_logs'
+        });
         reportGenerator.finalizeOrder(orderId, {
           success: false,
           stopReason: 'No logs to process',
-          logsProcessed: 0
+          logsProcessed: 0,
+          orderProfile: getOrderProfile()
         });
         return { success: false, logCount: 0, error: 'No logs to process' };
       }
 
       console.log(`Loaded ${logs.length} logs`);
 
+      const filterLogsStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
       const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
+      orderProfiler?.endSection('filter_and_sort_logs', filterLogsStart, { logCount: filteredLogs.length });
 
       if (filteredLogs.length === 0) {
+        reportGenerator.recordArtFailure(orderId, {
+          error: true,
+          errorMessage: 'No logs after filtering',
+          failureType: 'FILTERED_LOGS_EMPTY',
+          step: 'filter_logs'
+        });
         reportGenerator.finalizeOrder(orderId, {
           success: false,
           stopReason: 'No logs after filtering',
-          logsProcessed: 0
+          logsProcessed: 0,
+          orderProfile: getOrderProfile()
         });
         return { success: false, logCount: 0, error: 'No logs after filtering' };
       }
 
+      const finalFilterStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
       finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
+      orderProfiler?.endSection('filter_orchestrator_skippable_logs', finalFilterStart, { logCount: finalFilteredLogs.length });
 
       if (finalFilteredLogs.length === 0) {
+        reportGenerator.recordArtFailure(orderId, {
+          error: true,
+          errorMessage: 'No logs after second filtering',
+          failureType: 'FINAL_FILTERED_LOGS_EMPTY',
+          step: 'filter_orchestrator_logs'
+        });
         reportGenerator.finalizeOrder(orderId, {
           success: false,
           stopReason: 'No logs after second filtering',
-          logsProcessed: 0
+          logsProcessed: 0,
+          orderProfile: getOrderProfile()
         });
         return { success: false, logCount: 0, error: 'No logs after second filtering' };
       }
@@ -484,6 +691,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         skipped: true,
         stopReason: skipReason,
         logsProcessed: 0,
+        orderProfile: getOrderProfile(),
         artResults: {
           passed: 0,
           failed: 0,
@@ -521,17 +729,25 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       phase: 'START_REPLAY'
     });
 
+    const orchestratorCreateStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
     orchestrator = new OrchestratorClass(finalFilteredLogs, {
       timeoutMs: config.TIMEOUT_MS,
       orderId,
       orderIndex,
       totalOrders,
       reportGenerator,
+      orderProfiler,
       registrySessionId,
+      pollIntervalMs: config.ASYNC_ORCHESTRATOR_POLL_INTERVAL_MS || ASYNC_ORCHESTRATOR_CONFIG.pollIntervalMs,
+      maxBackoffMs: config.ASYNC_ORCHESTRATOR_MAX_BACKOFF_MS || ASYNC_ORCHESTRATOR_CONFIG.maxBackoffMs,
       onLoanApplicationId: config.onLoanApplicationId
+    });
+    orderProfiler?.endSection('create_orchestrator', orchestratorCreateStart, {
+      className: OrchestratorClass.name
     });
 
     if (config.onOrchestratorReady) {
+      const registrationStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
       config.onOrchestratorReady(orchestrator, orderId, registrySessionId);
       const loanApplicationIds = [...new Set(finalFilteredLogs
         .map(l => l.loan_application_id || l.loanApplicationId)
@@ -539,6 +755,9 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       for (const laId of loanApplicationIds) {
         config.onLoanApplicationId?.(laId, orderId, registrySessionId);
       }
+      orderProfiler?.endSection('register_orchestrator', registrationStart, {
+        loanApplicationIdCount: loanApplicationIds.length
+      });
     } else {
       throw new Error('Legacy per-order TCP server mode is no longer supported. Use the unix-socket multiplexer flow.');
     }
@@ -551,7 +770,11 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       phase: 'RUNNING_REPLAY'
     });
 
-    await orchestrator.start();
+    if (orderProfiler?.enabled) {
+      await orderProfiler.measure('orchestrator_start', () => orchestrator.start());
+    } else {
+      await orchestrator.start();
+    }
 
     while (true) {
       progressInterval = setInterval(() => {
@@ -607,7 +830,8 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         orderIndex,
         totalOrders,
         reportGenerator,
-        config.stopSignal
+        config.stopSignal,
+        orderProfiler
       );
 
       if (progressInterval) {
@@ -670,10 +894,10 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         printBufferDebugInfo(orchestrator, orderId);
       }
 
-      const failedBufferRequests = artResults.failedBufferRequests || [];
-      const latestBufferFailure = failedBufferRequests[failedBufferRequests.length - 1];
-      const apiErrorMessage = latestBufferFailure?.errorMessage
-        || extractReadableFailureMessage(latestBufferFailure?.responseData)
+      const failedFlowRequests = artResults.failedFlowRequests || artResults.failedBufferRequests || [];
+      const latestFlowFailure = failedFlowRequests[failedFlowRequests.length - 1];
+      const apiErrorMessage = latestFlowFailure?.errorMessage
+        || extractReadableFailureMessage(latestFlowFailure?.responseData)
         || extractReadableFailureMessage(artResults.failureReason)
         || (completionResult.failed ? completionResult.error : null);
 
@@ -700,7 +924,9 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     }
 
     if (orchestrator) {
+      const stopStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
       await orchestrator.stop();
+      orderProfiler?.endSection('orchestrator_stop', stopStart);
       orchestrator = null;
     }
 
@@ -710,7 +936,9 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     }
 
     if (config.onOrchestratorReady) {
+      const unregisterStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
       config.registry?.unregister(registrySessionId);
+      orderProfiler?.endSection('unregister_orchestrator', unregisterStart);
     }
 
     if (mocks) {
@@ -723,7 +951,8 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       stopReason: finalAttemptResult.stopReason,
       errorMessage: finalAttemptResult.completionResult.failed ? finalAttemptResult.apiErrorMessage : null,
       logsProcessed: finalAttemptResult.artResults.processedLogs?.length || 0,
-      artResults: finalAttemptResult.artResults
+      artResults: finalAttemptResult.artResults,
+      orderProfile: getOrderProfile()
     });
 
     return {
@@ -746,6 +975,13 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       stack: error.stack,
       step: 'orchestrator_execution'
     });
+    reportGenerator.recordArtFailure(orderId, {
+      error: true,
+      errorMessage: error.message,
+      errorStack: error.stack,
+      failureType: 'ORDER_PROCESSING_ERROR',
+      step: 'orchestrator_execution'
+    });
     
     if (orchestrator) await orchestrator.stop();
     if (server) await new Promise(resolve => server.close(resolve));
@@ -759,6 +995,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       success: false,
       stopReason: error.message,
       logsProcessed: 0,
+      orderProfile: getOrderProfile(),
       stuckAt: currentEntry ? {
         logTag: currentEntry.logTag,
         logIndex: currentEntry.index
@@ -772,7 +1009,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     };
   } finally {
     logger.clearDirectionLogReplayContext();
-    if (shouldCleanupOrderTempFiles(config)) {
+    if (shouldCleanupOrderTempFiles(config) && prefetchedData?.cleanupTempFiles !== false) {
       await cleanupOrderTempFiles(orderId, orderIndex, [
         logsFilePath,
         filteredLogsPath,
@@ -937,6 +1174,10 @@ async function cleanupOrderTempFiles(orderId, orderIndex, filePaths) {
   const deletedFiles = [];
 
   for (const filePath of filePaths) {
+    if (!filePath) {
+      continue;
+    }
+
     try {
       await unlink(filePath);
       deletedFiles.push(filePath);
@@ -1369,8 +1610,9 @@ export async function maybeRecoverStalledExternalReplayEntry(
   }
 }
 
-async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal) {
+async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal, orderProfiler = null) {
   const startTime = Date.now();
+  const profileWaitStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
   let timeoutDeadline = startTime + timeoutMs;
   let lastLoggedMinute = 0;
   const { retryIntervalMs, maxRetrySeconds } = RETRY_CONFIG;
@@ -1398,6 +1640,7 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
         currentLogIndex: currentEntry?.index,
         phase: 'USER_STOP'
       });
+      orderProfiler?.endSection('replay_completion_wait', profileWaitStart, { outcome: 'stopped' });
       return { timedOut: false, stopped: true };
     }
 
@@ -1410,10 +1653,12 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
         failureReason: reason,
         phase: 'API_FAILURE'
       });
+      orderProfiler?.endSection('replay_completion_wait', profileWaitStart, { outcome: 'failed' });
       return { timedOut: false, failed: true, error: reason };
     }
 
     if (orchestrator.isComplete()) {
+      orderProfiler?.endSection('replay_completion_wait', profileWaitStart, { outcome: 'completed' });
       return { timedOut: false };
     }
 
@@ -1516,7 +1761,13 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
           phase: 'SELF_TRIGGER_FALLBACK_TIMEOUT_DEFERRED'
         });
         stuckSince = Date.now();
+        const pollSleepStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
         await sleep(retryIntervalMs);
+        orderProfiler?.endSection('replay_poll_sleep', pollSleepStart, {
+          currentLogTag: currentEntry?.logTag || null,
+          currentLogIndex: currentIndex,
+          reason: 'self_trigger_fallback_timeout_deferred'
+        });
         continue;
       }
 
@@ -1531,6 +1782,11 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
           effectiveRetryMs: currentMaxRetryMs,
           retryIntervalMs,
           phase: 'ENTRY_TIMEOUT'
+        });
+        orderProfiler?.endSection('replay_completion_wait', profileWaitStart, {
+          outcome: 'entry_timeout',
+          currentLogTag: currentEntry?.logTag || null,
+          currentLogIndex: currentIndex
         });
         return { timedOut: true, stuckEntry: currentEntry };
       }
@@ -1582,7 +1838,12 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
       });
     }
 
+    const pollSleepStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
     await sleep(retryIntervalMs);
+    orderProfiler?.endSection('replay_poll_sleep', pollSleepStart, {
+      currentLogTag: currentEntry?.logTag || null,
+      currentLogIndex: currentEntry?.index ?? null
+    });
   }
 
   const currentEntry = orchestrator.validator?.getCurrentEntry();
@@ -1595,6 +1856,11 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
     phase: 'TIMEOUT'
   });
 
+  orderProfiler?.endSection('replay_completion_wait', profileWaitStart, {
+    outcome: 'global_timeout',
+    currentLogTag: currentEntry?.logTag || null,
+    currentLogIndex: currentEntry?.index ?? null
+  });
   return { timedOut: true };
 }
 
@@ -1693,24 +1959,26 @@ function printBufferDebugInfo(orchestrator, orderId) {
       console.log(`  No buffered responses.`);
     }
     
-    console.log(`\n❌ BUFFER FAILURES RECORDED:\n`);
+    console.log(`\n❌ FAILURE CLASSIFICATION DEBUG:\n`);
     
     if (orchestrator.reportGenerator?.getBufferFailuresForOrder) {
-      const failures = orchestrator.reportGenerator.getBufferFailuresForOrder(orderId);
-      console.log(`Failures for this order (${failures.length}):`);
-      if (failures.length > 0) {
+      const artFailures = orchestrator.reportGenerator.getArtFailuresForOrder?.(orderId) || [];
+      const flowFailures = orchestrator.reportGenerator.getFlowFailuresForOrder?.(orderId) || [];
+      const bufferFailures = orchestrator.reportGenerator.getBufferFailuresForOrder(orderId);
+      console.log(`ART failures: ${artFailures.length}`);
+      console.log(`FLOW failures: ${flowFailures.length}`);
+      console.log(`BUFFER failures: ${bufferFailures.length}`);
+
+      [ ['ART', artFailures], ['FLOW', flowFailures], ['BUFFER', bufferFailures] ].forEach(([label, failures]) => {
         failures.forEach((failure, idx) => {
-          console.log(`  [${idx}] Type: ${failure.type}`);
-          console.log(`      URL: ${failure.url || 'N/A'}`);
-          console.log(`      Error: ${failure.error || 'N/A'}`);
+          console.log(`  [${label} ${idx}] LogTag: ${failure.logTag || 'N/A'}`);
+          console.log(`      Endpoint: ${failure.endpoint || 'N/A'}`);
+          console.log(`      Error: ${failure.errorMessage || failure.error || 'N/A'}`);
           console.log(`      Timestamp: ${failure.timestamp || 'N/A'}`);
-          console.log(`      Payload Preview: ${JSON.stringify(failure.payload || {}).substring(0, 150)}...`);
         });
-      } else {
-        console.log(`  No failures recorded.`);
-      }
+      });
     } else {
-      console.log(`  reportGenerator.getBufferFailuresForOrder not available.`);
+      console.log(`  Failure accessors not available on reportGenerator.`);
     }
     
   } catch (error) {

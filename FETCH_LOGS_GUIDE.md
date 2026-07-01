@@ -145,6 +145,10 @@ const ordersWithDefaults = S3TraceLogsFetcher.createOrderListWithDefaults(
 |----------|-------------|---------|
 | `SESSION_TOKEN` | Authentication token for S3 Trace Logs API | `your_session_token_here` |
 | `LOGS_FILE_PATH` | Default output path for logs | `data/logs.json` |
+| `USE_FETCH_ORDER_CONTEXT` | Use LSP `/art/order-context/fetch` to discover loan application IDs before fetching loan-application S3 logs. Set to `false` to derive unique loan application IDs from the order S3 logs instead. | `true` |
+| `USE_ART_FINAL_STORE_LOGS` | Load cron-produced `final-filtered-logs.json` files and skip ART worker log fetching/filtering | `false` |
+| `ART_FINAL_STORE_DIR` | Directory containing cron final-log artifacts when `USE_ART_FINAL_STORE_LOGS=true` | `data/art-final-store` |
+| `ART_FINAL_STORE_ORDER_LIST_PATH` | Optional order-list handoff file written by cron; defaults to `$ART_FINAL_STORE_DIR/latest-order-list.json` | unset |
 | `LSP_API_BASE_URL` | Base URL for the LSP API | `https://integ-expresscheckout-api.juspay.in` |
 
 ## Error Handling

@@ -11,3 +11,5 @@ art-incomig.log
 art-outgoing.log
 art-*.log
 orchestrator*.log
+art-final-store
+logsStore-*

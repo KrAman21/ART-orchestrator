@@ -1,5 +1,6 @@
 import http from 'http';
 import https from 'https';
+import { logger } from '../utils/logger.js';
 
 export function createUnixSocketAgent(socketPath) {
   return function createConnection(hostname, port, options, callback) {
@@ -17,6 +18,7 @@ export function createUnixSocketAgent(socketPath) {
 
 export async function unixSocketRequest(socketPath, baseUrl, endpoint, options = {}) {
   const { method = 'GET', body, headers = {}, timeout = 30000 } = options;
+  const startedAt = Date.now();
   
   let url;
   if (baseUrl.startsWith('http')) {
@@ -49,6 +51,16 @@ export async function unixSocketRequest(socketPath, baseUrl, endpoint, options =
       }
     };
 
+    const requestId = headers['x-request-id'] || headers['X-Request-Id'] || null;
+    logger.info('ART_SOCKET_TRACE_REQUEST_START', {
+      socketPath,
+      method,
+      path,
+      requestId,
+      bodyBytes: body ? Buffer.byteLength(String(body)) : 0,
+      timeout
+    });
+
     const req = client.request(reqOptions, (res) => {
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
@@ -60,6 +72,17 @@ export async function unixSocketRequest(socketPath, baseUrl, endpoint, options =
         } catch {
           data = body;
         }
+        logger.info('ART_SOCKET_TRACE_RESPONSE_END', {
+          socketPath,
+          method,
+          path,
+          requestId,
+          status: res.statusCode,
+          statusText: res.statusMessage,
+          durationMs: Date.now() - startedAt,
+          chunkCount: chunks.length,
+          bodyBytes: Buffer.byteLength(body)
+        });
         resolve({
           ok: res.statusCode >= 200 && res.statusCode < 300,
           status: res.statusCode,
@@ -68,9 +91,30 @@ export async function unixSocketRequest(socketPath, baseUrl, endpoint, options =
           headers: res.headers
         });
       });
+
+      res.on('aborted', () => {
+        logger.warn('ART_SOCKET_TRACE_RESPONSE_ABORTED', {
+          socketPath,
+          method,
+          path,
+          requestId,
+          status: res.statusCode,
+          durationMs: Date.now() - startedAt,
+          chunkCount: chunks.length
+        });
+      });
     });
 
     req.on('error', (err) => {
+      logger.error('ART_SOCKET_TRACE_REQUEST_ERROR', {
+        socketPath,
+        method,
+        path,
+        requestId,
+        durationMs: Date.now() - startedAt,
+        error: err.message,
+        code: err.code
+      });
       reject({
         error: true,
         message: err.message,
@@ -79,6 +123,14 @@ export async function unixSocketRequest(socketPath, baseUrl, endpoint, options =
     });
 
     req.on('timeout', () => {
+      logger.error('ART_SOCKET_TRACE_REQUEST_TIMEOUT', {
+        socketPath,
+        method,
+        path,
+        requestId,
+        durationMs: Date.now() - startedAt,
+        timeout
+      });
       req.destroy();
       reject({
         error: true,

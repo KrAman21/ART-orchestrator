@@ -13,6 +13,7 @@ const CURRENT_LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase()] ?? LOG_LE
 const LOG_FILE = process.env.LOG_FILE || 'orchestrator-output.log';
 const LOG_TO_FILE = process.env.LOG_TO_FILE !== 'false';
 const DIRECTION_LOGS_TO_FILE = process.env.DIRECTION_LOGS_TO_FILE !== 'false';
+const REQUEST_FLOW_LOGS_TO_FILE = process.env.REQUEST_FLOW_LOGS_TO_FILE !== 'false';
 
 function canWriteToDir(dirPath) {
   try {
@@ -44,23 +45,20 @@ function resolveLogPath(envPath, fileName) {
     return resolve(process.cwd(), envPath);
   }
 
-  const contextPath =
-    process.env.REPORT_PATH ||
-    process.env.ART_DEBUG_LOG_PATH ||
-    process.env.ART_USER_LOG_PATH ||
-    process.env.LOG_FILE;
-
-  if (contextPath) {
-    return resolve(dirname(resolve(process.cwd(), contextPath)), fileName);
-  }
-
   return resolve(LOG_DIR, fileName);
 }
 
 const LOG_DIR = getDefaultLogDir();
-const LOG_FILE_PATH = resolveLogPath(process.env.LOG_FILE, LOG_FILE);
-const INCOMING_LOG_FILE = resolveLogPath(process.env.ART_INCOMING_LOG_PATH, 'art-incoming.log');
-const OUTGOING_LOG_FILE = resolveLogPath(process.env.ART_OUTGOING_LOG_PATH, 'art-outgoing.log');
+const LOG_FILE_PATH = resolveLogPath(LOG_FILE, 'orchestrator-output.log');
+const INCOMING_LOG_FILE = process.env.INCOMING_LOG_FILE
+  ? resolve(process.cwd(), process.env.INCOMING_LOG_FILE)
+  : resolve(LOG_DIR, 'art-incoming.log');
+const OUTGOING_LOG_FILE = process.env.OUTGOING_LOG_FILE
+  ? resolve(process.cwd(), process.env.OUTGOING_LOG_FILE)
+  : resolve(LOG_DIR, 'art-outgoing.log');
+const REQUEST_FLOW_LOG_FILE_PATH = process.env.REQUEST_FLOW_LOG_FILE
+  ? resolve(process.cwd(), process.env.REQUEST_FLOW_LOG_FILE)
+  : resolve(LOG_DIR, 'art-request-flow.log');
 
 function initLogFile(filePath) {
   try {
@@ -70,7 +68,7 @@ function initLogFile(filePath) {
 }
 
 const GLOBAL_KEY = '__art_logger_initialized__';
-if ((LOG_TO_FILE || DIRECTION_LOGS_TO_FILE) && !global[GLOBAL_KEY]) {
+if ((LOG_TO_FILE || DIRECTION_LOGS_TO_FILE || REQUEST_FLOW_LOGS_TO_FILE) && !global[GLOBAL_KEY]) {
   try {
     if (LOG_TO_FILE) {
       initLogFile(LOG_FILE_PATH);
@@ -79,18 +77,22 @@ if ((LOG_TO_FILE || DIRECTION_LOGS_TO_FILE) && !global[GLOBAL_KEY]) {
       initLogFile(INCOMING_LOG_FILE);
       initLogFile(OUTGOING_LOG_FILE);
     }
+    if (REQUEST_FLOW_LOGS_TO_FILE) {
+      initLogFile(REQUEST_FLOW_LOG_FILE_PATH);
+    }
     global[GLOBAL_KEY] = true;
     console.log(
       `[LOGGER_INIT] Initialized log files: ${[
         LOG_TO_FILE ? LOG_FILE_PATH : null,
         DIRECTION_LOGS_TO_FILE ? INCOMING_LOG_FILE : null,
-        DIRECTION_LOGS_TO_FILE ? OUTGOING_LOG_FILE : null
+        DIRECTION_LOGS_TO_FILE ? OUTGOING_LOG_FILE : null,
+        REQUEST_FLOW_LOGS_TO_FILE ? REQUEST_FLOW_LOG_FILE_PATH : null
       ].filter(Boolean).join(', ')}`
     );
   } catch (error) {
     console.error(`[LOGGER_INIT] Failed: ${error.message}`);
   }
-} else if (LOG_TO_FILE || DIRECTION_LOGS_TO_FILE) {
+} else if (LOG_TO_FILE || DIRECTION_LOGS_TO_FILE || REQUEST_FLOW_LOGS_TO_FILE) {
   console.log(`[LOGGER_INIT] Already initialized, skipping file clear`);
 }
 
@@ -127,6 +129,51 @@ function logToDirectionFile(direction, logEntry) {
     const entry = { ...logEntry, ...replayMeta, _direction: direction, _timestamp: formatTimestamp() };
     const line = JSON.stringify(entry) + '\n';
     appendFileSync(filePath, line, { encoding: 'utf-8' });
+  } catch (_) {}
+}
+
+const SENSITIVE_HEADER_PATTERNS = [
+  /authorization/i,
+  /cookie/i,
+  /session[-_]?token/i,
+  /client[-_]?auth[-_]?token/i,
+  /^token$/i,
+  /secret/i,
+  /password/i
+];
+
+function redactHeaders(headers = {}) {
+  if (!headers || typeof headers !== 'object') {
+    return headers;
+  }
+
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => {
+      const shouldRedact = SENSITIVE_HEADER_PATTERNS.some(pattern => pattern.test(key));
+      return [key, shouldRedact ? '[REDACTED]' : value];
+    })
+  );
+}
+
+function logToRequestFlowFile(entry) {
+  if (!REQUEST_FLOW_LOGS_TO_FILE) return;
+
+  try {
+    const replayMeta = directionLogReplayContext
+      ? {
+          replayAttempt: directionLogReplayContext.replayAttempt,
+          rewind: directionLogReplayContext.rewind,
+          replayOrderId: directionLogReplayContext.orderId || null
+        }
+      : {};
+    const logEntry = {
+      timestamp: formatTimestamp(),
+      ...replayMeta,
+      ...entry,
+      headers: entry.headers ? redactHeaders(entry.headers) : undefined
+    };
+    const line = JSON.stringify(logEntry) + '\n';
+    appendFileSync(REQUEST_FLOW_LOG_FILE_PATH, line, { encoding: 'utf-8' });
   } catch (_) {}
 }
 
@@ -240,6 +287,13 @@ export const logger = {
     log('ERROR', error.message, { stack: error.stack, ...context });
   },
 
+  logRequestFlow: (direction, entry = {}) => {
+    logToRequestFlowFile({
+      direction,
+      ...entry
+    });
+  },
+
   logIncoming: (source, destination, api, payload, meta = {}) => {
     const entry = {
       timestamp: formatTimestamp(),
@@ -251,6 +305,7 @@ export const logger = {
       ...meta
     };
     logToDirectionFile('incoming', entry);
+    logToRequestFlowFile(entry);
   },
 
   logOutgoing: (source, destination, api, payload, meta = {}) => {
@@ -264,6 +319,7 @@ export const logger = {
       ...meta
     };
     logToDirectionFile('outgoing', entry);
+    logToRequestFlowFile(entry);
   },
 
   logFinalIncoming: (source, destination, api, payload, meta = {}) => {
@@ -278,6 +334,7 @@ export const logger = {
       ...meta
     };
     logToDirectionFile('incoming', entry);
+    logToRequestFlowFile(entry);
   },
 
   logFinalOutgoing: (source, destination, api, payload, meta = {}) => {
@@ -292,6 +349,7 @@ export const logger = {
       ...meta
     };
     logToDirectionFile('outgoing', entry);
+    logToRequestFlowFile(entry);
   }
 };
 

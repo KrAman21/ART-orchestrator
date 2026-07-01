@@ -305,7 +305,7 @@ test('resolveOutboundLoanApplicationIdForReplay keeps current replay loan applic
   assert.equal(resolved, 'live-la');
 });
 
-test('maybePrimeLoanSettlementPt waits only before the first replay helper trigger', async () => {
+test('maybePrimeLoanSettlementPt waits before triggering replay helper', async () => {
   const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
   orchestrator.stateManager = new StateManager();
   orchestrator.stateManager.seedProdLoanApplicationIdsFromLogs([
@@ -323,10 +323,6 @@ test('maybePrimeLoanSettlementPt waits only before the first replay helper trigg
   orchestrator.validator = { currentIndex: 10 };
   orchestrator.activeLoanSettlementPtTriggers = new Set();
   orchestrator.hasWaitedForInitialLoanSettlementPtTrigger = false;
-  orchestrator.resolveOutboundLoanApplicationIdForReplay = () => 'live-la';
-
-  const originalSetTimeout = global.setTimeout;
-  const timeouts = [];
   global.setTimeout = (fn, ms, ...args) => {
     timeouts.push(ms);
     return originalSetTimeout(fn, 0, ...args);

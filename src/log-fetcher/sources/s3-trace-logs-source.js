@@ -92,6 +92,22 @@ export async function fetchS3TraceLogsByLookup({
   });
 
   try {
+    logger.logRequestFlow('outgoing', {
+      event: 'request_sent',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method: 'GET',
+      label,
+      id,
+      idType,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'session-token': effectiveSessionToken
+      }
+    });
+
     const response = await fetch(url, {
       method: 'GET',
       headers: {
@@ -103,6 +119,18 @@ export async function fetchS3TraceLogsByLookup({
 
     if (!response.ok) {
       const errorText = await response.text();
+      logger.logRequestFlow('outgoing', {
+        event: 'response_received',
+        service: 'art-orchestrator',
+        endpoint,
+        url,
+        method: 'GET',
+        label,
+        id,
+        idType,
+        status: response.status,
+        statusText: response.statusText
+      });
       logger.error('Failed to fetch S3 Trace Logs', {
         label,
         id,
@@ -123,6 +151,18 @@ export async function fetchS3TraceLogsByLookup({
     }
 
     const data = await response.json();
+    logger.logRequestFlow('outgoing', {
+      event: 'response_received',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method: 'GET',
+      label,
+      id,
+      idType,
+      status: response.status,
+      statusText: response.statusText
+    });
     const logs = extractLogsFromResponse(data);
     const filteredLogs = filterS3TraceLogs(logs);
     const excludedCount = logs.length - filteredLogs.length;
@@ -152,6 +192,19 @@ export async function fetchS3TraceLogsByLookup({
       source: { id, idType, label }
     };
   } catch (error) {
+    logger.logRequestFlow('outgoing', {
+      event: 'request_failed',
+      service: 'art-orchestrator',
+      endpoint,
+      url,
+      method: 'GET',
+      label,
+      id,
+      idType,
+      error: error.message,
+      errorType: error.constructor?.name
+    });
+
     logger.error('Exception while fetching S3 Trace Logs', {
       label,
       id,

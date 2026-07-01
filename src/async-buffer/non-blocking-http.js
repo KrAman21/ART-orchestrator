@@ -253,7 +253,7 @@ export class NonBlockingHttpClient {
     logger.info('FAILURE_RECORDED', { requestId, orderId: this.orderId, logTag: activeReq.logTag });
     
     if (this.reportGenerator && this.orderId) {
-      this.reportGenerator.recordBufferFailure(this.orderId, failureInfo);
+      this.reportGenerator.recordFlowFailure(this.orderId, failureInfo);
       logger.info('FAILURE_SENT_TO_REPORT_GENERATOR', { requestId, orderId: this.orderId });
     }
   }

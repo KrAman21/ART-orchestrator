@@ -1639,11 +1639,18 @@ export const ORCHESTRATOR_CONFIG = {
 };
 
 // Retry configuration for stuck log entries
-// RETRY_INTERVAL_MS: how often to poll (250ms = 4 times/sec)
+// RETRY_INTERVAL_MS: how often to poll (100ms = 10 times/sec)
 // MAX_RETRY_SECONDS: how long to wait on the same entry before giving up
 export const RETRY_CONFIG = {
-  retryIntervalMs: parseInt(process.env.RETRY_INTERVAL_MS, 10) || 250,
+  retryIntervalMs: parseInt(process.env.RETRY_INTERVAL_MS, 10) || 50,
   maxRetrySeconds: parseInt(process.env.MAX_RETRY_SECONDS, 10) || 2,
+};
+
+export const ASYNC_ORCHESTRATOR_CONFIG = {
+  pollIntervalMs:
+    parseInt(process.env.ASYNC_ORCHESTRATOR_POLL_INTERVAL_MS, 10) || RETRY_CONFIG.retryIntervalMs,
+  maxBackoffMs:
+    parseInt(process.env.ASYNC_ORCHESTRATOR_MAX_BACKOFF_MS, 10) || 50,
 };
 
 export const RETRY_TIMEOUT_OVERRIDES = {

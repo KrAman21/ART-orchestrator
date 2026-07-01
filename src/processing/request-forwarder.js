@@ -467,7 +467,17 @@ export class RequestForwarder {
           };
         }
 
-        const replayedResponse = await externalPromise;
+        const externalWaitStart = this.config?.orderProfiler?.enabled ? this.config.orderProfiler.now() : 0;
+        let replayedResponse;
+        try {
+          replayedResponse = await externalPromise;
+        } finally {
+          this.config?.orderProfiler?.endSection('external_lender_callback_wait', externalWaitStart, {
+            contextKey,
+            requestIndex: expectedEntry.index,
+            responseIndex: expectedResponse.index
+          });
+        }
         return {
           ...replayedResponse,
           tracked: true,
@@ -621,6 +631,7 @@ export class RequestForwarder {
       });
 
       // Make actual HTTP request to destination
+      const downstreamRequestStart = this.config?.orderProfiler?.enabled ? this.config.orderProfiler.now() : 0;
       const serviceResponse = await makeRequest(
         this.callbacks.getServiceBaseUrl(destination),
         endpoint,
@@ -635,6 +646,16 @@ export class RequestForwarder {
         this.callbacks.getServiceUnixSocket(endpointConfig?.service || destination),
         requestTimeoutMs
       );
+      this.config?.orderProfiler?.recordDownstreamCall({
+        destination,
+        endpoint,
+        logTag: expectedEntry.logTag,
+        logIndex: expectedEntry.index,
+        requestId: incoming.requestId,
+        status: serviceResponse?.status ?? null,
+        success: Boolean(serviceResponse && !serviceResponse.error && serviceResponse.status === 200),
+        durationMs: this.config.orderProfiler.now() - downstreamRequestStart
+      });
 
       this.logger.info('Response received from service', {
         destination,
@@ -709,8 +730,8 @@ export class RequestForwarder {
           destination
         });
 
-        if (this.callbacks.recordBufferFailure) {
-          this.callbacks.recordBufferFailure({
+        if (this.callbacks.recordFlowFailure) {
+          this.callbacks.recordFlowFailure({
             requestId: incoming.requestId,
             logTag: expectedEntry.logTag,
             sourceDestination: expectedEntry.sourceDestination,
