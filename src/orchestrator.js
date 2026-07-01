@@ -38,6 +38,54 @@ function shouldTrustLiveLoanApplicationIdSource(incoming) {
     destination === 'GATEWAY';
 }
 
+function collectLineScopedIdentifierCandidates(payload) {
+  const candidates = new Set();
+  const push = value => {
+    if (typeof value === 'string' && value.trim()) {
+      candidates.add(value.trim());
+    }
+  };
+
+  if (!payload || typeof payload !== 'object') {
+    return candidates;
+  }
+
+  push(payload.lineDetailId);
+  push(payload.lineId);
+  push(payload.referenceId);
+  push(payload.applicationid);
+  push(payload.ApplicationId);
+  push(payload?.lineDetail?.lineDetailId);
+  push(payload?.lineDetail?.lineId);
+  push(payload?.lineDetail?.referenceId);
+  push(payload?.lineDetail?.lineDetailExtensibleData?.referenceId);
+  push(payload?.lineDetail?.lineDetailExtensibleData?.lineDetailExtensibleDataId);
+
+  return candidates;
+}
+
+function isSuspiciousReplayLoanApplicationIdCandidate(stateManager, loanApplicationId, payload) {
+  if (!loanApplicationId || typeof loanApplicationId !== 'string') {
+    return false;
+  }
+
+  const lineScopedCandidates = collectLineScopedIdentifierCandidates(payload);
+  if (lineScopedCandidates.has(loanApplicationId)) {
+    return true;
+  }
+
+  const lineDetailMappings = stateManager?.identifierMappings?.get?.('lineDetailId');
+  if (lineDetailMappings) {
+    for (const mappedValue of lineDetailMappings.values()) {
+      if (mappedValue === loanApplicationId) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 export class ReplayOrchestrator {
   constructor(logs, config = {}) {
     this.config = {
@@ -713,13 +761,29 @@ export class ReplayOrchestrator {
       });
     }
 
-    if (observedLoanApplicationId && shouldTrustLiveLoanApplicationIdSource(incoming)) {
+    if (
+      observedLoanApplicationId &&
+      shouldTrustLiveLoanApplicationIdSource(incoming) &&
+      !isSuspiciousReplayLoanApplicationIdCandidate(this.stateManager, observedLoanApplicationId, incoming.payload)
+    ) {
       this.stateManager.setCurrentReplayLoanApplicationId(observedLoanApplicationId, {
         logTag: incoming.logTag,
         source: incoming.source,
         destination: incoming.destination,
         sourceDestination,
         requestId: incoming.requestId || null
+      });
+    } else if (
+      observedLoanApplicationId &&
+      shouldTrustLiveLoanApplicationIdSource(incoming) &&
+      isSuspiciousReplayLoanApplicationIdCandidate(this.stateManager, observedLoanApplicationId, incoming.payload)
+    ) {
+      logger.info('Ignoring observed loanApplicationId for replay remap because it matches line-scoped identifiers', {
+        observedLoanApplicationId,
+        logTag: incoming.logTag,
+        source: incoming.source || null,
+        destination: incoming.destination || null,
+        sourceDestination
       });
     } else if (observedLoanApplicationId) {
       logger.info('Ignoring observed loanApplicationId for replay remap because source is not trusted', {

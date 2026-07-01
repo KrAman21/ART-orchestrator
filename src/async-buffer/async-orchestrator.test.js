@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { AsyncReplayOrchestrator, prepareAsyncReplayForwarding } from './async-orchestrator.js';
 import { LogSequenceValidator } from '../services/log-sequence-validator.js';
+import { StateManager } from '../services/state-manager.js';
 
 function createRequestLog(index, {
   logTag,
@@ -253,6 +254,95 @@ test('processOneCycle force-recovers stalled LENDER to GATEWAY webhook request a
   assert.equal(secondCycle, true);
   assert.equal(recoveredEntry, validator.entries[0]);
   assert.equal(validator.processedIndices.has(0), true);
+});
+
+test('resolveOutboundLoanApplicationIdForReplay keeps current replay loan application id when buffered candidate is actually a line detail id', () => {
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.stateManager.seedProdLoanApplicationIdsFromLogs([
+    {
+      payload: {
+        loan_application_id: 'prod-la'
+      }
+    }
+  ]);
+  orchestrator.stateManager.setCurrentReplayLoanApplicationId('live-la', {
+    logTag: 'LSP-FetchOfferSync_RESPONSE'
+  });
+  orchestrator.bufferManager = {
+    incomingRequests: new Map([
+      ['bad-candidate', {
+        timestamp: Date.now(),
+        request: {
+          source: 'GATEWAY',
+          destination: 'LSP',
+          sourceDestination: 'GATEWAY_LSP',
+          logTag: 'WEBHOOK_REQUEST',
+          orderId: 'order-1',
+          loanApplicationId: 'live-line-detail-id',
+          payload: {
+            loanApplicationId: 'live-line-detail-id',
+            lineDetail: {
+              lineDetailId: 'live-line-detail-id'
+            }
+          }
+        }
+      }]
+    ]),
+    responseBuffer: new Map()
+  };
+  orchestrator.observedIncomingRequests = [];
+
+  const resolved = orchestrator.resolveOutboundLoanApplicationIdForReplay({
+    logTag: 'LOAN_SETTLEMENT_PT_REQUEST',
+    loanApplicationId: 'prod-la',
+    orderId: 'order-1',
+    lenderOrgId: null
+  }, {
+    allowInferenceFromLiveBuffer: true
+  });
+
+  assert.equal(resolved, 'live-la');
+});
+
+test('maybePrimeLoanSettlementPt waits before triggering replay helper', async () => {
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.stateManager.seedProdLoanApplicationIdsFromLogs([
+    {
+      payload: {
+        loan_application_id: 'prod-la'
+      }
+    }
+  ]);
+  orchestrator.stateManager.setCurrentReplayLoanApplicationId('live-la', {
+    logTag: 'LSP-FetchOfferSync_RESPONSE'
+  });
+  orchestrator.replayMerchantId = 'flipkart';
+  orchestrator.config = { merchantId: 'flipkart' };
+  orchestrator.validator = { currentIndex: 10 };
+  orchestrator.activeLoanSettlementPtTriggers = new Set();
+  orchestrator.resolveOutboundLoanApplicationIdForReplay = () => 'live-la';
+
+  const originalSetTimeout = global.setTimeout;
+  const timeouts = [];
+  global.setTimeout = (fn, ms, ...args) => {
+    timeouts.push(ms);
+    return originalSetTimeout(fn, 0, ...args);
+  };
+
+  try {
+    await orchestrator.maybePrimeLoanSettlementPt({
+      index: 12,
+      logTag: 'LOAN_SETTLEMENT_PT_REQUEST',
+      isRequest: true,
+      toString: () => '[12] LOAN_SETTLEMENT_PT_REQUEST CORE→GATEWAY'
+    });
+  } finally {
+    global.setTimeout = originalSetTimeout;
+  }
+
+  assert.equal(timeouts.includes(1000), true);
 });
 
 test('prepareAsyncReplayForwarding preserves loan-status payload requestId during fallback replay', () => {

@@ -32,6 +32,26 @@ const LOG_TAG_IDENTIFIER_TYPE_OVERRIDES = Object.freeze({
     applicationid: 'lineDetailId',
     ApplicationId: 'lineDetailId'
   },
+  LenderLineStatus_REQUEST: {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId',
+    applicationId: 'lineDetailId'
+  },
+  LenderLineStatus_RESPONSE: {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId',
+    applicationId: 'lineDetailId'
+  },
+  'POLLING API :: FORCE_LOAN_STATUS_SYNC_REQUEST': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId',
+    applicationId: 'lineDetailId'
+  },
+  'POLLING API :: FORCE_LOAN_STATUS_SYNC_RESPONSE': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId',
+    applicationId: 'lineDetailId'
+  },
   'CREATE APPLICATION API_REQUEST': {
     applicationid: 'lineDetailId',
     ApplicationId: 'lineDetailId'
@@ -1464,6 +1484,29 @@ export class StateManager {
     );
   }
 
+  shouldRejectSuspiciousLoanApplicationIdMapping(originalValue, localValue) {
+    if (!originalValue || !localValue) {
+      return false;
+    }
+
+    if (originalValue === localValue) {
+      return false;
+    }
+
+    const lineDetailMappings = this.identifierMappings.get('lineDetailId');
+    if (!lineDetailMappings) {
+      return false;
+    }
+
+    for (const candidate of lineDetailMappings.values()) {
+      if (candidate === localValue) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   registerIdentifierMapping(identifierType, originalValue, localValue, context = {}) {
     if (!identifierType || !originalValue || !localValue) return false;
     if (originalValue === localValue) return false;
@@ -1476,6 +1519,18 @@ export class StateManager {
     if (this.shouldSuppressIdentifierMapping(identifierType, context)) {
       logger.info('Suppressed identifier mapping for non-canonical lender-scoped field', {
         identifierType,
+        originalValue,
+        localValue,
+        logTag: context?.logTag || null
+      });
+      return false;
+    }
+
+    if (
+      identifierType === 'loanApplicationId' &&
+      this.shouldRejectSuspiciousLoanApplicationIdMapping(originalValue, localValue)
+    ) {
+      logger.info('Rejected suspicious loanApplicationId mapping because target matches known lineDetailId', {
         originalValue,
         localValue,
         logTag: context?.logTag || null

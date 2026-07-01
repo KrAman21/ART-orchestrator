@@ -177,6 +177,54 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function collectLineScopedIdentifierCandidates(payload) {
+  const candidates = new Set();
+  const push = value => {
+    if (typeof value === 'string' && value.trim()) {
+      candidates.add(value.trim());
+    }
+  };
+
+  if (!payload || typeof payload !== 'object') {
+    return candidates;
+  }
+
+  push(payload.lineDetailId);
+  push(payload.lineId);
+  push(payload.referenceId);
+  push(payload.applicationid);
+  push(payload.ApplicationId);
+  push(payload?.lineDetail?.lineDetailId);
+  push(payload?.lineDetail?.lineId);
+  push(payload?.lineDetail?.referenceId);
+  push(payload?.lineDetail?.lineDetailExtensibleData?.referenceId);
+  push(payload?.lineDetail?.lineDetailExtensibleData?.lineDetailExtensibleDataId);
+
+  return candidates;
+}
+
+function isSuspiciousReplayLoanApplicationIdCandidate(stateManager, loanApplicationId, payload) {
+  if (!loanApplicationId || typeof loanApplicationId !== 'string') {
+    return false;
+  }
+
+  const lineScopedCandidates = collectLineScopedIdentifierCandidates(payload);
+  if (lineScopedCandidates.has(loanApplicationId)) {
+    return true;
+  }
+
+  const lineDetailMappings = stateManager?.identifierMappings?.get?.('lineDetailId');
+  if (lineDetailMappings) {
+    for (const mappedValue of lineDetailMappings.values()) {
+      if (mappedValue === loanApplicationId) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 function hasHeader(headers, headerName) {
   return Object.keys(headers || {}).some(key => key.toLowerCase() === headerName.toLowerCase());
 }
@@ -508,9 +556,86 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.pendingPostBatchConfirmations = new Map();
     this.lastIdleExternalEntryKey = null;
     this.idleExternalEntryCycles = 0;
+    this.activeLoanSettlementPtTriggers = new Set();
     if (this.requestForwarder?.callbacks) {
       this.requestForwarder.callbacks.shouldAutoProcessNextLogEntry = () => false;
       this.requestForwarder.callbacks.shouldBlockOnHeldExternalRequest = () => false;
+    }
+  }
+
+  async maybePrimeLoanSettlementPt(entry) {
+    if (entry?.logTag !== 'LOAN_SETTLEMENT_PT_REQUEST' || !entry?.isRequest) {
+      return;
+    }
+
+    const triggerKey = `${entry.index}:${this.validator.currentIndex}`;
+    if (this.activeLoanSettlementPtTriggers.has(triggerKey)) {
+      logger.info('Loan settlement PT replay trigger already in progress for current wait cycle', {
+        entry: entry.toString(),
+        triggerKey
+      });
+      return;
+    }
+
+    const loanApplicationId = this.resolveOutboundLoanApplicationIdForReplay(entry, {
+      allowInferenceFromLiveBuffer: true
+    });
+
+    if (!loanApplicationId) {
+      logger.warn('Skipping loan settlement PT replay trigger because no replay loanApplicationId could be resolved yet', {
+        entry: entry.toString(),
+        prodLoanApplicationId: entry.loanApplicationId || null
+      });
+      return;
+    }
+
+    const merchantId = this.replayMerchantId || this.config.merchantId || null;
+    this.activeLoanSettlementPtTriggers.add(triggerKey);
+
+    try {
+      logger.info('Waiting briefly before triggering loan settlement PT replay helper to allow PT creation to complete', {
+        entry: entry.toString(),
+        loanApplicationId,
+        waitMs: 1000
+      });
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      logger.info('Triggering loan settlement PT replay helper before waiting for expected CORE→GATEWAY request', {
+        entry: entry.toString(),
+        loanApplicationId,
+        merchantId
+      });
+
+      const response = await makeRequest(
+        SERVICE_MAP.LSP.baseUrl,
+        '/art/loan-settlement-pt/trigger',
+        'POST',
+        { loanApplicationId },
+        null,
+        null,
+        'ART_TRIGGER_LOAN_SETTLEMENT_PT',
+        merchantId,
+        merchantId ? { 'x-merchant-id': merchantId } : {},
+        null,
+        SERVICE_MAP.LSP.unixSocket,
+        10000
+      );
+
+      logger.info('Loan settlement PT replay helper completed', {
+        entry: entry.toString(),
+        loanApplicationId,
+        status: response?.status ?? null,
+        error: response?.error || false,
+        responseData: response?.data || null
+      });
+    } catch (error) {
+      logger.warn('Loan settlement PT replay helper failed before wait; continuing with normal buffer wait', {
+        entry: entry.toString(),
+        loanApplicationId,
+        error: error.message
+      });
+    } finally {
+      this.activeLoanSettlementPtTriggers.delete(triggerKey);
     }
   }
 
@@ -725,6 +850,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         return;
       }
 
+      if (isSuspiciousReplayLoanApplicationIdCandidate(this.stateManager, loanApplicationId, metadata.payload)) {
+        return;
+      }
+
       if (entry.orderId && metadata.orderId && metadata.orderId !== entry.orderId) {
         return;
       }
@@ -767,7 +896,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
           source: request.source,
           destination: request.destination,
           sourceDestination: request.sourceDestination,
-          logTag: request.logTag
+          logTag: request.logTag,
+          payload: request.payload || null
         }
       );
     }
@@ -817,6 +947,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     if (!allowInferenceFromLiveBuffer) {
       return mappedLoanApplicationId || entry.loanApplicationId;
+    }
+
+    const currentReplayLoanApplicationId = this.stateManager?.getCurrentReplayLoanApplicationId?.();
+    if (
+      currentReplayLoanApplicationId &&
+      currentReplayLoanApplicationId !== entry.loanApplicationId &&
+      !isSuspiciousReplayLoanApplicationIdCandidate(this.stateManager, currentReplayLoanApplicationId, null)
+    ) {
+      return currentReplayLoanApplicationId;
     }
 
     const candidates = this.collectLiveLoanApplicationCandidates(entry);
@@ -1565,6 +1704,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
       const effectiveTimeoutMs = this.getRequestWaitTimeoutMs(entry);
 
+      if (!hasBufferedMatch) {
+        await this.maybePrimeLoanSettlementPt(entry);
+      }
+
       logger.info('Replay thread waiting for incoming request', {
         entry: entry.toString(),
         timeoutMs: effectiveTimeoutMs,
@@ -1650,6 +1793,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   }
 
   getRequestWaitTimeoutMs(entry) {
+    if (entry?.logTag === 'LOAN_SETTLEMENT_PT_REQUEST') {
+      logger.info('Using short wait timeout for loan settlement PT helper-triggered replay request', {
+        entry: entry?.toString?.(),
+        logTag: entry?.logTag,
+        timeoutMs: 9_000
+      });
+      return 9_000;
+    }
+
     if (isSkippableAsyncApiLogTag(entry.logTag)) {
       logger.info('Using short wait timeout for skippable async API', {
         entry: entry?.toString?.(),

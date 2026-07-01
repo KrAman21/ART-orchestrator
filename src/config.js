@@ -67,6 +67,7 @@ export const API_TO_ENDPOINT_MAP = {
 
   'APP_WRAPPER|FlipKart-LineOnboarding-LineStatus_REQUEST':     { endpoint: '/flipkart/customer/line/status',                       method: 'POST', service: 'LSP', headers: {} },
   'APP_WRAPPER|FK_CustomerLineStatus_REQUEST':                  { endpoint: '/flipkart/customer/line/status',                       method: 'POST', service: 'LSP', headers: {} },
+  'APP_WRAPER|FlipKart-Refund_REQUEST' :                        {endpoint: '/flipkart/txn/refund',                                  method: 'POST', service: 'LSP', headers: {}},
 
   // /lineonboarding/* paths share the same handlers as /initiate/line/* and /line/*
   'APP_WRAPPER|FlipKart-LineOnboarding-Eligibility_REQUEST':           { endpoint: '/flipkart/lineonboarding/eligibility',           method: 'POST', service: 'LSP', headers: {} },
@@ -359,6 +360,8 @@ export const API_TO_ENDPOINT_MAP = {
   'CORE_GATEWAY|LSP-CreateUpdateApplicant_REQUEST': { endpoint: '/gateway/v1.0/applicant', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|LSP-GetStatus_REQUEST': { endpoint: '/gateway/v3.3/fetchLoanStatus', method: 'POST', service: 'GW', headers: {} },
   'CORE_GATEWAY|GetAgreementDataRequest-LSP_REQUEST': { endpoint: '/gateway/v3.3/loan/getLoanAgreementRequest', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|LSP-RefundTriggerV2_REQUEST': { endpoint: '/gateway/v2.0/refund/trigger', method: 'POST', service: 'GW', headers: {} },
+  'CORE_GATEWAY|LOAN_SETTLEMENT_PT_REQUEST': { endpoint: '/gateway/v4.0/loanSettlement', method: 'POST', service: 'GW', headers: {} },
 
   // Original OUTGOING mappings (kept for compatibility)
   'CORE_GATEWAY|LSP-SelectOffer_OUTGOING': { endpoint: '/gateway/v1.0/selectOffer', method: 'POST', service: 'GW', headers: {} },
@@ -1432,6 +1435,9 @@ export const API_TO_LOGTAG_MAP = {
   '/gateway/v3.3/loan/triggerLoanAcceptanceRequest' :{logTag: 'TriggerLenderOTPRequest-LSP_REQUEST', api: '/gateway/v3.3/loan/triggerLoanAcceptanceRequest', sourceDestination: 'CORE_GATEWAY', headers: {}},
   '/gateway/v3.3/loan/verifyLoanAcceptanceRequest': {logTag: 'VerifyLenderOTPRequest-LSP_REQUEST', api: '/gateway/v3.3/loan/verifyLoanAcceptanceRequest', sourceDestination: 'CORE_GATEWAY', headers: {}},
   '/gateway/v3.3/capture':{logTag:'Capture_REQUEST', api:'/gateway/v3.3/capture', sourceDestination:'CORE_GATEWAY', headers:{}},
+  '/gateway/v2.0/refund/trigger': {logTag :'LSP-RefundTriggerV2_REQUEST', api: '/gateway/v2.0/refund/trigger', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v4.0/loanSettlement': {logTag: 'LOAN_SETTLEMENT_PT_REQUEST', api : '/gateway/v4.0/loanSettlement', sourceDestination: 'CORE_GATEWAY', headers: {} },
+  '/gateway/v1.0/lineStatus': {logTag : 'LenderLineStatus_REQUEST', api : '/gateway/v1.0/lineStatus', sourceDestination: 'CORE_GATEWAY', headers: {} },
   
   // REQUEST variants (used by logs.json)
   '/gateway/v1.0/eligibility-request': { logTag: 'LSP-Eligibility_REQUEST', api: '/gateway/v1.0/eligibility', sourceDestination: 'CORE_GATEWAY', headers: {} },

@@ -14,3 +14,7 @@ test('non-polling decision request is not treated as polling checkpoint', () => 
 test('loan status async response request is treated as a self-trigger fallback API', () => {
   assert.equal(isSelfTriggerFallbackApiLogTag('LOAN_STATUS_ASYNC_RESPONSE_REQUEST'), true);
 });
+
+test('loan settlement pt request is treated as a self-trigger fallback API', () => {
+  assert.equal(isSelfTriggerFallbackApiLogTag('LOAN_SETTLEMENT_PT_REQUEST'), false);
+});

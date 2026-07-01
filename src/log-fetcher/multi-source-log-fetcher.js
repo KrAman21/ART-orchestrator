@@ -176,6 +176,7 @@ export class MultiSourceLogFetcher {
 
     const sourceResults = [orderLogsResult];
     const discardedLoanApplicationIds = [];
+    const preservedLoanApplicationIds = [];
     for (const loanApplicationId of replayContext.loanApplicationIds) {
       const loanApplicationResult = await fetchS3TraceLogsByLoanApplicationId(loanApplicationId, this.sessionToken);
       if (
@@ -198,6 +199,9 @@ export class MultiSourceLogFetcher {
         discardedLoanApplicationIds.push(loanApplicationId);
       } else {
         sourceResults.push(loanApplicationResult);
+        if (loanApplicationResult.success) {
+          preservedLoanApplicationIds.push(loanApplicationId);
+        }
       }
       await this.sleep(this.delayBetweenRequests);
     }
@@ -216,6 +220,7 @@ export class MultiSourceLogFetcher {
       orderId,
       customerId: replayContext.customerId,
       loanApplicationIds: replayContext.loanApplicationIds,
+      preservedLoanApplicationIds,
       discardedLoanApplicationIds,
       sourceCounts,
       combinedLogCount: allLogs.length
@@ -227,7 +232,10 @@ export class MultiSourceLogFetcher {
       count: allLogs.length,
       merchantId,
       orderId,
-      context: replayContext,
+      context: {
+        ...replayContext,
+        loanApplicationIds: preservedLoanApplicationIds
+      },
       sourceCounts,
       sourceResults
     };

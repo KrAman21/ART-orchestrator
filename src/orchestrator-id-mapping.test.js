@@ -237,6 +237,49 @@ test('recordObservedIncomingRequest trusts live loan application id only from LS
   );
 });
 
+test('recordObservedIncomingRequest ignores line detail ids masquerading as trusted loanApplicationId values', () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.observedIncomingRequests = [];
+
+  orchestrator.stateManager.seedProdLoanApplicationIdsFromLogs([
+    {
+      payload: {
+        loan_application_id: 'prod-la'
+      }
+    }
+  ]);
+
+  orchestrator.recordObservedIncomingRequest({
+    source: 'GATEWAY',
+    destination: 'LSP',
+    logTag: 'WEBHOOK_REQUEST',
+    payload: {
+      loanApplicationId: 'live-line-detail-id',
+      lineDetail: {
+        lineDetailId: 'live-line-detail-id'
+      }
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getCurrentReplayLoanApplicationId(), null);
+});
+
+test('state manager does not learn loanApplicationId mapping from lender line status applicationId field', () => {
+  const stateManager = new StateManager();
+  stateManager.registerIdentifierMapping('lineDetailId', 'prod-line', 'live-line');
+
+  const registered = stateManager.registerIdentifierMapping(
+    'loanApplicationId',
+    'prod-la',
+    'live-line',
+    { logTag: 'LenderLineStatus_RESPONSE' }
+  );
+
+  assert.equal(registered, false);
+  assert.equal(stateManager.getMappedIdentifier('loanApplicationId', 'prod-la'), 'prod-la');
+});
+
 test('recordObservedIncomingRequest trusts live customerId only from LSP or GATEWAY traffic', () => {
   const orchestrator = Object.create(ReplayOrchestrator.prototype);
   orchestrator.stateManager = new StateManager();
