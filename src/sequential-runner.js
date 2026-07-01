@@ -1374,6 +1374,7 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
   let timeoutDeadline = startTime + timeoutMs;
   let lastLoggedMinute = 0;
   const { retryIntervalMs, maxRetrySeconds } = RETRY_CONFIG;
+  const loanSettlementPtJourneyExtensionMs = 4 * 60 * 1000;
 
   const getMaxRetrySeconds = (logTag) =>
     RETRY_TIMEOUT_OVERRIDES[logTag] || maxRetrySeconds;
@@ -1381,6 +1382,7 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
   let stuckEntryIndex = null;
   let stuckSince = null;
   let lastGlobalTimeoutDeferralEntryIndex = null;
+  let hasExtendedJourneyTimeoutForLoanSettlementPt = false;
   const runnerRecoveryState = {
     lastRecoveredEntryIndex: null
   };
@@ -1420,6 +1422,27 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
     const replayWaitMs = typeof orchestrator?.getRequestWaitTimeoutMs === 'function' && currentEntry?.isRequest
       ? orchestrator.getRequestWaitTimeoutMs(currentEntry)
       : 0;
+
+    if (
+      !hasExtendedJourneyTimeoutForLoanSettlementPt &&
+      currentEntry?.logTag === 'LOAN_SETTLEMENT_PT_REQUEST'
+    ) {
+      timeoutDeadline += loanSettlementPtJourneyExtensionMs;
+      hasExtendedJourneyTimeoutForLoanSettlementPt = true;
+      logger.info(
+        `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Extending global replay timeout for loan settlement PT handling`,
+        {
+          orderId,
+          orderIndex,
+          totalOrders,
+          currentLogTag: currentEntry?.logTag,
+          currentLogIndex: currentIndex,
+          extendedByMs: loanSettlementPtJourneyExtensionMs,
+          newRemainingMs: timeoutDeadline - Date.now(),
+          phase: 'GLOBAL_TIMEOUT_EXTENDED_FOR_LOAN_SETTLEMENT_PT'
+        }
+      );
+    }
 
     if (stuckEntryIndex !== null && typeof orchestrator?.consumeResolvedStuckEntrySignal === 'function') {
       if (orchestrator.consumeResolvedStuckEntrySignal(stuckEntryIndex)) {
