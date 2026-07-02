@@ -6,6 +6,7 @@ import { ensureAppCorePreconditions } from '../services/app-core-preconditions.j
 import { buildReplaySessionHeaders } from '../services/app-core-auth-headers.js';
 import { getAppCoreRequestId } from '../services/app-core-request-id.js';
 import { resolveReplayEndpoint } from '../services/replay-request-resolver.js';
+import { normalizeCanonicalLoanApplicationReferences } from '../services/canonical-loan-application-id.js';
 
 function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
   if (!entry || entry.sourceDestination !== 'APP_WRAPPER') {
@@ -105,7 +106,7 @@ export function remapReplayIds(value, stateManager, logTag, keyHint = null, forc
     return normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId);
   }
 
-  return remapped;
+  return normalizeCanonicalLoanApplicationReferences(remapped, forcedLoanApplicationId);
 }
 
 /**

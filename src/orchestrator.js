@@ -128,6 +128,7 @@ export class ReplayOrchestrator {
     this.seedDataManager = new SeedDataManager(logs);
     this.stateManager.seedProdLoanApplicationIdsFromLogs(logs);
     this.stateManager.seedProdAgreementIdsFromLogs(logs);
+    this.stateManager.seedProdOfferIdsFromLogs(logs);
     this.stateManager.seedProdSessionTokensFromLogs(logs);
     this.stateManager.seedProdTxnRefIdsFromLogs(logs);
     this.stateManager.seedProdCustomerIdsFromLogs(logs);
@@ -163,7 +164,7 @@ export class ReplayOrchestrator {
       return false;
     }
 
-    this.stateManager.clearReplayTransientState();
+    this.stateManager.clearReplayTransientState({ preserveReplayRequestIds: true });
     this.pendingExternalRequests.clear();
     this.earlyExternalResponses.clear();
     this.requestToExternalCalls.clear();
@@ -692,6 +693,7 @@ export class ReplayOrchestrator {
 
     const observedLoanApplicationIds = this.stateManager.extractProdLoanApplicationIdsFromValue(incoming);
     const observedAgreementIds = this.stateManager.extractProdAgreementIdsFromValue(incoming);
+    const observedOfferIds = this.stateManager.extractProdOfferIdsFromValue(incoming, { logTag: incoming.logTag });
     const observedSessionTokens = this.stateManager.extractProdSessionTokensFromValue(incoming);
     const observedTxnRefIds = this.stateManager.extractProdTxnRefIdsFromValue(incoming);
     const observedCustomerIds = this.stateManager.extractProdCustomerIdsFromValue(incoming);
@@ -708,6 +710,10 @@ export class ReplayOrchestrator {
     const observedAgreementId =
       incoming.agreementId ||
       observedAgreementIds[observedAgreementIds.length - 1] ||
+      null;
+    const observedOfferId =
+      incoming.offerId ||
+      observedOfferIds[observedOfferIds.length - 1] ||
       null;
     const observedTxnRefId =
       incoming.txnRefId ||
@@ -731,6 +737,7 @@ export class ReplayOrchestrator {
       logTag: incoming.logTag,
       lenderOrgId: incoming.lenderOrgId || null,
       loanApplicationId: observedLoanApplicationId,
+      offerId: observedOfferId,
       txnRefId: observedTxnRefId,
       customerId: observedCustomerId,
       orderId: incoming.orderId || incoming.headers?.['x-order-id'] || null,
@@ -806,6 +813,24 @@ export class ReplayOrchestrator {
     } else if (observedAgreementId) {
       logger.info('Ignoring observed agreementId for replay remap because source is not trusted', {
         observedAgreementId,
+        logTag: incoming.logTag,
+        source: incoming.source || null,
+        destination: incoming.destination || null,
+        sourceDestination
+      });
+    }
+
+    if (observedOfferId && incoming.logTag === 'LSP-SelectOffer_REQUEST' && shouldTrustLiveLoanApplicationIdSource(incoming)) {
+      this.stateManager.setCurrentReplayOfferId(observedOfferId, {
+        logTag: incoming.logTag,
+        source: incoming.source,
+        destination: incoming.destination,
+        sourceDestination,
+        requestId: incoming.requestId || null
+      });
+    } else if (observedOfferId) {
+      logger.info('Ignoring observed offerId for replay remap because source/logTag is not trusted', {
+        observedOfferId,
         logTag: incoming.logTag,
         source: incoming.source || null,
         destination: incoming.destination || null,
@@ -1198,6 +1223,24 @@ export class ReplayOrchestrator {
       return null;
     }
 
+    const currentEntry = this.validator?.getCurrentEntry?.() || null;
+    const isCurrentReplayFetchLoanApplicationData =
+      currentEntry?.source === 'GATEWAY' &&
+      currentEntry?.destination === 'LSP' &&
+      (
+        currentEntry?.logTag === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' ||
+        currentEntry?.logTag === 'FETCH_LOAN_APPLICATION_DATA_API_REQUEST'
+      );
+
+    if (!isCurrentReplayFetchLoanApplicationData) {
+      logger.info('Deferring fetchLoanApplicationData request until replay reaches matching sequence entry', {
+        requestId: incoming.requestId,
+        incomingLogTag: incoming.logTag,
+        currentEntry: currentEntry?.toString?.() || null
+      });
+      return null;
+    }
+
     const loanApplicationId =
       incoming.payload?.loanApplicationId ||
       incoming.payload?.loan_application_id ||
@@ -1207,7 +1250,7 @@ export class ReplayOrchestrator {
     logger.info('Passing through fetchLoanApplicationData request to local LSP', {
       requestId: incoming.requestId,
       loanApplicationId,
-      currentEntry: this.validator.getCurrentEntry()?.toString()
+      currentEntry: currentEntry?.toString?.() || null
     });
 
     const serviceResponse = await makeRequest(
@@ -1249,7 +1292,7 @@ export class ReplayOrchestrator {
     // Advance the validator past this GATEWAY→LSP entry and its paired response
     // so the sequential-runner can continue to serve the next GATEWAY→LENDER
     // call (e.g. GET_REDIRECTION_URL_SO) that is buffered and waiting.
-    const passthroughEntry = this.validator.getCurrentEntry();
+    const passthroughEntry = currentEntry;
     if (
       passthroughEntry &&
       (passthroughEntry.logTag === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' ||

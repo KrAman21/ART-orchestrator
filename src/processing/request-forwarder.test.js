@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { prepareForwardingRequest, RequestForwarder } from './request-forwarder.js';
+import { REQUEST_TIMEOUT_OVERRIDES } from '../config.js';
 import { StateManager } from '../services/state-manager.js';
 
 test('prepareForwardingRequest preserves CORE->GATEWAY loan status payload requestId from the incoming body', () => {
@@ -155,6 +156,65 @@ test('prepareForwardingRequest rewrites top-level and nested request ids using o
   assert.equal(prepared.payload.nested.request_id, 'live-req-1');
 });
 
+test('prepareForwardingRequest rewrites all maintained replay ids for APP_CORE style payloads and headers', () => {
+  const stateManager = new StateManager();
+  stateManager.seedProdLoanApplicationIdsFromLogs([{ payload: { loanApplicationId: 'prod-la-1' } }]);
+  stateManager.seedProdAgreementIdsFromLogs([{ payload: { agreementId: 'prod-agreement-1' } }]);
+  stateManager.seedProdSessionTokensFromLogs([{ payload: { sessionToken: 'prod-session-1' } }]);
+  stateManager.seedProdTxnRefIdsFromLogs([{ payload: { txnRefId: 'prod-txn-1' } }]);
+  stateManager.seedProdCustomerIdsFromLogs([{ payload: { customerId: 'prod-customer-1' } }]);
+
+  stateManager.setCurrentReplayLoanApplicationId('live-la-1', { logTag: 'GetAgreementDataRequest_REQUEST' });
+  stateManager.setCurrentReplayAgreementId('live-agreement-1', { logTag: 'GetAgreementDataRequest-LSP_RESPONSE' });
+  stateManager.setCurrentReplaySessionToken('live-session-1', { logTag: 'GetLenderFlows_RESPONSE' });
+  stateManager.setCurrentReplayTxnRefId('live-txn-1', { logTag: 'DMI_CREATE_TXN_REQUEST' });
+  stateManager.setCurrentReplayCustomerId('live-customer-1', { logTag: 'LSP-Eligibility_REQUEST' });
+
+  const incoming = {
+    requestId: 'outer-request-id',
+    headers: {
+      'x-loan-application-id': 'prod-la-1',
+      'x-session-token': 'prod-session-1'
+    },
+    payload: {
+      loanApplicationId: 'prod-la-1',
+      agreementId: 'prod-agreement-1',
+      sessionToken: 'prod-session-1',
+      txnRefId: 'prod-txn-1',
+      customerId: 'prod-customer-1',
+      nested: {
+        loan_application_id: 'prod-la-1',
+        agreement_id: 'prod-agreement-1',
+        txn_ref_id: 'prod-txn-1',
+        merchant_customer_id: 'prod-customer-1'
+      }
+    }
+  };
+
+  const expectedEntry = {
+    logTag: 'GetAgreementDataRequest_REQUEST',
+    sourceDestination: 'APP_CORE',
+    loanApplicationId: 'prod-la-1',
+    message: {
+      merchant_id: 'flipkart'
+    }
+  };
+
+  const prepared = prepareForwardingRequest(incoming, expectedEntry, {}, stateManager);
+
+  assert.equal(prepared.headers['x-loan-application-id'], 'live-la-1');
+  assert.equal(prepared.headers['x-session-token'], 'live-session-1');
+  assert.equal(prepared.payload.loanApplicationId, 'live-la-1');
+  assert.equal(prepared.payload.agreementId, 'live-agreement-1');
+  assert.equal(prepared.payload.sessionToken, 'live-session-1');
+  assert.equal(prepared.payload.txnRefId, 'live-txn-1');
+  assert.equal(prepared.payload.customerId, 'live-customer-1');
+  assert.equal(prepared.payload.nested.loan_application_id, 'live-la-1');
+  assert.equal(prepared.payload.nested.agreement_id, 'live-agreement-1');
+  assert.equal(prepared.payload.nested.txn_ref_id, 'live-txn-1');
+  assert.equal(prepared.payload.nested.merchant_customer_id, 'live-customer-1');
+});
+
 test('prepareForwardingRequest adds SDK headers when log tag contains SDK', () => {
   const incoming = {
     requestId: 'outer-request-id',
@@ -299,4 +359,11 @@ test('RequestForwarder tolerates configured blocking forward timeout using repla
   });
   assert.equal(loggedOutgoing.length, 1);
   assert.equal(loggedOutgoing[0][4].event, 'forward_failed_tolerated');
+});
+
+test('SetRepaymentPlanStatusRequest-LSP_REQUEST uses the extended request timeout override', () => {
+  assert.equal(
+    REQUEST_TIMEOUT_OVERRIDES['SetRepaymentPlanStatusRequest-LSP_REQUEST'],
+    25000
+  );
 });

@@ -73,7 +73,20 @@ export function prepareForwardingRequest(incoming, expectedEntry, endpointHeader
     headers['x-merchant-id'] = merchantId;
   }
 
-  const transformedPayload = transformRequest(incoming?.payload, expectedEntry?.logTag);
+  const replayCanonicalLoanApplicationId =
+    stateManager?.getMappedLoanApplicationId?.(expectedEntry?.loanApplicationId) ||
+    expectedEntry?.loanApplicationId ||
+    incoming?.payload?.loanApplicationId ||
+    incoming?.payload?.loan_application_id ||
+    null;
+  const transformedPayload = transformReplayPayloadForEntry(
+    stateManager,
+    incoming?.payload,
+    {
+      ...expectedEntry,
+      loanApplicationId: replayCanonicalLoanApplicationId
+    }
+  );
   const normalizedPayload = normalizeForwardingPayloadForEntry(
     transformedPayload,
     incoming,

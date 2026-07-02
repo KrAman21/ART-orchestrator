@@ -1294,6 +1294,64 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
   return true;
 }
 
+async function maybeConsumeBufferedCurrentEntryFromOuterRunner(
+  orchestrator,
+  currentEntry,
+  orderId,
+  orderIndex,
+  totalOrders
+) {
+  if (!currentEntry?.isRequest) {
+    return false;
+  }
+
+  if (orchestrator?.validator?.processedIndices?.has?.(currentEntry.index)) {
+    return false;
+  }
+
+  if (typeof orchestrator?.maybeConsumeBufferedCurrentExpectedRequest !== 'function') {
+    return false;
+  }
+
+  const hasBufferedMatch = orchestrator?.bufferManager?.hasMatchingBufferedRequest?.(currentEntry) || false;
+  if (!hasBufferedMatch) {
+    return false;
+  }
+
+  logger.info(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Outer runner consuming already-buffered current request - Current: ${currentEntry.logTag || 'unknown'}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      source: currentEntry.source,
+      destination: currentEntry.destination,
+      phase: 'OUTER_BUFFERED_CURRENT_REQUEST_CONSUME'
+    }
+  );
+
+  try {
+    const consumed = await orchestrator.maybeConsumeBufferedCurrentExpectedRequest(currentEntry);
+    if (consumed && typeof orchestrator?.markStuckEntryResolved === 'function') {
+      orchestrator.markStuckEntryResolved(currentEntry, 'outer_runner_buffered_current_request_consume');
+    }
+    return consumed;
+  } catch (error) {
+    logger.warn('Outer runner failed while consuming already-buffered current request', {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      error: error?.message || String(error),
+      phase: 'OUTER_BUFFERED_CURRENT_REQUEST_CONSUME_FAILED'
+    });
+    return false;
+  }
+}
+
 export async function maybeRecoverStalledExternalReplayEntry(
   orchestrator,
   currentEntry,
@@ -1365,6 +1423,80 @@ export async function maybeRecoverStalledExternalReplayEntry(
       phase: 'OUTER_STALLED_EXTERNAL_ENTRY_RECOVERY_FAILED'
     });
     runnerRecoveryState.lastRecoveredEntryIndex = currentEntry.index;
+    return false;
+  }
+}
+
+export async function maybeForceEarlySelfTriggerFallbackEntry(
+  orchestrator,
+  currentEntry,
+  stuckDurationMs,
+  orderId,
+  orderIndex,
+  totalOrders,
+  runnerRecoveryState
+) {
+  if (!currentEntry?.isRequest || !isSelfTriggerFallbackApiLogTag(currentEntry?.logTag)) {
+    return false;
+  }
+
+  if (orchestrator?.validator?.processedIndices?.has?.(currentEntry.index)) {
+    return false;
+  }
+
+  if (typeof orchestrator?.triggerMissingExpectedRequestFallback !== 'function') {
+    return false;
+  }
+
+  const hasBufferedMatch = orchestrator?.bufferManager?.hasMatchingBufferedRequest?.(currentEntry) || false;
+  if (hasBufferedMatch) {
+    return false;
+  }
+
+  const recoveryThresholdMs = currentEntry?.logTag === 'Lsp-LoanStatusRequest_REQUEST' ? 750 : 2_000;
+  if (stuckDurationMs < recoveryThresholdMs) {
+    return false;
+  }
+
+  const recoveryKey = `${currentEntry.index}:self-trigger`;
+  if (runnerRecoveryState.lastRecoveredEntryIndex === recoveryKey) {
+    return false;
+  }
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Outer runner forcing early self-trigger fallback - Current: ${currentEntry.logTag || 'unknown'}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      stuckDurationMs,
+      recoveryThresholdMs,
+      source: currentEntry.source,
+      destination: currentEntry.destination,
+      phase: 'OUTER_EARLY_SELF_TRIGGER_FALLBACK'
+    }
+  );
+
+  try {
+    await orchestrator.triggerMissingExpectedRequestFallback(currentEntry, recoveryThresholdMs);
+    if (typeof orchestrator?.markStuckEntryResolved === 'function') {
+      orchestrator.markStuckEntryResolved(currentEntry, 'outer_runner_early_self_trigger_fallback');
+    }
+    runnerRecoveryState.lastRecoveredEntryIndex = recoveryKey;
+    return true;
+  } catch (error) {
+    logger.warn('Outer runner failed while forcing early self-trigger fallback', {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      error: error?.message || String(error),
+      phase: 'OUTER_EARLY_SELF_TRIGGER_FALLBACK_FAILED'
+    });
+    runnerRecoveryState.lastRecoveredEntryIndex = recoveryKey;
     return false;
   }
 }
@@ -1473,8 +1605,34 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
     if (currentIndex !== null && currentIndex === stuckEntryIndex) {
       const currentMaxRetrySeconds = getMaxRetrySeconds(currentEntry?.logTag);
       const configuredRetryMs = currentMaxRetrySeconds * 1000;
-      const currentMaxRetryMs = getEffectiveEntryRetryMs(orchestrator, currentEntry, configuredRetryMs);
-      const stuckDurationMs = Date.now() - stuckSince;
+    const currentMaxRetryMs = getEffectiveEntryRetryMs(orchestrator, currentEntry, configuredRetryMs);
+    const stuckDurationMs = Date.now() - stuckSince;
+
+    if (await maybeConsumeBufferedCurrentEntryFromOuterRunner(
+      orchestrator,
+      currentEntry,
+      orderId,
+      orderIndex,
+      totalOrders
+    )) {
+      stuckSince = Date.now();
+      await sleep(retryIntervalMs);
+      continue;
+    }
+
+      if (await maybeForceEarlySelfTriggerFallbackEntry(
+        orchestrator,
+        currentEntry,
+        stuckDurationMs,
+        orderId,
+        orderIndex,
+        totalOrders,
+        runnerRecoveryState
+      )) {
+        stuckSince = Date.now();
+        await sleep(retryIntervalMs);
+        continue;
+      }
 
       if (await maybeRecoverStalledExternalReplayEntry(
         orchestrator,

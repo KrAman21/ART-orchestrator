@@ -3,6 +3,7 @@ import { logger } from '../utils/logger.js';
 const IDENTIFIER_TYPE_ALIASES = Object.freeze({
   loanApplicationId: ['loanApplicationId', 'loan_application_id', 'partnerRefNo', 'applicationid', 'ApplicationId', 'applicationId'],
   agreementId: ['agreementId', 'agreement_id', 'agreementid'],
+  offerId: ['offerId', 'offer_id'],
   requestId: [
     'requestId',
     'request_id',
@@ -88,6 +89,16 @@ const LOG_TAG_IDENTIFIER_TYPE_OVERRIDES = Object.freeze({
     applicationid: 'lineDetailId',
     ApplicationId: 'lineDetailId'
   },
+  'E-MANDATE SERVICE API_REQUEST': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId',
+    applicationId: 'lineDetailId'
+  },
+  'E-MANDATE SERVICE API_RESPONSE': {
+    applicationid: 'lineDetailId',
+    ApplicationId: 'lineDetailId',
+    applicationId: 'lineDetailId'
+  },
   UpdateKYCRequest_REQUEST: {
     id: 'actionRequiredId'
   },
@@ -129,6 +140,23 @@ const LOG_TAG_IDENTIFIER_TYPE_OVERRIDES = Object.freeze({
   }
 });
 
+const LOG_TAG_IDENTIFIER_PATH_OVERRIDES = Object.freeze({
+  'LSP-SelectOffer_REQUEST': {
+    'payload.offerSerializer.id': 'offerId',
+    'payload.offer.id': 'offerId',
+    'offerSerializer.id': 'offerId',
+    'offer.id': 'offerId'
+  },
+  SetRepaymentPlanRequest_REQUEST: {
+    'payload.plan.id': 'offerId',
+    'plan.id': 'offerId'
+  },
+  'SetRepaymentPlanRequest-LSP_REQUEST': {
+    'payload.plan.id': 'offerId',
+    'plan.id': 'offerId'
+  }
+});
+
 const LOAN_APPLICATION_ID_MAPPING_SUPPRESSION_LOG_TAGS = new Set([
   'HDB_APPLICATION_STATUS_API :: FETCH_OFFER_REQUEST',
   'HDB_APPLICATION_STATUS_API :: FETCH_OFFER_RESPONSE',
@@ -152,6 +180,11 @@ const PROD_LOAN_APPLICATION_ID_KEYS = new Set([
 const PROD_AGREEMENT_ID_KEYS = new Set([
   'agreementid',
   'agreement_id'
+]);
+
+const PROD_OFFER_ID_KEYS = new Set([
+  'offerid',
+  'offer_id'
 ]);
 
 const PROD_SESSION_TOKEN_KEYS = new Set([
@@ -182,6 +215,33 @@ const PROD_REQUEST_ID_KEYS = new Set([
   'tracerequestid',
   'trace_request_id'
 ]);
+
+function collectLineScopedIdentifierCandidates(payload) {
+  const candidates = new Set();
+  const push = value => {
+    if (typeof value === 'string' && value.trim()) {
+      candidates.add(value.trim());
+    }
+  };
+
+  if (!payload || typeof payload !== 'object') {
+    return candidates;
+  }
+
+  push(payload.lineDetailId);
+  push(payload.lineId);
+  push(payload.referenceId);
+  push(payload.applicationid);
+  push(payload.ApplicationId);
+  push(payload.applicationId);
+  push(payload?.lineDetail?.lineDetailId);
+  push(payload?.lineDetail?.lineId);
+  push(payload?.lineDetail?.referenceId);
+  push(payload?.lineDetail?.lineDetailExtensibleData?.referenceId);
+  push(payload?.lineDetail?.lineDetailExtensibleData?.lineDetailExtensibleDataId);
+
+  return candidates;
+}
 
 function resolveLogTagForRequestIdOwnership(entry = {}) {
   if (typeof entry?.logTag === 'string' && entry.logTag.trim()) {
@@ -286,6 +346,9 @@ export class StateManager {
     this.prodAgreementIds = new Set();
     this.replayAgreementIdAliases = new Set();
     this.currentReplayAgreementId = null;
+    this.prodOfferIds = new Set();
+    this.replayOfferIdAliases = new Set();
+    this.currentReplayOfferId = null;
     this.prodSessionTokens = new Set();
     this.replaySessionTokenAliases = new Set();
     this.currentReplaySessionToken = null;
@@ -522,6 +585,12 @@ export class StateManager {
     this.currentReplayAgreementId = null;
   }
 
+  resetProdOfferIds() {
+    this.prodOfferIds.clear();
+    this.replayOfferIdAliases.clear();
+    this.currentReplayOfferId = null;
+  }
+
   resetProdSessionTokens() {
     this.prodSessionTokens.clear();
     this.replaySessionTokenAliases.clear();
@@ -639,6 +708,67 @@ export class StateManager {
     });
 
     return this.prodAgreementIds.size;
+  }
+
+  extractProdOfferIdsFromValue(source, context = {}) {
+    const offerIds = [];
+    const seen = new Set();
+
+    const visit = (value, path = []) => {
+      if (!value || typeof value !== 'object') {
+        return;
+      }
+
+      if (Array.isArray(value)) {
+        value.forEach((item, index) => visit(item, [...path, String(index)]));
+        return;
+      }
+
+      for (const [key, nestedValue] of Object.entries(value)) {
+        const nextPath = [...path, key];
+        const identifierType = this.getIdentifierTypeForKeyInContext(key, {
+          ...context,
+          path: nextPath
+        });
+
+        if (
+          typeof nestedValue === 'string' &&
+          (
+            identifierType === 'offerId' ||
+            PROD_OFFER_ID_KEYS.has(String(key).toLowerCase())
+          ) &&
+          !seen.has(nestedValue)
+        ) {
+          seen.add(nestedValue);
+          offerIds.push(nestedValue);
+          continue;
+        }
+
+        visit(nestedValue, nextPath);
+      }
+    };
+
+    visit(source);
+    return offerIds;
+  }
+
+  seedProdOfferIdsFromLogs(logs = []) {
+    this.resetProdOfferIds();
+
+    for (const entry of Array.isArray(logs) ? logs : []) {
+      const logTag = resolveLogTagForRequestIdOwnership(entry);
+      const discoveredOfferIds = this.extractProdOfferIdsFromValue(entry, { logTag });
+      for (const offerId of discoveredOfferIds) {
+        this.prodOfferIds.add(offerId);
+      }
+    }
+
+    logger.info('Seeded PROD offerIds for replay', {
+      total: this.prodOfferIds.size,
+      offerIds: Array.from(this.prodOfferIds)
+    });
+
+    return this.prodOfferIds.size;
   }
 
   extractProdSessionTokensFromValue(source) {
@@ -854,6 +984,10 @@ export class StateManager {
     return this.currentReplayAgreementId;
   }
 
+  getCurrentReplayOfferId() {
+    return this.currentReplayOfferId;
+  }
+
   getCurrentReplaySessionToken() {
     return this.currentReplaySessionToken;
   }
@@ -975,6 +1109,45 @@ export class StateManager {
       currentAgreementId: agreementId,
       prodAgreementIdCount: this.prodAgreementIds.size,
       replayAliasCount: this.replayAgreementIdAliases.size,
+      sourceDestination: context?.sourceDestination || null,
+      logTag: context?.logTag || null,
+      requestId: context?.requestId || null
+    });
+
+    return true;
+  }
+
+  setCurrentReplayOfferId(offerId, context = {}) {
+    if (!offerId || typeof offerId !== 'string') {
+      return false;
+    }
+
+    const previousCurrentOfferId = this.currentReplayOfferId;
+    if (previousCurrentOfferId === offerId) {
+      return false;
+    }
+
+    if (previousCurrentOfferId) {
+      this.replayOfferIdAliases.add(previousCurrentOfferId);
+    }
+
+    this.currentReplayOfferId = offerId;
+
+    for (const prodOfferId of this.prodOfferIds) {
+      this.replayOfferIdAliases.add(prodOfferId);
+      this.registerIdentifierMapping(
+        'offerId',
+        prodOfferId,
+        offerId,
+        { ...context, logTag: context?.logTag || 'GLOBAL_OFFER_ID_REPLAY_MAPPING' }
+      );
+    }
+
+    logger.info('Updated current replay offerId', {
+      previousOfferId: previousCurrentOfferId,
+      currentOfferId: offerId,
+      prodOfferIdCount: this.prodOfferIds.size,
+      replayAliasCount: this.replayOfferIdAliases.size,
       sourceDestination: context?.sourceDestination || null,
       logTag: context?.logTag || null,
       requestId: context?.requestId || null
@@ -1118,6 +1291,18 @@ export class StateManager {
     return this.prodAgreementIds.has(value) || this.replayAgreementIdAliases.has(value);
   }
 
+  shouldRewriteOutgoingOfferId(value) {
+    if (!value || typeof value !== 'string') {
+      return false;
+    }
+
+    if (this.currentReplayOfferId && value === this.currentReplayOfferId) {
+      return false;
+    }
+
+    return this.prodOfferIds.has(value) || this.replayOfferIdAliases.has(value);
+  }
+
   shouldRewriteOutgoingSessionToken(value) {
     if (!value || typeof value !== 'string') {
       return false;
@@ -1196,6 +1381,7 @@ export class StateManager {
     if (
       !this.currentReplayLoanApplicationId &&
       !this.currentReplayAgreementId &&
+      !this.currentReplayOfferId &&
       !this.currentReplaySessionToken &&
       !this.currentReplayTxnRefId &&
       !this.currentReplayCustomerId &&
@@ -1250,6 +1436,16 @@ export class StateManager {
         return this.currentReplayAgreementId;
       }
 
+      if (this.currentReplayOfferId && this.shouldRewriteOutgoingOfferId(value)) {
+        logger.debug('Rewriting outgoing offerId value', {
+          originalValue: value,
+          rewrittenValue: this.currentReplayOfferId,
+          logTag: context?.logTag || null,
+          field: context?.field || null
+        });
+        return this.currentReplayOfferId;
+      }
+
       if (this.shouldRewriteOutgoingLoanApplicationId(value)) {
         logger.debug('Rewriting outgoing loanApplicationId value', {
           originalValue: value,
@@ -1272,7 +1468,8 @@ export class StateManager {
       for (const [key, nestedValue] of Object.entries(value)) {
         rewritten[key] = this.rewriteOutgoingLoanApplicationIds(nestedValue, {
           ...context,
-          field: key
+          field: key,
+          path: [...(Array.isArray(context?.path) ? context.path : []), key]
         });
       }
       return rewritten;
@@ -1286,6 +1483,7 @@ export class StateManager {
       (
         !this.currentReplayLoanApplicationId &&
         !this.currentReplayAgreementId &&
+        !this.currentReplayOfferId &&
         !this.currentReplaySessionToken &&
         !this.currentReplayTxnRefId &&
         !this.currentReplayCustomerId &&
@@ -1320,6 +1518,9 @@ export class StateManager {
         if (this.currentReplayAgreementId && this.shouldRewriteOutgoingAgreementId(segment)) {
           return this.currentReplayAgreementId;
         }
+        if (this.currentReplayOfferId && this.shouldRewriteOutgoingOfferId(segment)) {
+          return this.currentReplayOfferId;
+        }
         if (this.shouldRewriteOutgoingLoanApplicationId(segment)) {
           return this.currentReplayLoanApplicationId;
         }
@@ -1347,6 +1548,8 @@ export class StateManager {
         params.set(key, this.currentReplayCustomerId);
       } else if (this.currentReplayAgreementId && this.shouldRewriteOutgoingAgreementId(value)) {
         params.set(key, this.currentReplayAgreementId);
+      } else if (this.currentReplayOfferId && this.shouldRewriteOutgoingOfferId(value)) {
+        params.set(key, this.currentReplayOfferId);
       } else if (this.shouldRewriteOutgoingLoanApplicationId(value)) {
         params.set(key, this.currentReplayLoanApplicationId);
       }
@@ -1464,6 +1667,18 @@ export class StateManager {
     }
 
     const logTag = typeof context?.logTag === 'string' ? context.logTag : null;
+    const rawPath = Array.isArray(context?.path) ? context.path : [];
+    const normalizedPath = rawPath
+      .filter(segment => typeof segment === 'string' && !/^\d+$/.test(segment))
+      .join('.');
+
+    if (logTag && normalizedPath) {
+      const pathOverrides = LOG_TAG_IDENTIFIER_PATH_OVERRIDES[logTag];
+      if (pathOverrides && Object.prototype.hasOwnProperty.call(pathOverrides, normalizedPath)) {
+        return pathOverrides[normalizedPath];
+      }
+    }
+
     if (logTag) {
       const logTagOverrides = LOG_TAG_IDENTIFIER_TYPE_OVERRIDES[logTag];
       if (logTagOverrides && Object.prototype.hasOwnProperty.call(logTagOverrides, key)) {
@@ -1494,12 +1709,24 @@ export class StateManager {
     }
 
     const lineDetailMappings = this.identifierMappings.get('lineDetailId');
-    if (!lineDetailMappings) {
-      return false;
+    if (lineDetailMappings) {
+      for (const candidate of lineDetailMappings.values()) {
+        if (candidate === localValue) {
+          return true;
+        }
+      }
     }
 
-    for (const candidate of lineDetailMappings.values()) {
-      if (candidate === localValue) {
+    const contextPayloads = [
+      this.currentIdentifierRegistrationContext?.originalSource,
+      this.currentIdentifierRegistrationContext?.localSource,
+      this.currentIdentifierRegistrationContext?.expectedPayload,
+      this.currentIdentifierRegistrationContext?.actualPayload
+    ];
+
+    for (const payload of contextPayloads) {
+      const lineScopedCandidates = collectLineScopedIdentifierCandidates(payload);
+      if (lineScopedCandidates.has(localValue)) {
         return true;
       }
     }
@@ -1516,40 +1743,45 @@ export class StateManager {
       return false;
     }
 
-    if (this.shouldSuppressIdentifierMapping(identifierType, context)) {
-      logger.info('Suppressed identifier mapping for non-canonical lender-scoped field', {
+    this.currentIdentifierRegistrationContext = context;
+    try {
+      if (this.shouldSuppressIdentifierMapping(identifierType, context)) {
+        logger.info('Suppressed identifier mapping for non-canonical lender-scoped field', {
+          identifierType,
+          originalValue,
+          localValue,
+          logTag: context?.logTag || null
+        });
+        return false;
+      }
+
+      if (
+        identifierType === 'loanApplicationId' &&
+        this.shouldRejectSuspiciousLoanApplicationIdMapping(originalValue, localValue)
+      ) {
+        logger.info('Rejected suspicious loanApplicationId mapping because target matches known lineDetailId', {
+          originalValue,
+          localValue,
+          logTag: context?.logTag || null
+        });
+        return false;
+      }
+
+      const existing = mappings.get(originalValue);
+      if (existing === localValue) {
+        return false;
+      }
+
+      mappings.set(originalValue, localValue);
+      logger.info('Registered identifier mapping', {
         identifierType,
         originalValue,
-        localValue,
-        logTag: context?.logTag || null
+        localValue
       });
-      return false;
+      return true;
+    } finally {
+      this.currentIdentifierRegistrationContext = null;
     }
-
-    if (
-      identifierType === 'loanApplicationId' &&
-      this.shouldRejectSuspiciousLoanApplicationIdMapping(originalValue, localValue)
-    ) {
-      logger.info('Rejected suspicious loanApplicationId mapping because target matches known lineDetailId', {
-        originalValue,
-        localValue,
-        logTag: context?.logTag || null
-      });
-      return false;
-    }
-
-    const existing = mappings.get(originalValue);
-    if (existing === localValue) {
-      return false;
-    }
-
-    mappings.set(originalValue, localValue);
-    logger.info('Registered identifier mapping', {
-      identifierType,
-      originalValue,
-      localValue
-    });
-    return true;
   }
 
   registerLoanApplicationIdMapping(originalLoanApplicationId, localLoanApplicationId) {
@@ -1577,19 +1809,22 @@ export class StateManager {
     const ids = [];
     const seen = new Set();
 
-    const visit = value => {
+    const visit = (value, path = []) => {
       if (!value || typeof value !== 'object') {
         return;
       }
 
       if (Array.isArray(value)) {
-        value.forEach(visit);
+        value.forEach((item, index) => visit(item, [...path, String(index)]));
         return;
       }
 
       for (const [key, nestedValue] of Object.entries(value)) {
         if (
-          this.getIdentifierTypeForKeyInContext(key, context) === identifierType &&
+          this.getIdentifierTypeForKeyInContext(key, {
+            ...context,
+            path: [...path, key]
+          }) === identifierType &&
           typeof nestedValue === 'string' &&
           !seen.has(nestedValue)
         ) {
@@ -1598,7 +1833,7 @@ export class StateManager {
           continue;
         }
 
-        visit(nestedValue);
+        visit(nestedValue, [...path, key]);
       }
     };
 
@@ -1657,7 +1892,10 @@ export class StateManager {
     if (value && typeof value === 'object') {
       const remapped = {};
       for (const [key, nestedValue] of Object.entries(value)) {
-        remapped[key] = this.remapReplayValue(nestedValue, key, context);
+        remapped[key] = this.remapReplayValue(nestedValue, key, {
+          ...context,
+          path: [...(Array.isArray(context?.path) ? context.path : []), key]
+        });
       }
       return remapped;
     }
@@ -1808,7 +2046,12 @@ export class StateManager {
     });
   }
 
-  clearReplayTransientState() {
+  clearReplayTransientState(options = {}) {
+    const preserveReplayRequestIds = options.preserveReplayRequestIds === true;
+    const preserveReplayMappings =
+      options.preserveReplayMappings === true ||
+      preserveReplayRequestIds;
+
     for (const pending of this.pendingRequests.values()) {
       clearTimeout(pending.timeoutHandle);
     }
@@ -1817,16 +2060,32 @@ export class StateManager {
     this.pendingResponses.clear();
     this._bufferedRequests.clear();
     this.responseHeaders.clear();
-    this.forwardedForByContext.clear();
-    this.replayAppAuthByLoanApplicationId.clear();
-    this.replaySessionTokenAliases.clear();
-    this.currentReplaySessionToken = null;
-    this.replayRequestIdByLogTag.clear();
+    if (!preserveReplayMappings) {
+      this.forwardedForByContext.clear();
+      this.replayAppAuthByLoanApplicationId.clear();
+      this.replayLoanApplicationIdAliases.clear();
+      this.currentReplayLoanApplicationId = null;
+      this.replayAgreementIdAliases.clear();
+      this.currentReplayAgreementId = null;
+      this.replayOfferIdAliases.clear();
+      this.currentReplayOfferId = null;
+      this.replaySessionTokenAliases.clear();
+      this.currentReplaySessionToken = null;
+      this.replayTxnRefIdAliases.clear();
+      this.currentReplayTxnRefId = null;
+      this.replayCustomerIdAliases.clear();
+      this.currentReplayCustomerId = null;
+    }
+    if (!preserveReplayRequestIds) {
+      this.replayRequestIdByLogTag.clear();
+    }
 
     logger.info('Cleared transient replay state', {
       pendingRequests: 0,
       pendingResponses: 0,
-      bufferedRequests: 0
+      bufferedRequests: 0,
+      preservedReplayRequestIds: preserveReplayRequestIds,
+      preservedReplayMappings: preserveReplayMappings
     });
   }
 

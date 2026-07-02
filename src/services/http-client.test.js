@@ -50,7 +50,7 @@ test('makeRequest sends GetLenderFlows APP_CORE payload as text envelope on firs
     const decodedEnvelope = JSON.parse(decodedOuter);
     assert.deepEqual(decodedEnvelope.payload, payload);
     assert.equal(decodedEnvelope.header['X-Merchant-Id'], 'flipkart');
-    assert.equal(decodedEnvelope.header['x-order-id'], 'OD123');
+    assert.equal(decodedEnvelope.header['X-Order-Id'], 'OD123');
     assert.equal(decodedEnvelope.requestId, 'LSP-request-1');
   } finally {
     global.fetch = originalFetch;
@@ -108,11 +108,11 @@ test('makeRequest sends GetAgreementData APP_CORE payload as text envelope on fi
     const decodedEnvelope = JSON.parse(decodedOuter);
     assert.deepEqual(decodedEnvelope.payload, payload);
     assert.equal(decodedEnvelope.header['X-Merchant-Id'], 'flipkart');
-    assert.equal(decodedEnvelope.header['x-order-id'], 'OD123');
-    assert.equal(decodedEnvelope.header['x-session-token'], 'session-token-1');
-    assert.equal(decodedEnvelope.header['x-user-id'], 'user-1');
-    assert.equal(decodedEnvelope.header['x-device-token-id'], 'device-1');
-    assert.equal(decodedEnvelope.header['x-forwarded-for'], '127.0.0.1');
+    assert.equal(decodedEnvelope.header['X-Order-Id'], 'OD123');
+    assert.equal(decodedEnvelope.header['X-Session-Token'], 'session-token-1');
+    assert.equal(decodedEnvelope.header['X-User-Id'], 'user-1');
+    assert.equal(decodedEnvelope.header['X-Device-Token-Id'], 'device-1');
+    assert.equal(decodedEnvelope.header['X-Forwarded-For'], '127.0.0.1');
     assert.equal(decodedEnvelope.requestId, 'LSP-request-2');
   } finally {
     global.fetch = originalFetch;

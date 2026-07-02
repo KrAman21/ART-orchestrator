@@ -1681,6 +1681,8 @@ export const REQUEST_TIMEOUT_OVERRIDES = {
     parseInt(process.env.FLIPKART_GET_KFS_TIMEOUT_MS, 10) || 45000,
   'LSP-GetKFS_REQUEST':
     parseInt(process.env.LSP_GET_KFS_TIMEOUT_MS, 10) || 45000,
+  'SetRepaymentPlanStatusRequest-LSP_REQUEST':
+    parseInt(process.env.SET_REPAYMENT_PLAN_STATUS_TIMEOUT_MS, 10) || 25000,
 };
 
 export const MOCK_CONFIG = {

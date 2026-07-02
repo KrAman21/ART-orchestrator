@@ -349,9 +349,16 @@ export function prepareAsyncReplayForwarding(entry, payload, outboundRequestId, 
   }
 
   const replayRequestIdCandidate = resolveFallbackGatewayRequestId(entry, observedIncomingRequests);
+  const replayCanonicalLoanApplicationId =
+    stateManager?.getMappedLoanApplicationId?.(entry?.loanApplicationId) ||
+    entry?.loanApplicationId ||
+    payload?.loanApplicationId ||
+    payload?.loan_application_id ||
+    null;
+  const canonicalPayload = normalizeCanonicalLoanApplicationReferences(payload, replayCanonicalLoanApplicationId);
   const normalizedPayload = stateManager?.rewriteOutgoingLoanApplicationIds
-    ? stateManager.rewriteOutgoingLoanApplicationIds(payload, { logTag: entry?.logTag, field: 'payload' })
-    : payload;
+    ? stateManager.rewriteOutgoingLoanApplicationIds(canonicalPayload, { logTag: entry?.logTag, field: 'payload' })
+    : canonicalPayload;
 
   return {
     headers,
@@ -557,7 +564,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.lastIdleExternalEntryKey = null;
     this.idleExternalEntryCycles = 0;
     this.activeLoanSettlementPtTriggers = new Set();
-    this.hasWaitedForInitialLoanSettlementPtTrigger = false;
+    this.inFlightEntryProcessing = new Map();
     if (this.requestForwarder?.callbacks) {
       this.requestForwarder.callbacks.shouldAutoProcessNextLogEntry = () => false;
       this.requestForwarder.callbacks.shouldBlockOnHeldExternalRequest = () => false;
@@ -594,22 +601,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.activeLoanSettlementPtTriggers.add(triggerKey);
 
     try {
-      if (!this.hasWaitedForInitialLoanSettlementPtTrigger) {
-        logger.info('Waiting briefly before first loan settlement PT replay helper trigger to allow PT creation to complete', {
-          entry: entry.toString(),
-          loanApplicationId,
-          waitMs: 1000
-        });
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        this.hasWaitedForInitialLoanSettlementPtTrigger = true;
-      } else {
-        logger.info('Skipping extra wait before subsequent loan settlement PT replay helper trigger', {
-          entry: entry.toString(),
-          loanApplicationId
-        });
-      }
-
-      logger.info('Triggering loan settlement PT replay helper before waiting for expected CORE→GATEWAY request', {
+      logger.info('Triggering loan settlement PT replay helper immediately after buffer miss', {
         entry: entry.toString(),
         loanApplicationId,
         merchantId
@@ -1652,6 +1644,33 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     if (!entry) {
       return false;
     }
+
+    if (!this.inFlightEntryProcessing) {
+      this.inFlightEntryProcessing = new Map();
+    }
+
+    const inFlightEntryKey = `${entry.index}:${this.validator.currentIndex}`;
+    const existingInFlightProcessing = this.inFlightEntryProcessing.get(inFlightEntryKey);
+    if (existingInFlightProcessing) {
+      logger.info('Reusing in-flight replay processing for current entry', {
+        entry: entry.toString(),
+        inFlightEntryKey
+      });
+      return existingInFlightProcessing;
+    }
+
+    const processingPromise = this._processNextLogEntryInternal(entry)
+      .finally(() => {
+        if (this.inFlightEntryProcessing?.get(inFlightEntryKey) === processingPromise) {
+          this.inFlightEntryProcessing.delete(inFlightEntryKey);
+        }
+      });
+
+    this.inFlightEntryProcessing.set(inFlightEntryKey, processingPromise);
+    return processingPromise;
+  }
+
+  async _processNextLogEntryInternal(entry) {
     
     // Skip already processed entries (e.g., GATEWAY->LENDER handled immediately)
     if (this.validator.processedIndices.has(entry.index)) {
@@ -1712,6 +1731,24 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       }
 
       const effectiveTimeoutMs = this.getRequestWaitTimeoutMs(entry);
+
+      logger.info('Current request buffer probe', {
+        entry: entry.toString(),
+        hasBufferedMatch,
+        bufferDiagnostics: this.bufferManager?.getIncomingBufferDiagnostics?.(entry, 10) || null
+      });
+
+      if (hasBufferedMatch) {
+        const consumedBufferedCurrentRequest = await this.maybeConsumeBufferedCurrentExpectedRequest(entry);
+        if (consumedBufferedCurrentRequest) {
+          return true;
+        }
+
+        logger.warn('Buffered match probe reported true but immediate buffered consumption did not succeed', {
+          entry: entry.toString(),
+          bufferDiagnostics: this.bufferManager?.getIncomingBufferDiagnostics?.(entry, 10) || null
+        });
+      }
 
       if (!hasBufferedMatch) {
         await this.maybePrimeLoanSettlementPt(entry);
@@ -1801,14 +1838,45 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     return false;
   }
 
+  async maybeConsumeBufferedCurrentExpectedRequest(entry) {
+    if (!entry?.isRequest || !this.bufferManager?.findMatchingRequest) {
+      return false;
+    }
+
+    const buffered = this.bufferManager.findMatchingRequest(entry, { claim: true });
+    if (!buffered) {
+      logger.info('No claimable buffered current request found during immediate consume attempt', {
+        entry: entry.toString(),
+        bufferDiagnostics: this.bufferManager?.getIncomingBufferDiagnostics?.(entry, 10) || null
+      });
+      return false;
+    }
+
+    logger.info('Consuming already-buffered current expected request immediately', {
+      entry: entry.toString(),
+      bufferKey: buffered.key,
+      requestId: buffered.request?.requestId || null,
+      logTag: buffered.request?.logTag || null
+    });
+
+    try {
+      const response = await super.handleIncomingRequest(buffered.request);
+      this.bufferManager.completeIncomingRequest(buffered.key, response);
+      return true;
+    } catch (error) {
+      this.bufferManager.failIncomingRequest(buffered.key, error);
+      throw error;
+    }
+  }
+
   getRequestWaitTimeoutMs(entry) {
     if (entry?.logTag === 'LOAN_SETTLEMENT_PT_REQUEST') {
-      logger.info('Using short wait timeout for loan settlement PT helper-triggered replay request', {
+      logger.info('Using minimal wait timeout for loan settlement PT helper-triggered replay request', {
         entry: entry?.toString?.(),
         logTag: entry?.logTag,
-        timeoutMs: 9_000
+        timeoutMs: 1_500
       });
-      return 9_000;
+      return 1_500;
     }
 
     if (isSkippableAsyncApiLogTag(entry.logTag)) {
@@ -1822,13 +1890,14 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     }
 
     if (isSelfTriggerFallbackApiLogTag(entry.logTag)) {
+      const timeoutMs = entry?.logTag === 'Lsp-LoanStatusRequest_REQUEST' ? 3_000 : 9_000;
       logger.info('Using short wait timeout for self-trigger fallback API', {
         entry: entry?.toString?.(),
         logTag: entry?.logTag,
-        timeoutMs: 9_000,
+        timeoutMs,
         configuredFallbackApis: Array.from(SELF_TRIGGER_FALLBACK_API_LOG_TAGS)
       });
-      return 9_000;
+      return timeoutMs;
     }
 
     const baseTimeoutMs = this.config.timeoutMs;
@@ -2632,6 +2701,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     if (directGatewayLenderResponse) {
       return directGatewayLenderResponse;
     }
+
+    const directCurrentExpectedResponse = await this.maybeHandleCurrentExpectedIncomingRequest(effectiveIncoming);
+    if (directCurrentExpectedResponse) {
+      return directCurrentExpectedResponse;
+    }
     
     // Let retry detection run before buffering.
     // Some lender callbacks legitimately repeat requests that were already
@@ -2762,6 +2836,63 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     // so ART does not time out on a request that was already processed.
     this.bufferManager?.skipWaiter?.(currentEntry);
 
+    return response;
+  }
+
+  async maybeHandleCurrentExpectedIncomingRequest(incoming) {
+    const sourceDestination = normalizeSourceDestination(
+      `${incoming.source}_${incoming.destination}`,
+      incoming.logTag
+    );
+    const [source, destination] = sourceDestination.split('_');
+
+    if (source === 'GATEWAY' && destination === 'LENDER') {
+      return null;
+    }
+
+    const currentEntry = this.validator.getCurrentEntry();
+    if (!currentEntry?.isRequest) {
+      return null;
+    }
+
+    const normalizedIncoming = {
+      ...incoming,
+      source,
+      destination
+    };
+
+    if (!this.validator.matchesExpected(currentEntry, normalizedIncoming)) {
+      return null;
+    }
+
+    const pendingWaiters = this.bufferManager?.getPendingRequestWaiters?.() || [];
+    const currentEntryLabel = currentEntry.toString();
+    const replayAlreadyWaiting = pendingWaiters.some(waiter =>
+      waiter.expected === currentEntryLabel &&
+      waiter.logTag === currentEntry.logTag &&
+      waiter.source === currentEntry.source &&
+      waiter.destination === currentEntry.destination
+    );
+
+    if (replayAlreadyWaiting) {
+      logger.info('Replay already waiting for current matched request, letting buffered matcher handle it', {
+        entry: currentEntryLabel,
+        requestId: incoming.requestId,
+        logTag: incoming.logTag,
+        lenderOrgId: incoming.lenderOrgId || null
+      });
+      return null;
+    }
+
+    logger.info('Processing current matched incoming request immediately because no replay waiter is registered', {
+      entry: currentEntry.toString(),
+      requestId: incoming.requestId,
+      logTag: incoming.logTag,
+      lenderOrgId: incoming.lenderOrgId || null
+    });
+
+    const response = await super.handleIncomingRequest(incoming);
+    this.bufferManager?.skipWaiter?.(currentEntry);
     return response;
   }
 

@@ -26,6 +26,12 @@ function shouldIgnore(path, ignore) {
     const keyName = segment.replace(/\[.*$/, '');
     const normalizedKeyName = normalizeKey(keyName);
     if (normalizedKeyName.includes('time')) return true;
+    if (normalizedKeyName.includes('date')) return true;
+    if (normalizedKeyName.includes('timestamp')) return true;
+    if (normalizedKeyName.includes('expiry')) return true;
+    if (normalizedKeyName.includes('validtill')) return true;
+    if (normalizedKeyName === 'ip') return true;
+    if (normalizedKeyName === 'sessiontoken') return true;
     if (normalizedKeyName.endsWith('id')) return true;
     if (normalizedKeyName.endsWith('expiryat')) return true;
   }
@@ -60,6 +66,18 @@ function isBlankEquivalentString(value) {
   if (typeof value !== 'string') return false;
   const normalized = value.trim().toUpperCase();
   return normalized === '' || normalized === 'NA' || normalized === 'N/A';
+}
+
+function shouldSkipComparison(path, valA, valB, ignore) {
+  if (shouldIgnore(path, ignore)) {
+    return true;
+  }
+
+  if (isMaskedValue(valA) || isMaskedValue(valB)) {
+    return true;
+  }
+
+  return false;
 }
 
 function getNumericStringType(value) {
@@ -192,7 +210,7 @@ function compareArrayObjectsByKey(expectedItems, actualItems, path, ignore, logT
 function compareValues(valA, valB, path, ignore, logTag) {
   const diffs = [];
 
-  if (shouldIgnore(path, ignore)) {
+  if (shouldSkipComparison(path, valA, valB, ignore)) {
     return diffs;
   }
 
@@ -206,10 +224,6 @@ function compareValues(valA, valB, path, ignore, logTag) {
   }
   if ((valA !== null && valA !== undefined) && (valB === null || valB === undefined)) {
     diffs.push(makeDiff(path, valA, valB, 'expected present, actual missing'));
-    return diffs;
-  }
-
-  if (isMaskedValue(valA) || isMaskedValue(valB)) {
     return diffs;
   }
 
@@ -304,7 +318,7 @@ function compareValues(valA, valB, path, ignore, logTag) {
     for (const k of keysA) {
       const childPath = path ? `${path}.${k}` : k;
       if (!Object.prototype.hasOwnProperty.call(valB, k)) {
-        if (!shouldIgnore(childPath, ignore)) {
+        if (!shouldSkipComparison(childPath, valA[k], undefined, ignore)) {
           diffs.push(makeDiff(childPath, valA[k], '<missing>', 'key missing in actual'));
         }
       }
@@ -313,7 +327,7 @@ function compareValues(valA, valB, path, ignore, logTag) {
     for (const k of keysB) {
       const childPath = path ? `${path}.${k}` : k;
       if (!Object.prototype.hasOwnProperty.call(valA, k)) {
-        if (!shouldIgnore(childPath, ignore)) {
+        if (!shouldSkipComparison(childPath, undefined, valB[k], ignore)) {
           diffs.push(makeDiff(childPath, '<missing>', valB[k], 'extra key in actual'));
         }
       }

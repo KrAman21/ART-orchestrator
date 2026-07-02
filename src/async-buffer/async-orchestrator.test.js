@@ -213,6 +213,70 @@ test('processNextLogEntry self-triggers configured fallback API after normal wai
   assert.equal(validator.processedIndices.has(1), true);
 });
 
+test('processNextLogEntry reuses in-flight processing for the same self-trigger fallback entry', async () => {
+  const logs = [
+    createRequestLog(0, {
+      logTag: 'Lsp-LoanStatusRequest_REQUEST',
+      traceRoute: 'CORE_GATEWAY'
+    }),
+    {
+      messageNumber: 1,
+      message: {
+        log_tag: 'Lsp-LoanStatusRequest_RESPONSE',
+        trace_route: 'GATEWAY_CORE',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'TVS_CREDIT'
+      }
+    }
+  ];
+
+  const validator = new LogSequenceValidator(logs);
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.config = {
+    timeoutMs: 10000
+  };
+  orchestrator.validator = validator;
+  orchestrator.isRunning = true;
+  orchestrator.observedIncomingRequests = [];
+  orchestrator.observedProcessedResponses = [];
+  orchestrator.inFlightEntryProcessing = new Map();
+  orchestrator.triggerMissingExpectedRequestFallback = async entry => {
+    validator.markProcessed(entry);
+    const responseEntry = orchestrator.findCorrespondingResponse(entry, true);
+    if (responseEntry) {
+      validator.markProcessed(responseEntry);
+    }
+    return true;
+  };
+
+  let waitInvocationCount = 0;
+  let releaseWait = null;
+  orchestrator.bufferManager = {
+    hasMatchingBufferedRequest: () => false,
+    waitForMatchingRequest: () => {
+      waitInvocationCount += 1;
+      return new Promise(resolve => {
+        releaseWait = resolve;
+      });
+    }
+  };
+
+  const firstCall = AsyncReplayOrchestrator.prototype.processNextLogEntry.call(orchestrator);
+  const secondCall = AsyncReplayOrchestrator.prototype.processNextLogEntry.call(orchestrator);
+
+  await Promise.resolve();
+
+  assert.equal(waitInvocationCount, 1);
+
+  releaseWait(null);
+  const [firstResult, secondResult] = await Promise.all([firstCall, secondCall]);
+
+  assert.equal(firstResult, true);
+  assert.equal(secondResult, true);
+  assert.equal(orchestrator.inFlightEntryProcessing.size, 0);
+});
+
 test('processOneCycle force-recovers stalled LENDER to GATEWAY webhook request after idle cycles', async () => {
   const logs = [
     createRequestLog(0, {
@@ -419,6 +483,68 @@ test('prepareAsyncReplayForwarding adds SDK headers when log tag contains SDK', 
 
   assert.equal(prepared.headers['x-origin'], 'SDK');
   assert.equal(prepared.headers['x-version'], 'V1');
+});
+
+test('prepareAsyncReplayForwarding rewrites all maintained replay ids for APP_WRAPPER style replay payloads and headers', () => {
+  const stateManager = new StateManager();
+  stateManager.seedProdLoanApplicationIdsFromLogs([{ payload: { loanApplicationId: 'prod-la-1' } }]);
+  stateManager.seedProdAgreementIdsFromLogs([{ payload: { agreementId: 'prod-agreement-1' } }]);
+  stateManager.seedProdSessionTokensFromLogs([{ payload: { sessionToken: 'prod-session-1' } }]);
+  stateManager.seedProdTxnRefIdsFromLogs([{ payload: { txnRefId: 'prod-txn-1' } }]);
+  stateManager.seedProdCustomerIdsFromLogs([{ payload: { customerId: 'prod-customer-1' } }]);
+
+  stateManager.setCurrentReplayLoanApplicationId('live-la-1', { logTag: 'JuspaySDK-FetchStatus_REQUEST' });
+  stateManager.setCurrentReplayAgreementId('live-agreement-1', { logTag: 'GetAgreementDataRequest-LSP_RESPONSE' });
+  stateManager.setCurrentReplaySessionToken('live-session-1', { logTag: 'GetLenderFlows_RESPONSE' });
+  stateManager.setCurrentReplayTxnRefId('live-txn-1', { logTag: 'DMI_CREATE_TXN_REQUEST' });
+  stateManager.setCurrentReplayCustomerId('live-customer-1', { logTag: 'LSP-Eligibility_REQUEST' });
+
+  const entry = {
+    headers: {
+      'x-loan-application-id': 'prod-la-1',
+      'x-session-token': 'prod-session-1'
+    },
+    logTag: 'JuspaySDK-FetchStatus_REQUEST',
+    sourceDestination: 'APP_WRAPPER',
+    loanApplicationId: 'prod-la-1',
+    message: {
+      merchant_id: 'flipkart'
+    }
+  };
+
+  const prepared = prepareAsyncReplayForwarding(
+    entry,
+    {
+      loanApplicationId: 'prod-la-1',
+      agreementId: 'prod-agreement-1',
+      sessionToken: 'prod-session-1',
+      txnRefId: 'prod-txn-1',
+      customerId: 'prod-customer-1',
+      nested: {
+        loan_application_id: 'prod-la-1',
+        agreement_id: 'prod-agreement-1',
+        txn_ref_id: 'prod-txn-1',
+        merchant_customer_id: 'prod-customer-1'
+      }
+    },
+    'outer-replay-request-id',
+    {},
+    'flipkart',
+    [],
+    stateManager
+  );
+
+  assert.equal(prepared.headers['x-loan-application-id'], 'live-la-1');
+  assert.equal(prepared.headers['x-session-token'], 'live-session-1');
+  assert.equal(prepared.payload.loanApplicationId, 'live-la-1');
+  assert.equal(prepared.payload.agreementId, 'live-agreement-1');
+  assert.equal(prepared.payload.sessionToken, 'live-session-1');
+  assert.equal(prepared.payload.txnRefId, 'live-txn-1');
+  assert.equal(prepared.payload.customerId, 'live-customer-1');
+  assert.equal(prepared.payload.nested.loan_application_id, 'live-la-1');
+  assert.equal(prepared.payload.nested.agreement_id, 'live-agreement-1');
+  assert.equal(prepared.payload.nested.txn_ref_id, 'live-txn-1');
+  assert.equal(prepared.payload.nested.merchant_customer_id, 'live-customer-1');
 });
 
 test('processNextLogEntry waits for incoming CORE->GATEWAY fetchOfferSync request instead of proactively sending it', async () => {

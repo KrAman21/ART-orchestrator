@@ -280,6 +280,47 @@ test('state manager does not learn loanApplicationId mapping from lender line st
   assert.equal(stateManager.getMappedIdentifier('loanApplicationId', 'prod-la'), 'prod-la');
 });
 
+test('registerReplayIdentifierMappings does not let E-MANDATE applicationid overwrite replay loanApplicationId', () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.config = {};
+  orchestrator.orderId = 'order-1';
+
+  orchestrator.registerReplayIdentifierMappings(
+    {
+      logTag: 'SetRepaymentPlanStatusRequest_REQUEST',
+      loanApplicationId: 'LA-prod-1'
+    },
+    {
+      logTag: 'SetRepaymentPlanStatusRequest_REQUEST',
+      payload: {
+        loanApplicationId: 'LA-live-1'
+      }
+    }
+  );
+
+  orchestrator.registerReplayIdentifierMappings(
+    {
+      logTag: 'E-MANDATE SERVICE API_REQUEST',
+      loanApplicationId: 'LA-prod-1',
+      payload: {
+        applicationid: 'prod-line-1',
+        type: 'emandate'
+      }
+    },
+    {
+      logTag: 'E-MANDATE SERVICE API_REQUEST',
+      payload: {
+        applicationid: 'live-line-1',
+        type: 'emandate'
+      }
+    }
+  );
+
+  assert.equal(orchestrator.stateManager.getMappedIdentifier('loanApplicationId', 'LA-prod-1'), 'LA-live-1');
+  assert.equal(orchestrator.stateManager.getMappedIdentifier('lineDetailId', 'prod-line-1'), 'live-line-1');
+});
+
 test('recordObservedIncomingRequest trusts live customerId only from LSP or GATEWAY traffic', () => {
   const orchestrator = Object.create(ReplayOrchestrator.prototype);
   orchestrator.stateManager = new StateManager();
@@ -360,4 +401,58 @@ test('recordObservedIncomingRequest trusts live txnRefId only from GATEWAY_LENDE
     orchestrator.stateManager.rewriteOutgoingLoanApplicationIds({ txnRefId: 'prod-txn-ref' }).txnRefId,
     'trusted-live-txn-ref'
   );
+});
+
+test('recordObservedIncomingRequest learns live offerId only from LSP-SelectOffer_REQUEST and rewrites repayment plan id', () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.observedIncomingRequests = [];
+
+  orchestrator.stateManager.seedProdOfferIdsFromLogs([
+    {
+      logTag: 'LSP-SelectOffer_REQUEST',
+      payload: {
+        offerSerializer: {
+          id: 'prod-offer'
+        }
+      }
+    }
+  ]);
+
+  orchestrator.recordObservedIncomingRequest({
+    source: 'CORE',
+    destination: 'GATEWAY',
+    logTag: 'SetRepaymentPlanRequest-LSP_REQUEST',
+    payload: {
+      plan: {
+        id: 'untrusted-live-offer'
+      }
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getCurrentReplayOfferId(), null);
+
+  orchestrator.recordObservedIncomingRequest({
+    source: 'CORE',
+    destination: 'GATEWAY',
+    logTag: 'LSP-SelectOffer_REQUEST',
+    payload: {
+      offerSerializer: {
+        id: 'trusted-live-offer'
+      }
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getCurrentReplayOfferId(), 'trusted-live-offer');
+
+  const rewritten = orchestrator.stateManager.rewriteOutgoingLoanApplicationIds(
+    {
+      plan: {
+        id: 'prod-offer'
+      }
+    },
+    { logTag: 'SetRepaymentPlanRequest_REQUEST' }
+  );
+
+  assert.equal(rewritten.plan.id, 'trusted-live-offer');
 });

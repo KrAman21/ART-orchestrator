@@ -188,7 +188,9 @@ export const POLLING_API_LOG_TAGS = new Set([
   'FlipKart-GetRedirectionURL_REQUEST',
   'GetAgreementDataRequest_REQUEST',
   'FlipKart-FetchStatus_REQUEST',
-  'LSP-GetAgreementDataStatus_REQUEST'
+  'LSP-GetAgreementDataStatus_REQUEST',
+  'LOAN_SETTLEMENT_PT_REQUEST',
+  'SetRepaymentPlanRequest_REQUEST'
 ]);
 
 export const SKIPPABLE_ASYNC_API_LOG_TAGS = new Set([
