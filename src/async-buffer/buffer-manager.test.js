@@ -220,6 +220,69 @@ test('preserves gateway lender request as rewind fallback and uses it after shor
   }
 });
 
+test('distinguishes fetch loan application data buffered requests by requiredData and claims the matching variant', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    const selectedOfferRequest = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'fetch-loan-selected-offer',
+      payload: {
+        loanApplicationId: 'loan-1',
+        requiredData: ['SELECTED_OFFER_SERIALIZER']
+      }
+    }));
+
+    const loanApplicationRequest = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'fetch-loan-application',
+      payload: {
+        loanApplicationId: 'loan-1',
+        requiredData: ['LOAN_APPLICATION_DATA']
+      }
+    }));
+
+    const claimedLoanApplication = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'prod-fetch-loan-application',
+      loanApplicationId: 'loan-1',
+      payload: {
+        loanApplicationId: 'loan-1',
+        requiredData: ['LOAN_APPLICATION_DATA']
+      }
+    }), 50);
+
+    assert.equal(claimedLoanApplication?.key, loanApplicationRequest.key);
+    assert.deepEqual(claimedLoanApplication?.request.payload.requiredData, ['LOAN_APPLICATION_DATA']);
+
+    const claimedSelectedOffer = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'prod-fetch-selected-offer',
+      loanApplicationId: 'loan-1',
+      payload: {
+        loanApplicationId: 'loan-1',
+        requiredData: ['SELECTED_OFFER_SERIALIZER']
+      }
+    }), 50);
+
+    assert.equal(claimedSelectedOffer?.key, selectedOfferRequest.key);
+    assert.deepEqual(claimedSelectedOffer?.request.payload.requiredData, ['SELECTED_OFFER_SERIALIZER']);
+  } finally {
+    manager.stop();
+  }
+});
+
 test('completed gateway lender request is retained as rewind-only fallback', async () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,

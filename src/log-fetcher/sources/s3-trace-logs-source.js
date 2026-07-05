@@ -27,6 +27,22 @@ function getLogTag(log) {
   return log?.log_tag || log?.logTag || '';
 }
 
+function serializeFetchError(error) {
+  const cause = error?.cause;
+
+  return {
+    error: error?.message || 'Unknown fetch error',
+    errorName: error?.name || null,
+    stack: error?.stack || null,
+    causeMessage: cause?.message || null,
+    causeName: cause?.name || null,
+    causeCode: cause?.code || null,
+    causeStack: cause?.stack || null,
+    attemptedAddress: cause?.address || null,
+    attemptedPort: cause?.port || null
+  };
+}
+
 export function filterS3TraceLogs(logs) {
   return logs.filter(log => {
     const logTag = getLogTag(log);
@@ -152,17 +168,19 @@ export async function fetchS3TraceLogsByLookup({
       source: { id, idType, label }
     };
   } catch (error) {
+    const fetchErrorDetails = serializeFetchError(error);
+
     logger.error('Exception while fetching S3 Trace Logs', {
       label,
       id,
       idType,
-      error: error.message,
-      stack: error.stack
+      ...fetchErrorDetails
     });
 
     return {
       success: false,
-      error: error.message,
+      error: fetchErrorDetails.error,
+      errorDetails: fetchErrorDetails,
       logs: [],
       count: 0,
       source: { id, idType, label }

@@ -6,6 +6,22 @@ function normalizeResponseTag(logTag) {
   return (logTag || '').replace(/_RESPONSE$/i, '');
 }
 
+function buildAllowedResponseDirections(requestEntry) {
+  if (!requestEntry) {
+    return new Set();
+  }
+
+  const directions = new Set();
+  const forwardDirection = `${requestEntry.source}_${requestEntry.destination}`;
+  directions.add(forwardDirection);
+
+  if (requestEntry.source && requestEntry.destination) {
+    directions.add(`${requestEntry.destination}_${requestEntry.source}`);
+  }
+
+  return directions;
+}
+
 export function matchesRequestContext(requestEntry, responseEntry) {
   if (!requestEntry || !responseEntry) {
     return false;
@@ -38,7 +54,7 @@ export function matchesRequestContext(requestEntry, responseEntry) {
 }
 
 function findCandidateResponses(entries, requestEntry, searchAll = false, processedIndices = new Set()) {
-  const direction = `${requestEntry.source}_${requestEntry.destination}`;
+  const allowedDirections = buildAllowedResponseDirections(requestEntry);
 
   return entries.filter(entry => {
     if (!entry?.isResponse) {
@@ -49,7 +65,7 @@ function findCandidateResponses(entries, requestEntry, searchAll = false, proces
       return false;
     }
 
-    if (entry.sourceDestination !== direction) {
+    if (!allowedDirections.has(entry.sourceDestination)) {
       return false;
     }
 
@@ -102,10 +118,12 @@ function findMatchingRequestOrdinal(entries, requestEntry) {
 }
 
 function findPriorMatchingResponseCount(entries, requestEntry) {
+  const allowedDirections = buildAllowedResponseDirections(requestEntry);
+
   return entries.filter(entry =>
     entry?.isResponse &&
     entry.index < requestEntry.index &&
-    entry.sourceDestination === requestEntry.sourceDestination &&
+    allowedDirections.has(entry.sourceDestination) &&
     matchesRequestContext(requestEntry, entry)
   ).length;
 }

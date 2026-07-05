@@ -15,6 +15,14 @@ test('loan status async response request is treated as a self-trigger fallback A
   assert.equal(isSelfTriggerFallbackApiLogTag('LOAN_STATUS_ASYNC_RESPONSE_REQUEST'), true);
 });
 
+test('generate token request is treated as a self-trigger fallback API', () => {
+  assert.equal(isSelfTriggerFallbackApiLogTag('GENERATE_TOKEN_API_REQUEST'), true);
+});
+
+test('fetch loan application data request is treated as a self-trigger fallback API', () => {
+  assert.equal(isSelfTriggerFallbackApiLogTag('FECTH_LOAN_APPLICATION_DATA_API_REQUEST'), true);
+});
+
 test('loan settlement pt request is treated as a self-trigger fallback API', () => {
   assert.equal(isSelfTriggerFallbackApiLogTag('LOAN_SETTLEMENT_PT_REQUEST'), false);
 });

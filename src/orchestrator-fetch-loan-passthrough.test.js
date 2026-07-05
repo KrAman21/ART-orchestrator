@@ -34,3 +34,73 @@ test('maybePassThroughFetchLoanApplicationData defers early fetch-loan-applicati
 
   assert.equal(result, null);
 });
+
+test('maybePassThroughFetchLoanApplicationData returns cached response when replay entry was already self-triggered and processed', async () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  const processedRequestEntry = {
+    index: 63,
+    isRequest: true,
+    source: 'GATEWAY',
+    destination: 'LSP',
+    logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+    payload: {
+      requiredData: ['SELECTED_OFFER_SERIALIZER']
+    },
+    toString() {
+      return '[63] FECTH_LOAN_APPLICATION_DATA_API_REQUEST GATEWAY→LSP';
+    }
+  };
+  const responseEntry = {
+    logTag: 'FECTH_LOAN_APPLICATION_DATA_API_RESPONSE',
+    payload: {
+      status: 'SUCCESS',
+      selectedOfferSerializer: {
+        id: 'offer-1'
+      }
+    },
+    toString() {
+      return '[64] FECTH_LOAN_APPLICATION_DATA_API_RESPONSE LSP→GATEWAY';
+    }
+  };
+
+  orchestrator.validator = {
+    entries: [processedRequestEntry],
+    processedIndices: new Set([63]),
+    getCurrentEntry() {
+      return {
+        source: 'GATEWAY',
+        destination: 'LENDER',
+        logTag: 'PRE_DISBURSAL_CHECK_REQUEST',
+        toString() {
+          return '[65] PRE_DISBURSAL_CHECK_REQUEST GATEWAY→LENDER';
+        }
+      };
+    }
+  };
+  orchestrator.findCorrespondingResponse = () => responseEntry;
+
+  const result = await orchestrator.maybePassThroughFetchLoanApplicationData({
+    source: 'GATEWAY',
+    destination: 'LSP',
+    api: '/api/fetch/loanApplicationData',
+    logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+    requestId: 'late-live-request',
+    payload: {
+      loanApplicationId: 'LA-1',
+      requestId: 'late-live-request',
+      requiredData: ['SELECTED_OFFER_SERIALIZER'],
+      lineId: null
+    }
+  });
+
+  assert.deepEqual(result, {
+    success: true,
+    payload: {
+      status: 'SUCCESS',
+      selectedOfferSerializer: {
+        id: 'offer-1'
+      }
+    },
+    cached: true
+  });
+});

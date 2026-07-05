@@ -130,6 +130,41 @@ function logToDirectionFile(direction, logEntry) {
   } catch (_) {}
 }
 
+function prioritizeDirectionLogFields(logEntry = {}) {
+  const preferredOrder = [
+    'timestamp',
+    'entryIndex',
+    'logIndex',
+    'replayAttempt',
+    'rewind',
+    'replayOrderId',
+    'direction',
+    'event',
+    'source',
+    'destination',
+    'api',
+    'requestId',
+    'logTag',
+    'sourceDestination'
+  ];
+
+  const prioritized = {};
+
+  for (const key of preferredOrder) {
+    if (Object.prototype.hasOwnProperty.call(logEntry, key)) {
+      prioritized[key] = logEntry[key];
+    }
+  }
+
+  for (const [key, value] of Object.entries(logEntry)) {
+    if (!Object.prototype.hasOwnProperty.call(prioritized, key)) {
+      prioritized[key] = value;
+    }
+  }
+
+  return prioritized;
+}
+
 function log(level, message, meta = {}) {
   if (LOG_LEVELS[level] < CURRENT_LEVEL) return;
 
@@ -254,15 +289,21 @@ export const logger = {
   },
 
   logOutgoing: (source, destination, api, payload, meta = {}) => {
-    const entry = {
+    const normalizedMeta = {
+      ...meta,
+      entryIndex:
+        meta.entryIndex ??
+        (typeof meta.logIndex === 'number' ? meta.logIndex : null)
+    };
+    const entry = prioritizeDirectionLogFields({
       timestamp: formatTimestamp(),
       direction: 'outgoing',
       source,
       destination,
       api,
       payload,
-      ...meta
-    };
+      ...normalizedMeta
+    });
     logToDirectionFile('outgoing', entry);
   },
 
@@ -281,7 +322,13 @@ export const logger = {
   },
 
   logFinalOutgoing: (source, destination, api, payload, meta = {}) => {
-    const entry = {
+    const normalizedMeta = {
+      ...meta,
+      entryIndex:
+        meta.entryIndex ??
+        (typeof meta.logIndex === 'number' ? meta.logIndex : null)
+    };
+    const entry = prioritizeDirectionLogFields({
       timestamp: formatTimestamp(),
       direction: 'outgoing',
       event: 'forwarded',
@@ -289,8 +336,8 @@ export const logger = {
       destination,
       api,
       payload,
-      ...meta
-    };
+      ...normalizedMeta
+    });
     logToDirectionFile('outgoing', entry);
   }
 };

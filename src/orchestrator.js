@@ -1223,102 +1223,44 @@ export class ReplayOrchestrator {
       return null;
     }
 
-    const currentEntry = this.validator?.getCurrentEntry?.() || null;
-    const isCurrentReplayFetchLoanApplicationData =
-      currentEntry?.source === 'GATEWAY' &&
-      currentEntry?.destination === 'LSP' &&
+    const processedEntry = this.validator?.entries?.find?.(entry =>
+      this.validator.processedIndices.has(entry.index) &&
+      entry.isRequest &&
+      entry.source === incoming.source &&
+      entry.destination === incoming.destination &&
+      entry.logTag === incoming.logTag &&
       (
-        currentEntry?.logTag === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' ||
-        currentEntry?.logTag === 'FETCH_LOAN_APPLICATION_DATA_API_REQUEST'
-      );
-
-    if (!isCurrentReplayFetchLoanApplicationData) {
-      logger.info('Deferring fetchLoanApplicationData request until replay reaches matching sequence entry', {
-        requestId: incoming.requestId,
-        incomingLogTag: incoming.logTag,
-        currentEntry: currentEntry?.toString?.() || null
-      });
-      return null;
-    }
-
-    const loanApplicationId =
-      incoming.payload?.loanApplicationId ||
-      incoming.payload?.loan_application_id ||
-      incoming.payload?.loanAppId ||
-      incoming.loanApplicationId;
-
-    logger.info('Passing through fetchLoanApplicationData request to local LSP', {
-      requestId: incoming.requestId,
-      loanApplicationId,
-      currentEntry: currentEntry?.toString?.() || null
-    });
-
-    const serviceResponse = await makeRequest(
-      this.getServiceBaseUrl('LSP'),
-      '/api/fetch/loanApplicationData',
-      'POST',
-      incoming.payload,
-      incoming.requestId,
-      'GATEWAY_LSP',
-      incoming.logTag,
-      incoming.headers?.['x-merchant-id'] || null,
-      incoming.headers || {},
-      null,
-      this.getServiceUnixSocket('LSP'),
-      this.config.timeoutMs || 10000
+        JSON.stringify(entry.payload?.requiredData || entry.payload?.required_data || []) ===
+        JSON.stringify(incoming.payload?.requiredData || incoming.payload?.required_data || [])
+      )
     );
 
-    if (serviceResponse?.error || serviceResponse?.status < 200 || serviceResponse?.status >= 300) {
-      logger.error('fetchLoanApplicationData pass-through failed', {
-        requestId: incoming.requestId,
-        status: serviceResponse?.status,
-        error: serviceResponse?.message,
-        responseData: serviceResponse?.data
-      });
-      return {
-        success: false,
-        error: serviceResponse?.message || `LSP fetchLoanApplicationData failed with status ${serviceResponse?.status}`,
-        payload: serviceResponse?.data
-      };
+    if (processedEntry) {
+      const responseEntry = this.findCorrespondingResponse(processedEntry, true);
+      if (responseEntry) {
+        logger.info('Returning cached fetchLoanApplicationData response for already-processed replay entry', {
+          requestId: incoming.requestId,
+          processedEntry: processedEntry.toString(),
+          responseEntry: responseEntry.toString(),
+          requiredData: incoming.payload?.requiredData || incoming.payload?.required_data || null
+        });
+
+        return {
+          success: true,
+          payload: transformRequest(responseEntry.payload, responseEntry.logTag),
+          cached: true
+        };
+      }
     }
 
-    this.results.passed++;
-    this.results.processedLogs.push({
-      step: 'passthrough_fetch_loan_application_data_response',
-      entry: `[passthrough] ${incoming.logTag} ${incoming.source}→${incoming.destination}`,
-      timestamp: new Date().toISOString()
+    logger.info('Allowing fetchLoanApplicationData request to be served through normal replay handling', {
+      requestId: incoming.requestId,
+      incomingLogTag: incoming.logTag,
+      requiredData: incoming.payload?.requiredData || incoming.payload?.required_data || null,
+      currentEntry: this.validator?.getCurrentEntry?.()?.toString?.() || null
     });
 
-    // Advance the validator past this GATEWAY→LSP entry and its paired response
-    // so the sequential-runner can continue to serve the next GATEWAY→LENDER
-    // call (e.g. GET_REDIRECTION_URL_SO) that is buffered and waiting.
-    const passthroughEntry = currentEntry;
-    if (
-      passthroughEntry &&
-      (passthroughEntry.logTag === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' ||
-        passthroughEntry.logTag === 'FETCH_LOAN_APPLICATION_DATA_REQUEST')
-    ) {
-      const passthroughResponseEntry = this.findCorrespondingResponse(passthroughEntry);
-      if (typeof this.bufferManager?.skipWaiter === 'function') {
-        this.bufferManager.skipWaiter(passthroughEntry);
-      }
-      this.validator.markProcessed(passthroughEntry);
-      if (passthroughResponseEntry) {
-        this.validator.markProcessed(passthroughResponseEntry);
-      }
-      logger.info('Advanced validator past FECTH_LOAN_APPLICATION_DATA_API passthrough entries', {
-        requestEntryIndex: passthroughEntry.index,
-        responseEntryIndex: passthroughResponseEntry?.index ?? null,
-        loanApplicationId
-      });
-    }
-
-    return {
-      success: true,
-      passthrough: true,
-      payload: serviceResponse.data,
-      headers: serviceResponse.headers
-    };
+    return null;
   }
 
   async handleOutOfOrderRequest(incoming, validation) {

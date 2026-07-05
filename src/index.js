@@ -26,6 +26,7 @@ const CONFIG = {
   MERCHANT_ID: process.env.MERCHANT_ID || process.env.QAPI_MERCHANT_ID || 'flipkart',
   FILTERED_LOGS_PATH: process.env.FILTERED_LOGS_PATH || 'data/filtered-logs.json',
   FINAL_FILTERED_LOGS_PATH: process.env.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json',
+  USE_EXISTING_FINAL_FILTERED_LOGS: process.env.USE_EXISTING_FINAL_FILTERED_LOGS === 'true',
   ORDER_LIST: process.env.ORDER_LIST 
     ? process.env.ORDER_LIST.split(',').map(s => s.trim()).filter(Boolean)
     : [],

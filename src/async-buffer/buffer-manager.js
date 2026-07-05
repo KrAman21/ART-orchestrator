@@ -895,6 +895,35 @@ export class BufferManager {
     return this._buildRequestMatchDetails(request, expectedEntry).matches;
   }
 
+  _isFetchLoanApplicationDataRequest(entry = {}) {
+    return (
+      entry?.api === '/api/fetch/loanApplicationData' ||
+      entry?.logTag === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' ||
+      entry?.logTag === 'FETCH_LOAN_APPLICATION_DATA_API_REQUEST'
+    );
+  }
+
+  _normalizeRequiredData(requiredData) {
+    if (!requiredData) {
+      return [];
+    }
+
+    const values = Array.isArray(requiredData) ? requiredData : [requiredData];
+    return values
+      .filter(value => value !== null && value !== undefined && value !== '')
+      .map(value => String(value))
+      .sort();
+  }
+
+  _extractRequiredData(entry = {}) {
+    return this._normalizeRequiredData(
+      entry?.payload?.requiredData ||
+      entry?.payload?.required_data ||
+      entry?.requiredData ||
+      entry?.required_data
+    );
+  }
+
   _getNestedValue(obj, path) {
     if (!obj || typeof obj !== 'object') {
       return undefined;
@@ -976,6 +1005,7 @@ export class BufferManager {
     const expectedIds = this.extractExpectedIdentifiers(expectedEntry);
     const exactSignals = [];
     let score = 0;
+    let mustMatchRequiredData = false;
 
     const exactComparisons = [
       ['requestId', 120],
@@ -993,6 +1023,31 @@ export class BufferManager {
       }
     }
 
+    if (this._isFetchLoanApplicationDataRequest(incoming) && this._isFetchLoanApplicationDataRequest(expectedEntry)) {
+      const incomingRequiredData = this._extractRequiredData(incoming);
+      const expectedRequiredData = this._extractRequiredData(expectedEntry);
+
+      if (incomingRequiredData.length > 0 || expectedRequiredData.length > 0) {
+        mustMatchRequiredData = true;
+
+        if (
+          incomingRequiredData.length === expectedRequiredData.length &&
+          incomingRequiredData.every((value, index) => value === expectedRequiredData[index])
+        ) {
+          exactSignals.push('payload:requiredData');
+          score += 200;
+        } else {
+          return {
+            matches: false,
+            score: Number.NEGATIVE_INFINITY,
+            differenceCount: Number.POSITIVE_INFINITY,
+            exactSignals,
+            exactMatchCount: exactSignals.length
+          };
+        }
+      }
+    }
+
     let differenceCount = 0;
     if (expectedEntry.payload && incoming.payload) {
       const comparison = compareLog(expectedEntry.payload, incoming.payload, expectedEntry.logTag);
@@ -1002,7 +1057,7 @@ export class BufferManager {
     }
 
     return {
-      matches: true,
+      matches: mustMatchRequiredData ? exactSignals.includes('payload:requiredData') : true,
       score,
       differenceCount,
       exactSignals,

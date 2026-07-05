@@ -7,7 +7,7 @@ import { BatchLogFetcher } from './log-fetcher/index.js';
 import { ArtReportGenerator } from './services/art-report-generator.js';
 import { logger } from './utils/logger.js';
 import { basename, dirname, extname, join } from 'path';
-import { unlink } from 'fs/promises';
+import { access, unlink } from 'fs/promises';
 import { REPLAY_SPECIAL_CASES, getOptionalRepeatPolicy, isPollingApiLogTag, isSelfTriggerFallbackApiLogTag } from './replay-special-cases.js';
 import { findCorrespondingResponseEntry } from './services/response-matcher.js';
 
@@ -251,6 +251,44 @@ async function fetchAndFilterOrderLogs(merchantId, orderId, config, logsFilePath
   return finalFilteredLogs;
 }
 
+async function maybeLoadExistingFinalFilteredLogs(orderId, finalFilteredLogsPath, config) {
+  if (config.USE_EXISTING_FINAL_FILTERED_LOGS !== true) {
+    return null;
+  }
+
+  try {
+    await access(finalFilteredLogsPath);
+  } catch (_error) {
+    logger.info('Testing shortcut enabled but final filtered logs file is not present yet', {
+      orderId,
+      finalFilteredLogsPath
+    });
+    return null;
+  }
+
+  const finalFilteredLogs = await fetchLogsFromJSONFile(finalFilteredLogsPath);
+  if (!Array.isArray(finalFilteredLogs) || finalFilteredLogs.length === 0) {
+    logger.warn('Existing final filtered logs file was found but empty; falling back to normal fetch flow', {
+      orderId,
+      finalFilteredLogsPath
+    });
+    return null;
+  }
+
+  logger.info('Using existing final filtered logs file directly for testing run', {
+    orderId,
+    finalFilteredLogsPath,
+    logCount: finalFilteredLogs.length
+  });
+
+  return {
+    finalFilteredLogs,
+    logsFilePath: null,
+    filteredLogsPath: null,
+    finalFilteredLogsPath
+  };
+}
+
 /**
  * Prefetch pipeline: fetches and filters S3 logs for ALL orders concurrently.
  * Returns a Map<orderId, { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath }>
@@ -269,20 +307,33 @@ function startPrefetchPromises(orderList, config) {
     const filteredLogsPath      = getPerOrderFilePath(config.FILTERED_LOGS_PATH         || 'data/filtered-logs.json',      orderId, orderIndex, config);
     const finalFilteredLogsPath = getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH   || 'data/final-filtered-logs.json', orderId, orderIndex, config);
 
-    const p = fetchAndFilterOrderLogs(
-      merchantId, orderId, config,
-      logsFilePath, filteredLogsPath, finalFilteredLogsPath
-    ).then(
-      finalFilteredLogs => {
-        console.log(`[PREFETCH] ✓ ${orderId}: ${finalFilteredLogs.length} logs ready`);
-        return { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
-      },
-      error => {
-        console.log(`[PREFETCH] ✗ ${orderId}: ${error.message}`);
-        logger.warn(`[PREFETCH] Failed for order ${orderId}`, { orderId, error: error.message });
-        return { error: error.message, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
+    const p = (async () => {
+      const existingFinalFilteredLogs = await maybeLoadExistingFinalFilteredLogs(
+        orderId,
+        finalFilteredLogsPath,
+        config
+      );
+
+      if (existingFinalFilteredLogs) {
+        console.log(`[PREFETCH] ✓ ${orderId}: ${existingFinalFilteredLogs.finalFilteredLogs.length} logs loaded directly from existing final filtered file`);
+        return existingFinalFilteredLogs;
       }
-    );
+
+      return fetchAndFilterOrderLogs(
+        merchantId, orderId, config,
+        logsFilePath, filteredLogsPath, finalFilteredLogsPath
+      ).then(
+        finalFilteredLogs => {
+          console.log(`[PREFETCH] ✓ ${orderId}: ${finalFilteredLogs.length} logs ready`);
+          return { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
+        },
+        error => {
+          console.log(`[PREFETCH] ✗ ${orderId}: ${error.message}`);
+          logger.warn(`[PREFETCH] Failed for order ${orderId}`, { orderId, error: error.message });
+          return { error: error.message, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
+        }
+      );
+    })();
 
     promises.set(orderId, p);
   }
@@ -326,6 +377,23 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       });
       console.log(`[PREFETCH] Using ${finalFilteredLogs.length} pre-fetched logs for order ${orderId}`);
     } else {
+      const existingFinalFilteredLogs = await maybeLoadExistingFinalFilteredLogs(
+        orderId,
+        finalFilteredLogsPath,
+        config
+      );
+
+      if (existingFinalFilteredLogs?.finalFilteredLogs) {
+        finalFilteredLogs = existingFinalFilteredLogs.finalFilteredLogs;
+        logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Using existing final filtered logs file`, {
+          orderId,
+          orderIndex,
+          totalOrders,
+          logCount: finalFilteredLogs.length,
+          finalFilteredLogsPath,
+          phase: 'FINAL_FILTERED_FILE_HIT'
+        });
+      } else {
       if (prefetchedData?.error) {
         logger.warn(`[PREFETCH] Pre-fetch failed for order ${orderId}, falling back to inline fetch`, {
           orderId,
@@ -457,6 +525,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
           logsProcessed: 0
         });
         return { success: false, logCount: 0, error: 'No logs after second filtering' };
+      }
       }
     }
 

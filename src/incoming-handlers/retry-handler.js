@@ -159,6 +159,33 @@ export class RetryHandler {
 
     const futureMatch = this.findFutureUnprocessedMatch(incoming);
     const processedMatch = this.findProcessedMatch(incoming);
+    const pendingRetryMatch = this.findPendingRetryMatch(incoming, currentEntry);
+
+    if (pendingRetryMatch) {
+      if (futureMatch) {
+        this.logger.info('Treating incoming request as retry despite future replay match because matching external call is already pending', {
+          futureEntryIndex: futureMatch.index,
+          pendingEntryIndex: pendingRetryMatch.requestEntry.index,
+          currentEntryIndex: currentEntry?.index,
+          incomingLogTag: incoming.logTag,
+          contextKey: pendingRetryMatch.contextKey
+        });
+      } else {
+        this.logger.info('Detected retried request for pending external call', {
+          source: incoming.source,
+          destination: incoming.destination,
+          api: incoming.api,
+          contextKey: pendingRetryMatch.contextKey
+        });
+      }
+
+      return {
+        success: true,
+        payload: transformReplayPayloadForEntry(this.stateManager, pendingRetryMatch.responseEntry.payload, pendingRetryMatch.responseEntry),
+        retried: true
+      };
+    }
+
     if (futureMatch) {
       this.logger.info('Incoming request has future unprocessed replay match, not treating as retry', {
         futureEntryIndex: futureMatch.index,
@@ -169,95 +196,6 @@ export class RetryHandler {
         incomingLoanApplicationId: incoming.loanApplicationId
       });
       return null;
-    }
-
-    // Check if this request matches an already-processed log entry
-    // Look for entries that were skipped (external destinations like LENDER)
-    for (const [contextKey, pendingInfo] of this.pendingExternalRequests.entries()) {
-      const requestEntry = pendingInfo.requestEntry;
-
-      // Check if this incoming request matches the pending request entry
-      if (
-        requestEntry.source === incoming.source &&
-        requestEntry.destination === incoming.destination &&
-        requestEntry.logTag === incoming.logTag
-      ) {
-        if (
-          currentEntry &&
-          currentEntry.isRequest &&
-          belongsToSameMultiTagFamily(requestEntry, currentEntry) &&
-          belongsToSameMultiTagFamily(requestEntry, incoming) &&
-          currentEntry.logTag !== requestEntry.logTag
-        ) {
-          this.logger.info('Skipping retry match for older pending external call because current replay entry expects a different sibling in same endpoint family', {
-            currentEntryIndex: currentEntry.index,
-            currentEntryLogTag: currentEntry.logTag,
-            pendingEntryIndex: requestEntry.index,
-            pendingEntryLogTag: requestEntry.logTag,
-            incomingLogTag: incoming.logTag,
-            api: incoming.api,
-            contextKey
-          });
-          continue;
-        }
-
-        // Check context match (loan_application_id, lender_org_id)
-        let contextMatches = true;
-        if (incoming.loanApplicationId && requestEntry.loanApplicationId) {
-          contextMatches = incoming.loanApplicationId === requestEntry.loanApplicationId;
-        }
-        if (contextMatches && incoming.lenderOrgId && requestEntry.lenderOrgId) {
-          contextMatches = incoming.lenderOrgId === requestEntry.lenderOrgId;
-        }
-
-        if (contextMatches && !matchesKfsOpportunityId(incoming, requestEntry)) {
-          this.logger.info('Skipping retry match because KFS opportunity id differs', {
-            api: incoming.api,
-            contextKey,
-            incomingOpportunityId: extractOpportunityId(incoming),
-            pendingOpportunityId: extractOpportunityId(requestEntry),
-            pendingEntryIndex: requestEntry.index,
-            pendingEntryLogTag: requestEntry.logTag
-          });
-          continue;
-        }
-
-        // For async parallel calls, lenderOrgId MUST match - don't treat as retry if different lenders
-        if (contextMatches && isAsyncParallelApi(requestEntry.sourceDestination, requestEntry.logTag)) {
-          if (incoming.lenderOrgId !== requestEntry.lenderOrgId) {
-            this.logger.debug('Not a retry - different lender for async parallel call', {
-              incomingLender: incoming.lenderOrgId,
-              expectedLender: requestEntry.lenderOrgId
-            });
-            continue; // Skip to next pending entry
-          }
-        }
-
-        if (contextMatches && currentEntry && currentEntry.isRequest && currentEntry.index !== requestEntry.index && currentEntry.source === incoming.source && currentEntry.destination === incoming.destination && currentEntry.logTag === incoming.logTag) {
-          this.logger.info('Skipping retry match for older pending external call because incoming matches current replay entry', {
-            currentEntryIndex: currentEntry.index,
-            pendingEntryIndex: requestEntry.index,
-            contextKey
-          });
-          continue;
-        }
-
-        if (contextMatches) {
-          this.logger.info('Detected retried request for pending external call', {
-            source: incoming.source,
-            destination: incoming.destination,
-            api: incoming.api,
-            contextKey
-          });
-
-          // Return the expected response payload
-          return {
-            success: true,
-            payload: transformReplayPayloadForEntry(this.stateManager, pendingInfo.responseEntry.payload, pendingInfo.responseEntry),
-            retried: true
-          };
-        }
-      }
     }
 
     // Also check processed indices for recently completed external calls
@@ -381,6 +319,96 @@ export class RetryHandler {
       if (!entry || !entry.isRequest || entry.shouldSkip()) continue;
       if (this.validator.matchesExpected(entry, incoming)) {
         return entry;
+      }
+    }
+
+    return null;
+  }
+
+  findPendingRetryMatch(incoming, currentEntry = this.validator.getCurrentEntry()) {
+    for (const [contextKey, pendingInfo] of this.pendingExternalRequests.entries()) {
+      const requestEntry = pendingInfo.requestEntry;
+
+      if (
+        requestEntry.source !== incoming.source ||
+        requestEntry.destination !== incoming.destination ||
+        requestEntry.logTag !== incoming.logTag
+      ) {
+        continue;
+      }
+
+      if (
+        currentEntry &&
+        currentEntry.isRequest &&
+        belongsToSameMultiTagFamily(requestEntry, currentEntry) &&
+        belongsToSameMultiTagFamily(requestEntry, incoming) &&
+        currentEntry.logTag !== requestEntry.logTag
+      ) {
+        this.logger.info('Skipping retry match for older pending external call because current replay entry expects a different sibling in same endpoint family', {
+          currentEntryIndex: currentEntry.index,
+          currentEntryLogTag: currentEntry.logTag,
+          pendingEntryIndex: requestEntry.index,
+          pendingEntryLogTag: requestEntry.logTag,
+          incomingLogTag: incoming.logTag,
+          api: incoming.api,
+          contextKey
+        });
+        continue;
+      }
+
+      let contextMatches = true;
+      if (incoming.loanApplicationId && requestEntry.loanApplicationId) {
+        contextMatches = incoming.loanApplicationId === requestEntry.loanApplicationId;
+      }
+      if (contextMatches && incoming.lenderOrgId && requestEntry.lenderOrgId) {
+        contextMatches = incoming.lenderOrgId === requestEntry.lenderOrgId;
+      }
+
+      if (contextMatches && !matchesKfsOpportunityId(incoming, requestEntry)) {
+        this.logger.info('Skipping retry match because KFS opportunity id differs', {
+          api: incoming.api,
+          contextKey,
+          incomingOpportunityId: extractOpportunityId(incoming),
+          pendingOpportunityId: extractOpportunityId(requestEntry),
+          pendingEntryIndex: requestEntry.index,
+          pendingEntryLogTag: requestEntry.logTag
+        });
+        continue;
+      }
+
+      if (contextMatches && isAsyncParallelApi(requestEntry.sourceDestination, requestEntry.logTag)) {
+        if (incoming.lenderOrgId !== requestEntry.lenderOrgId) {
+          this.logger.debug('Not a retry - different lender for async parallel call', {
+            incomingLender: incoming.lenderOrgId,
+            expectedLender: requestEntry.lenderOrgId
+          });
+          continue;
+        }
+      }
+
+      if (
+        contextMatches &&
+        currentEntry &&
+        currentEntry.isRequest &&
+        currentEntry.index !== requestEntry.index &&
+        currentEntry.source === incoming.source &&
+        currentEntry.destination === incoming.destination &&
+        currentEntry.logTag === incoming.logTag
+      ) {
+        this.logger.info('Skipping retry match for older pending external call because incoming matches current replay entry', {
+          currentEntryIndex: currentEntry.index,
+          pendingEntryIndex: requestEntry.index,
+          contextKey
+        });
+        continue;
+      }
+
+      if (contextMatches) {
+        return {
+          contextKey,
+          requestEntry,
+          responseEntry: pendingInfo.responseEntry
+        };
       }
     }
 
