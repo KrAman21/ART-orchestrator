@@ -206,6 +206,26 @@ export const SELF_TRIGGER_FALLBACK_API_LOG_TAGS = new Set([
   'FETCH_LOAN_APPLICATION_DATA_API_REQUEST'
 ]);
 
+// GATEWAY->LENDER requests in this list are answered immediately from replay logs
+// as soon as the live request reaches ART, instead of waiting for the replay loop
+// to come back and serve them later. Add more log tags here when a nested/outer
+// flow is timing out because this lender request needs an immediate replayed
+// response.
+export const IMMEDIATE_DIRECT_REPLAY_LOG_TAGS = new Set([
+  'LOCK_TENURE_REQUEST',
+  'PROFILE_INGESTION_REQUEST',
+  'CALCULATE_EMI_REQUEST',
+  'OTP GENERATION API_REQUEST',
+  'OTP AUTHENTICATION API_REQUEST',
+  'KFS SIGNING API :: PARENT_REQUEST',
+  'KFS SIGNING API :: CHILD_REQUEST',
+  'GET_CHECKOUT_STATUS_GS_REQUEST',
+  'GET_CHECKOUT_STATUS_LS_REQUEST',
+  'GET_CHECKOUT_STATUS_LST_REQUEST',
+  'GET_CHECKOUT_STATUS_FO_REQUEST',
+  'GET_CHECKOUT_STATUS_FO_ENCRYPTED_REQUEST'
+]);
+
 export const SELF_TRIGGER_FALLBACK_WAIT_TIMEOUT_OVERRIDES_MS = {
   'Lsp-LoanStatusRequest_REQUEST': 3_000,
   'GENERATE_TOKEN_API_REQUEST': 2_000,
@@ -241,6 +261,10 @@ export function isSkippableAsyncApiLogTag(logTag) {
 
 export function isSelfTriggerFallbackApiLogTag(logTag) {
   return SELF_TRIGGER_FALLBACK_API_LOG_TAGS.has(logTag);
+}
+
+export function isImmediateDirectReplayLogTag(logTag) {
+  return IMMEDIATE_DIRECT_REPLAY_LOG_TAGS.has(logTag);
 }
 
 export function isToleratedBatchTimeoutApiLogTag(logTag) {

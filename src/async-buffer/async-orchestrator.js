@@ -4,13 +4,17 @@ import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES, SERVICE_MAP } from '../config.js';
-import { getOptionalRepeatPolicy, isSelfTriggerFallbackApiLogTag, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, isToleratedBatchTimeoutApiLogTag, SELF_TRIGGER_FALLBACK_API_LOG_TAGS, SELF_TRIGGER_FALLBACK_WAIT_TIMEOUT_OVERRIDES_MS, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
+import { getOptionalRepeatPolicy, isImmediateDirectReplayLogTag, isSelfTriggerFallbackApiLogTag, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, isToleratedBatchTimeoutApiLogTag, SELF_TRIGGER_FALLBACK_API_LOG_TAGS, SELF_TRIGGER_FALLBACK_WAIT_TIMEOUT_OVERRIDES_MS, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders, buildReplaySessionHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
 import { getAppCoreRequestId } from '../services/app-core-request-id.js';
 import { resolveReplayEndpoint } from '../services/replay-request-resolver.js';
 import { makeRequest } from '../services/http-client.js';
 import { normalizeCanonicalLoanApplicationReferences } from '../services/canonical-loan-application-id.js';
+
+const APP_CORE_IMMEDIATE_PAIRED_RESPONSE_LOG_TAGS = new Set([
+  'GetAgreementDataRequest_REQUEST'
+]);
 
 function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
   if (!entry || entry.sourceDestination !== 'APP_WRAPPER') {
@@ -564,6 +568,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.lastIdleExternalEntryKey = null;
     this.idleExternalEntryCycles = 0;
     this.activeLoanSettlementPtTriggers = new Set();
+    this.hasWaitedForInitialLoanSettlementPtTrigger = false;
     this.inFlightEntryProcessing = new Map();
     this.preSatisfiedReplayEntries = new Map();
     if (this.requestForwarder?.callbacks) {
@@ -602,6 +607,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.activeLoanSettlementPtTriggers.add(triggerKey);
 
     try {
+      if (!this.hasWaitedForInitialLoanSettlementPtTrigger) {
+        logger.info('Waiting once before first loan settlement PT replay helper trigger', {
+          entry: entry.toString(),
+          delayMs: 1000
+        });
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        this.hasWaitedForInitialLoanSettlementPtTrigger = true;
+      }
+
       logger.info('Triggering loan settlement PT replay helper immediately after buffer miss', {
         entry: entry.toString(),
         loanApplicationId,
@@ -1448,12 +1462,25 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     // once the live _REQUEST has been buffered, matched, and validated, the later
     // _RESPONSE step must be served from replay logs when sequence reaches it.
     // It should not depend on a second live lender response arriving in ART.
+    const hasHeldGatewayLenderRequest =
+      requestEntry.source === 'GATEWAY' &&
+      requestEntry.destination === 'LENDER' &&
+      currentEntry.source === 'LENDER' &&
+      currentEntry.destination === 'GATEWAY' &&
+      (
+        this.pendingExternalRequests.has(this.getContextKey(currentEntry)) ||
+        this.pendingExternalRequests.has(this.getContextKey(requestEntry))
+      );
+
     if (
       requestEntry.source === 'GATEWAY' &&
       requestEntry.destination === 'LENDER' &&
       currentEntry.source === 'LENDER' &&
       currentEntry.destination === 'GATEWAY' &&
-      this.validator.processedIndices.has(requestEntry.index)
+      (
+        this.validator.processedIndices.has(requestEntry.index) ||
+        hasHeldGatewayLenderRequest
+      )
     ) {
       return this.replayGatewayLenderResponseFromLogs(requestEntry, currentEntry);
     }
@@ -2054,6 +2081,36 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
           forwardingRequest.headers['x-merchant-id'] || forwardingRequest.headers['X-Merchant-Id']
         )
       });
+
+      const pairedResponseEntry = this.findCorrespondingResponse(entry, true);
+      const shouldUseImmediatePairedResponseFlow =
+        APP_CORE_IMMEDIATE_PAIRED_RESPONSE_LOG_TAGS.has(entry.logTag) &&
+        entry.sourceDestination === 'APP_CORE' &&
+        Boolean(pairedResponseEntry);
+
+      if (shouldUseImmediatePairedResponseFlow) {
+        logger.info('Using immediate APP_CORE paired-response replay flow', {
+          requestEntry: entry.toString(),
+          responseEntry: pairedResponseEntry?.toString?.() || null,
+          requestId: forwardingRequest.requestId,
+          api,
+          method
+        });
+        this.registerPreSatisfiedReplayEntry(entry, {
+          requestId: forwardingRequest.requestId,
+          reason: 'immediate_app_core_paired_response'
+        });
+
+        if (pairedResponseEntry && !this.validator.processedIndices.has(pairedResponseEntry.index)) {
+          this.validator.markProcessed(pairedResponseEntry);
+          this.recordSuccess('immediate_app_core_paired_response', pairedResponseEntry);
+          logger.info('Marked immediate APP_CORE paired response as processed', {
+            requestEntry: entry.toString(),
+            responseEntry: pairedResponseEntry.toString(),
+            requestId: forwardingRequest.requestId
+          });
+        }
+      }
       
       this.httpClient.send(
         this.getServiceBaseUrl(service),
@@ -2806,6 +2863,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return null;
     }
 
+    if (!isImmediateDirectReplayLogTag(incoming.logTag)) {
+      return null;
+    }
+
     const currentEntry = this.validator.getCurrentEntry();
     if (
       !currentEntry?.isRequest ||
@@ -2844,25 +2905,73 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return null;
     }
 
-    logger.info('Processing current GATEWAY->LENDER request immediately to unblock nested gateway call', {
+    logger.info('Processing current GATEWAY->LENDER request immediately from replay logs to unblock nested gateway call', {
       entry: currentEntry.toString(),
       requestId: incoming.requestId,
       logTag: incoming.logTag,
       lenderOrgId: incoming.lenderOrgId
     });
 
-    this.registerNearbyImmediateReplaySatisfaction(normalizedIncoming, {
-      reason: 'immediate_current_gateway_lender'
-    });
+    const responseEntry = this.findCorrespondingResponse(currentEntry, true);
+    if (!responseEntry) {
+      logger.warn('Current GATEWAY->LENDER request matched replay entry but no corresponding response log was found; falling back to generic incoming handler', {
+        entry: currentEntry.toString(),
+        requestId: incoming.requestId,
+        logTag: incoming.logTag
+      });
 
-    const response = await super.handleIncomingRequest(incoming);
+      const fallbackResponse = await super.handleIncomingRequest(incoming);
+      this.bufferManager?.skipWaiter?.(currentEntry);
+      return fallbackResponse;
+    }
 
-    // The replay loop may already be blocked on waitForMatchingRequest for this
-    // exact entry. Since we handled it synchronously here, release that waiter
-    // so ART does not time out on a request that was already processed.
+    this.recordObservedProcessedResponse(
+      responseEntry,
+      transformRequest(responseEntry.payload, responseEntry.logTag)
+    );
+
+    if (!this.validator.processedIndices.has(currentEntry.index)) {
+      this.validator.markProcessed(currentEntry);
+      this.recordSuccess('immediate_current_gateway_lender_request', currentEntry);
+      logger.info('Marked current GATEWAY->LENDER request as processed after immediate log replay handling', {
+        entry: currentEntry.toString(),
+        currentIndex: this.validator.currentIndex
+      });
+    }
+
+    if (!this.validator.processedIndices.has(responseEntry.index)) {
+      this.validator.markProcessed(responseEntry);
+      this.recordSuccess('immediate_current_gateway_lender_response', responseEntry);
+      logger.info('Marked corresponding GATEWAY->LENDER response as processed during immediate log replay handling', {
+        requestEntry: currentEntry.toString(),
+        responseEntry: responseEntry.toString(),
+        currentIndex: this.validator.currentIndex
+      });
+    }
+
+    this.markStuckEntryResolved(currentEntry, 'immediate_current_gateway_lender_request_replayed_from_logs');
+    this.bufferManager?.clearWaitDiagnostics?.(currentEntry, 'immediate_gateway_lender_request_replay');
     this.bufferManager?.skipWaiter?.(currentEntry);
 
-    return response;
+    logger.logApiCall(
+      responseEntry.source,
+      responseEntry.destination,
+      getEndpointConfig(currentEntry.sourceDestination, currentEntry.logTag)?.endpoint || currentEntry.api || null,
+      'RESPONSE',
+      responseEntry.index
+    );
+
+    logger.info('Returned replayed GATEWAY->LENDER response immediately from logs', {
+      requestEntry: currentEntry.toString(),
+      responseEntry: responseEntry.toString(),
+      requestId: incoming.requestId,
+      logTag: incoming.logTag
+    });
+
+    return {
+      success: true,
+      payload: transformRequest(responseEntry.payload, responseEntry.logTag)
+    };
   }
 
   async maybeHandleCurrentExpectedIncomingRequest(incoming) {
@@ -2992,11 +3101,32 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       reason: 'immediate_future_gateway_lender'
     });
 
-    return this.outOfOrderHandler.handleOutOfOrderRequest(incoming, {
-      ...(effectiveValidation || {}),
-      expectedEntry: currentEntry,
-      foundInLookahead: futureEntry
+    const buffered = await this.bufferManager.addIncomingRequest(normalizedIncoming);
+
+    logger.info('Buffered future GATEWAY->LENDER request until replay reaches its recorded position', {
+      currentEntry: currentEntry.toString(),
+      futureEntry: futureEntry.toString(),
+      requestId: incoming.requestId || null,
+      logTag: incoming.logTag || null,
+      bufferKey: buffered.key
     });
+
+    try {
+      return await buffered.deferred.promise;
+    } catch (error) {
+      logger.error('Deferred future GATEWAY->LENDER request failed before replay consumed it', {
+        error: error.message,
+        currentEntry: currentEntry.toString(),
+        futureEntry: futureEntry.toString(),
+        requestId: incoming.requestId || null,
+        logTag: incoming.logTag || null,
+        bufferKey: buffered.key
+      });
+      return {
+        success: false,
+        error: error.message
+      };
+    }
   }
 
   findActiveToleratedBatchAnchor(currentEntry = this.validator?.getCurrentEntry?.()) {
@@ -3216,9 +3346,42 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.preSatisfiedReplayEntries.delete(entry.index);
     this.validator.markProcessed(entry);
 
+    let resolvedBufferedGatewayLenderRequest = false;
     if (marker.responseIndex !== null) {
       const responseEntry = this.validator.entries.find(candidate => candidate.index === marker.responseIndex);
       if (responseEntry) {
+        if (
+          entry.source === 'GATEWAY' &&
+          entry.destination === 'LENDER' &&
+          responseEntry.source === 'LENDER' &&
+          responseEntry.destination === 'GATEWAY'
+        ) {
+          const buffered = this.bufferManager?.findMatchingRequest?.(entry, { claim: true });
+          if (buffered) {
+            const replayResponse = {
+              success: true,
+              payload: transformRequest(responseEntry.payload, responseEntry.logTag)
+            };
+
+            this.bufferManager.completeIncomingRequest(buffered.key, replayResponse);
+            resolvedBufferedGatewayLenderRequest = true;
+
+            logger.info('Resolved buffered GATEWAY->LENDER request immediately from recorded replay response', {
+              requestEntry: entry.toString(),
+              responseEntry: responseEntry.toString(),
+              bufferKey: buffered.key,
+              requestId: buffered.request?.requestId || null,
+              logTag: buffered.request?.logTag || null
+            });
+          } else {
+            logger.warn('Pre-satisfied GATEWAY->LENDER replay entry had no claimable buffered request to complete', {
+              requestEntry: entry.toString(),
+              responseEntry: responseEntry.toString(),
+              bufferDiagnostics: this.bufferManager?.getIncomingBufferDiagnostics?.(entry, 10) || null
+            });
+          }
+        }
+
         this.validator.markProcessed(responseEntry);
         this.recordSuccess('pre_satisfied_replay_response', responseEntry);
       }
@@ -3229,6 +3392,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       entry: entry.toString(),
       responseIndex: marker.responseIndex,
       requestId: marker.requestId,
+      resolvedBufferedGatewayLenderRequest,
       currentIndex: this.validator.currentIndex
     });
     return true;

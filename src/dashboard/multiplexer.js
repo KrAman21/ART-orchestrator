@@ -103,6 +103,14 @@ export function createMultiplexerServer() {
 
   app.use('/:api(*)', async (req, res) => {
     const api = '/' + req.params.api;
+    const payload = req.body;
+    const loanApplicationId = payload?.loan_application_id || payload?.loanApplicationId || req.headers['x-loan-application-id'];
+    const orderId = payload?.order_id || payload?.orderId || req.headers['x-order-id'];
+    const lenderOrgId = payload?.lender_org_id ||
+                         payload?.themisDetail?.lenderOrgId ||
+                         payload?.lenderOrgId ||
+                         req.headers['x-lender-org-id'] ||
+                         req.headers['X-Lender-Org-Id'];
     const previewOrchestrator = registry.findOrchestrator(req.body, req.headers);
     const nextExpectedEntry =
       previewOrchestrator?.validator?.entries?.[previewOrchestrator?.validator?.currentIndex] || null;
@@ -134,15 +142,6 @@ export function createMultiplexerServer() {
       logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
       return res.json('Webhook ignored');
     }
-
-    const payload = req.body;
-    const loanApplicationId = payload?.loan_application_id || payload?.loanApplicationId || req.headers['x-loan-application-id'];
-    const orderId = payload?.order_id || payload?.orderId || req.headers['x-order-id'];
-    const lenderOrgId = payload?.lender_org_id ||
-                         payload?.themisDetail?.lenderOrgId ||
-                         payload?.lenderOrgId ||
-                         req.headers['x-lender-org-id'] ||
-                         req.headers['X-Lender-Org-Id'];
 
     const orchestrator = previewOrchestrator;
 
