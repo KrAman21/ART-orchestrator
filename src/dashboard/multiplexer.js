@@ -142,15 +142,6 @@ export function createMultiplexerServer() {
       logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
       return res.json('Webhook ignored');
     }
-
-    const payload = req.body;
-    const { loanApplicationId, orderId } = extractRoutingIdentifiers(payload, req.headers);
-    const lenderOrgId = payload?.lender_org_id ||
-                         payload?.themisDetail?.lenderOrgId ||
-                         payload?.lenderOrgId ||
-                         req.headers['x-lender-org-id'] ||
-                         req.headers['X-Lender-Org-Id'];
-
     const orchestrator = previewOrchestrator;
     const matchedSession = registry.findSessionForRequest?.(payload, req.headers) || null;
     const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;

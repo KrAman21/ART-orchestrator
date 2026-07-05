@@ -180,6 +180,46 @@ test('keeps distinct CORE->GATEWAY fetchOfferSync calls when outer requestId is 
   }
 });
 
+test('getIncomingBufferDiagnostics does not crash for repeated CORE->GATEWAY fetchOfferSync requests', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'LSP-FetchOfferSync_REQUEST',
+      source: 'CORE',
+      destination: 'GATEWAY',
+      requestId: 'shared-http-request-id',
+      payload: {
+        requestId: 'payload-realtime-request-id',
+        offerType: 'REAL_TIME',
+        loanApplicationId: 'loan-1'
+      }
+    }));
+
+    const diagnostics = manager.getIncomingBufferDiagnostics(createExpectedEntry({
+      logTag: 'LSP-FetchOfferSync_REQUEST',
+      source: 'CORE',
+      destination: 'GATEWAY',
+      requestId: 'shared-http-request-id',
+      loanApplicationId: 'loan-1',
+      payload: {
+        requestId: 'expected-realtime-log-request-id',
+        offerType: 'REAL_TIME',
+        loanApplicationId: 'loan-1'
+      }
+    }));
+
+    assert.equal(diagnostics.entries.length, 1);
+    assert.equal(diagnostics.entries[0].match.matches, true);
+    assert.equal(diagnostics.entries[0].match.mismatchReason, null);
+  } finally {
+    manager.stop();
+  }
+});
+
 test('preserves gateway lender request as rewind fallback and uses it after short rewind wait', async () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,

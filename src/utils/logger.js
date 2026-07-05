@@ -132,6 +132,19 @@ function logToDirectionFile(direction, logEntry) {
   } catch (_) {}
 }
 
+function logToRequestFlowFile(logEntry) {
+  if (!REQUEST_FLOW_LOGS_TO_FILE) return;
+
+  try {
+    const entry = {
+      timestamp: logEntry?.timestamp || formatTimestamp(),
+      ...logEntry
+    };
+    const line = JSON.stringify(entry) + '\n';
+    appendFileSync(REQUEST_FLOW_LOG_FILE_PATH, line, { encoding: 'utf-8' });
+  } catch (_) {}
+}
+
 function prioritizeDirectionLogFields(logEntry = {}) {
   const preferredOrder = [
     'timestamp',

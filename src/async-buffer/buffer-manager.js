@@ -1076,6 +1076,54 @@ export class BufferManager {
     }, obj);
   }
 
+  _deriveDirection(entry = {}) {
+    const source = entry?.source || null;
+    const destination = entry?.destination || null;
+    if (source && destination) {
+      return { source, destination };
+    }
+
+    const sourceDestination = entry?.sourceDestination || entry?.metadata?.sourceDestination || null;
+    if (typeof sourceDestination === 'string') {
+      const [derivedSource = null, derivedDestination = null] = sourceDestination.split('_');
+      return {
+        source: source || derivedSource || null,
+        destination: destination || derivedDestination || null
+      };
+    }
+
+    return { source, destination };
+  }
+
+  _getRequestShapeMismatch(leftEntry = {}, rightEntry = {}) {
+    const leftLogTag = canonicalRequestLogTag(leftEntry?.logTag);
+    const rightLogTag = canonicalRequestLogTag(rightEntry?.logTag);
+    if (leftLogTag !== rightLogTag) {
+      return `logTag mismatch: ${leftLogTag || 'null'} !== ${rightLogTag || 'null'}`;
+    }
+
+    const leftDirection = this._deriveDirection(leftEntry);
+    const rightDirection = this._deriveDirection(rightEntry);
+
+    if (
+      leftDirection.source &&
+      rightDirection.source &&
+      leftDirection.source !== rightDirection.source
+    ) {
+      return `source mismatch: ${leftDirection.source} !== ${rightDirection.source}`;
+    }
+
+    if (
+      leftDirection.destination &&
+      rightDirection.destination &&
+      leftDirection.destination !== rightDirection.destination
+    ) {
+      return `destination mismatch: ${leftDirection.destination} !== ${rightDirection.destination}`;
+    }
+
+    return null;
+  }
+
   _addPayloadSignals(expectedPayload, actualPayload, exactSignals) {
     let score = 0;
 

@@ -36,8 +36,8 @@ export ART_FILTERED_STORE_RETRY_DELAY_MS="${ART_FILTERED_STORE_RETRY_DELAY_MS:-2
 export ART_FILTERED_STORE_FETCH_ATTEMPTS="${ART_FILTERED_STORE_FETCH_ATTEMPTS:-5}"
 export ART_FILTERED_STORE_FETCH_RETRY_INTERVAL_MS="${ART_FILTERED_STORE_FETCH_RETRY_INTERVAL_MS:-2000}"
 export ART_FILTERED_STORE_DEBUG="${ART_FILTERED_STORE_DEBUG:-false}"
-export SESSION_TOKEN="${SESSION_TOKEN:-LSP89c40dd534db49e7a4f524641733ab38}"
 export USE_FETCH_ORDER_CONTEXT="${USE_FETCH_ORDER_CONTEXT:-false}"
+export SESSION_TOKEN="${SESSION_TOKEN:-LSPbfa44c2f043147d2afc1d97cf3d4ed02}"
 unset FETCH_ORDER_CONTEXT_ENABLED
 unset ART_FETCH_ORDER_CONTEXT_ENABLED
 
@@ -63,6 +63,10 @@ fi
   echo
   echo "===== $(date -Is) art-final-store cron start ====="
   echo "mode=${CRON_MODE} script=${CRON_SCRIPT}"
+  if [[ -z "${SESSION_TOKEN:-}" ]]; then
+    echo "SESSION_TOKEN is not set. Export a valid dashboard session token or add it to .env before running the cron."
+    exit 1
+  fi
   if [[ -x /nix/store/6b8rp3jvsq1am7d0bx8xz2dpyb45nbp2-nodejs-26.2.0/bin/node ]]; then
     /nix/store/6b8rp3jvsq1am7d0bx8xz2dpyb45nbp2-nodejs-26.2.0/bin/node "${CRON_SCRIPT}"
   elif command -v node >/dev/null 2>&1; then
