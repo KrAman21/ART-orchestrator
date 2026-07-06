@@ -691,6 +691,21 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       console.log(`  Failed: ${artResults.failed}`);
       console.log(`  Total: ${artResults.processedLogs?.length || 0}`);
 
+      if (orchestrator.isComplete()) {
+        logger.info('Suppressing stale completion timeout/rewind handling because replay is already complete', {
+          orderId,
+          orderIndex,
+          totalOrders,
+          replayAttempt,
+          completionTimedOut: completionResult?.timedOut === true,
+          completionFailed: completionResult?.failed === true,
+          completionError: completionResult?.error || null
+        });
+        completionResult.timedOut = false;
+        completionResult.failed = false;
+        completionResult.error = null;
+      }
+
       const restartPlan = buildPollingReplayRestartPlan(
         orchestrator,
         completionResult,
@@ -931,7 +946,45 @@ function isBufferWaitFailure(completionResult, waitReason) {
     );
 }
 
+function isPollingRewindEnabled() {
+  const rawValue = process.env.ART_ENABLE_POLLING_REWIND;
+  if (typeof rawValue !== 'string' || rawValue.trim() === '') {
+    return true;
+  }
+
+  return !['false', '0', 'no', 'off'].includes(rawValue.trim().toLowerCase());
+}
+
 function buildPollingReplayRestartPlan(orchestrator, completionResult, attemptedReplayStartIndices) {
+  if (!isPollingRewindEnabled()) {
+    logger.info('Skipping polling rewind plan because polling rewind is disabled by config', {
+      env: 'ART_ENABLE_POLLING_REWIND',
+      configuredValue: process.env.ART_ENABLE_POLLING_REWIND ?? null
+    });
+    return null;
+  }
+
+  const progress = orchestrator?.validator?.getProgress?.() || null;
+  const replayAlreadyComplete =
+    orchestrator?.isComplete?.() === true ||
+    orchestrator?.validator?.isComplete?.() === true ||
+    (
+      progress &&
+      progress.remaining === 0 &&
+      progress.total > 0 &&
+      progress.processed >= progress.total
+    );
+
+  if (replayAlreadyComplete) {
+    logger.info('Skipping polling rewind plan because replay is already complete', {
+      completionTimedOut: completionResult?.timedOut === true,
+      completionFailed: completionResult?.failed === true,
+      completionError: completionResult?.error || null,
+      progress
+    });
+    return null;
+  }
+
   const waitReason = resolveBufferWaitReason(orchestrator);
   if (!isBufferWaitFailure(completionResult, waitReason)) {
     logger.info('Skipping polling rewind plan because failure was not caused by buffered-request wait exhaustion', {

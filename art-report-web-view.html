@@ -1,0 +1,2856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ART Report — art-1783344775782</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
+
+  :root {
+    --bg: #0f172a;
+    --bg-2: #172554;
+    --panel: rgba(255, 255, 255, 0.9);
+    --panel-strong: rgba(255, 255, 255, 0.96);
+    --panel-tint: rgba(236, 242, 255, 0.92);
+    --line: rgba(148, 163, 184, 0.22);
+    --line-strong: rgba(71, 85, 105, 0.2);
+    --text: #0f172a;
+    --text-soft: #475569;
+    --text-dim: #64748b;
+    --blue: #2563eb;
+    --blue-soft: rgba(37, 99, 235, 0.12);
+    --green: #15803d;
+    --green-soft: rgba(22, 163, 74, 0.12);
+    --red: #b91c1c;
+    --red-soft: rgba(220, 38, 38, 0.12);
+    --amber: #b45309;
+    --amber-soft: rgba(245, 158, 11, 0.14);
+    --shadow-lg: 0 28px 80px rgba(15, 23, 42, 0.22);
+    --shadow-md: 0 18px 40px rgba(15, 23, 42, 0.12);
+    --radius-xl: 28px;
+    --radius-lg: 22px;
+    --radius-md: 16px;
+    --radius-sm: 12px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: "Manrope", "Segoe UI", Arial, sans-serif;
+    background:
+      radial-gradient(circle at top left, rgba(96, 165, 250, 0.22), transparent 30%),
+      radial-gradient(circle at top right, rgba(34, 197, 94, 0.16), transparent 28%),
+      linear-gradient(180deg, #eaf1ff 0%, #f8fbff 42%, #eef4ff 100%);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 32px 20px 56px;
+  }
+  a { color: var(--blue); }
+  code, pre, .meta-mono, .order-id, .tag-name, .entry-label, .failure-banner code, .path-cell code, .scalar-val {
+    font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  .container { max-width: 1440px; margin: 0 auto; }
+  .report-shell { display: flex; flex-direction: column; gap: 22px; }
+  h1 {
+    font-size: clamp(2.35rem, 3vw, 3.3rem);
+    line-height: 1.05;
+    letter-spacing: -0.05em;
+    color: #081121;
+    max-width: 720px;
+  }
+  h2.order-title {
+    font-size: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+  }
+  .eyebrow {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--blue);
+    margin-bottom: 12px;
+    font-weight: 800;
+  }
+
+  .report-header {
+    position: relative;
+    overflow: hidden;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(241, 247, 255, 0.92)),
+      linear-gradient(135deg, #ffffff, #eff6ff);
+    border-radius: var(--radius-xl);
+    padding: 30px;
+    border: 1px solid rgba(191, 219, 254, 0.8);
+    box-shadow: var(--shadow-lg);
+  }
+  .report-header::before {
+    content: "";
+    position: absolute;
+    inset: auto -80px -120px auto;
+    width: 320px;
+    height: 320px;
+    background: radial-gradient(circle, rgba(37, 99, 235, 0.14), transparent 68%);
+    pointer-events: none;
+  }
+  .header-row {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 24px;
+  }
+  .header-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .hero-note {
+    max-width: 760px;
+    font-size: 0.98rem;
+    color: var(--text-soft);
+  }
+  .overall-status {
+    font-size: 0.86rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 11px 16px;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    backdrop-filter: blur(12px);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  }
+  .overall-status.is-ok { color: var(--green); background: rgba(220, 252, 231, 0.85); }
+  .overall-status.is-fail { color: var(--red); background: rgba(254, 226, 226, 0.9); }
+
+  .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .meta-card {
+    background: var(--panel);
+    border: 1px solid rgba(203, 213, 225, 0.9);
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  }
+  .meta-label {
+    display: block;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+    font-weight: 800;
+  }
+  .meta-value { color: #081121; font-size: 1rem; }
+  .meta-mono { font-size: 0.84rem; word-break: break-all; }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
+  .stat-card {
+    background: var(--panel-strong);
+    border: 1px solid rgba(203, 213, 225, 0.95);
+    border-radius: var(--radius-lg);
+    padding: 18px;
+    min-height: 104px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    box-shadow: var(--shadow-md);
+  }
+  .stat-label {
+    font-size: 0.76rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    font-weight: 800;
+  }
+  .stat-value {
+    font-size: clamp(1.8rem, 2vw, 2.35rem);
+    font-weight: 800;
+    color: #081121;
+    letter-spacing: -0.05em;
+  }
+  .stat-ok { color: var(--green); }
+  .stat-fail { color: var(--red); }
+  .stat-warn { color: var(--amber); }
+
+  .order-section {
+    background: var(--panel-strong);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    border: 1px solid rgba(203, 213, 225, 0.95);
+    box-shadow: var(--shadow-md);
+  }
+  .order-section.uncovered {
+    background: rgba(255, 255, 255, 0.88);
+    border-style: dashed;
+  }
+  .order-head { margin-bottom: 18px; }
+  .order-subtitle { font-size: 0.92rem; color: var(--text-soft); }
+  .order-id { color: #1d4ed8; font-weight: 700; }
+  .order-status {
+    font-size: 0.72rem;
+    padding: 5px 11px;
+    border-radius: 999px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .status-ok { background: var(--green-soft); color: var(--green); border: 1px solid rgba(22, 163, 74, 0.22); }
+  .status-fail { background: var(--red-soft); color: var(--red); border: 1px solid rgba(220, 38, 38, 0.18); }
+  .failure-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    background: linear-gradient(135deg, rgba(255, 247, 237, 0.96), rgba(255, 251, 235, 0.96));
+    border: 1px solid rgba(251, 191, 36, 0.45);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    font-size: 0.88rem;
+    color: var(--amber);
+  }
+  .failure-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #d97706;
+    font-weight: 800;
+  }
+  .failure-reason { color: var(--text); }
+  .failure-banner code { color: #92400e; font-weight: 700; }
+
+  .summary-pills { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+  .pill {
+    font-size: 0.78rem;
+    padding: 7px 12px;
+    border-radius: 999px;
+    font-weight: 800;
+    border: 1px solid transparent;
+    background: #f8fbff;
+  }
+  .pill-total { color: #1d4ed8; border-color: rgba(37, 99, 235, 0.18); background: rgba(239, 246, 255, 0.9); }
+  .pill-ok { color: var(--green); border-color: rgba(22, 163, 74, 0.18); background: rgba(240, 253, 244, 0.95); }
+  .pill-fail { color: var(--red); border-color: rgba(220, 38, 38, 0.16); background: rgba(254, 242, 242, 0.95); }
+  .pill-diff { color: var(--amber); border-color: rgba(245, 158, 11, 0.18); background: rgba(255, 251, 235, 0.96); }
+
+  .tag-list { display: flex; flex-direction: column; gap: 12px; }
+  .tag-section {
+    border-radius: var(--radius-md);
+    border: 1px solid var(--line);
+    overflow: hidden;
+    background: var(--panel-tint);
+  }
+  .tag-section.tag-fail { border-color: rgba(239, 68, 68, 0.22); }
+  .tag-section.tag-pass { border-color: rgba(34, 197, 94, 0.22); }
+  .tag-summary {
+    cursor: pointer;
+    padding: 15px 18px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: rgba(255, 255, 255, 0.88);
+    user-select: none;
+    list-style: none;
+  }
+  .tag-summary::-webkit-details-marker { display: none; }
+  .tag-section[open] .tag-summary { border-bottom: 1px solid rgba(203, 213, 225, 0.9); }
+  .tag-icon { font-size: 0.95rem; }
+  .tag-name {
+    font-size: 0.92rem;
+    font-weight: 700;
+    flex: 1;
+    color: #0f172a;
+  }
+  .tag-meta { font-size: 0.78rem; color: var(--text-soft); }
+  .tag-body { padding: 16px 18px; background: rgba(248, 251, 255, 0.9); }
+
+  .comp-entry {
+    border: 1px solid rgba(203, 213, 225, 0.95);
+    border-radius: var(--radius-sm);
+    margin-bottom: 12px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.9);
+  }
+  .comp-entry:last-child { margin-bottom: 0; }
+  .comp-entry-summary {
+    cursor: pointer;
+    padding: 10px 14px;
+    background: rgba(241, 245, 249, 0.92);
+    font-size: 0.82rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+  }
+  .comp-entry-summary::-webkit-details-marker { display: none; }
+  .entry-label { color: #1d4ed8; font-weight: 700; }
+  .ts { color: var(--text-dim); font-size: 0.75rem; }
+  .diff-badge {
+    font-size: 0.7rem;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(254, 226, 226, 0.9);
+    color: var(--red);
+    font-weight: 800;
+    border: 1px solid rgba(248, 113, 113, 0.22);
+  }
+  .diff-badge.zero {
+    background: rgba(220, 252, 231, 0.9);
+    color: var(--green);
+    border-color: rgba(34, 197, 94, 0.18);
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid rgba(226, 232, 240, 0.95);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.88);
+  }
+  .diff-table, .req-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  .diff-table th, .req-table th {
+    position: sticky;
+    top: 0;
+    background: #eff6ff;
+    padding: 11px 12px;
+    text-align: left;
+    color: #334155;
+    font-weight: 800;
+    border-bottom: 1px solid rgba(203, 213, 225, 0.95);
+    white-space: nowrap;
+  }
+  .diff-table td, .req-table td {
+    padding: 11px 12px;
+    vertical-align: top;
+    border-bottom: 1px solid rgba(226, 232, 240, 0.95);
+  }
+  .diff-table tr:last-child td, .req-table tr:last-child td { border-bottom: none; }
+  .diff-table tbody tr:nth-child(even) td,
+  .req-table tbody tr:nth-child(even) td { background: rgba(248, 250, 252, 0.9); }
+  .diff-table tbody tr:hover td,
+  .req-table tbody tr:hover td { background: rgba(239, 246, 255, 0.9); }
+  .path-cell code { color: #7c3aed; font-size: 0.78rem; word-break: break-all; }
+  .reason-cell { white-space: nowrap; }
+  .val-cell { max-width: 360px; word-break: break-word; }
+  .expected-col { color: #9f1239; }
+  .actual-col { color: #166534; }
+  .type-cell { font-size: 0.76rem; color: var(--text-dim); }
+  .dimmed { color: #94a3b8; }
+  .no-diff { color: var(--green); font-size: 0.92rem; padding: 8px 0; font-weight: 700; }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.68rem;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-weight: 800;
+    border: 1px solid transparent;
+  }
+  .badge-mismatch { background: rgba(255, 237, 213, 0.95); color: #c2410c; border-color: rgba(251, 146, 60, 0.22); }
+  .badge-type    { background: rgba(237, 233, 254, 0.95); color: #6d28d9; border-color: rgba(167, 139, 250, 0.22); }
+  .badge-missing { background: rgba(254, 226, 226, 0.95); color: var(--red); border-color: rgba(248, 113, 113, 0.2); }
+  .badge-extra   { background: rgba(219, 234, 254, 0.95); color: var(--blue); border-color: rgba(96, 165, 250, 0.22); }
+  .badge-other   { background: rgba(241, 245, 249, 0.96); color: #475569; border-color: rgba(148, 163, 184, 0.22); }
+
+  .json-tree { display: inline; }
+  .json-summary {
+    cursor: pointer;
+    color: #b45309;
+    font-size: 0.78rem;
+    display: inline;
+    list-style: none;
+    font-weight: 700;
+  }
+  .json-summary::-webkit-details-marker { display: none; }
+  .json-toggle { font-size: 0.66rem; color: var(--text-dim); }
+  .json-block {
+    white-space: pre-wrap;
+    background: #0f172a;
+    border: 1px solid rgba(30, 41, 59, 0.9);
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 0.76rem;
+    color: #dbeafe;
+    margin-top: 8px;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .null-val { color: var(--text-dim); font-style: italic; }
+  .missing-val { color: var(--red); font-style: italic; }
+
+  .req-section {
+    border: 1px solid rgba(203, 213, 225, 0.95);
+    border-radius: var(--radius-md);
+    margin-bottom: 14px;
+    overflow: hidden;
+    background: var(--panel-strong);
+    box-shadow: var(--shadow-md);
+  }
+  .req-summary {
+    cursor: pointer;
+    padding: 14px 18px;
+    background: rgba(248, 250, 252, 0.96);
+    list-style: none;
+    font-size: 0.88rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-weight: 700;
+  }
+  .req-summary::-webkit-details-marker { display: none; }
+  .req-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 30px;
+    height: 30px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(219, 234, 254, 0.95);
+    border: 1px solid rgba(96, 165, 250, 0.22);
+    color: #1d4ed8;
+    font-size: 0.75rem;
+    font-weight: 800;
+  }
+  .http-err { color: var(--red); font-weight: 800; }
+  .err-msg { color: #be123c; max-width: 240px; }
+
+  .section-title {
+    font-size: 0.8rem;
+    font-weight: 800;
+    color: var(--text-dim);
+    margin: 6px 0 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+  }
+  hr.divider {
+    border: none;
+    border-top: 1px solid rgba(203, 213, 225, 0.95);
+    margin: 8px 0 0;
+  }
+
+  @media (max-width: 840px) {
+    body { padding: 18px 14px 40px; }
+    .report-header, .order-section { padding: 18px; }
+    .header-row { flex-direction: column; align-items: flex-start; }
+    .hero-note { font-size: 0.92rem; }
+    .summary-pills { gap: 8px; }
+    .val-cell { max-width: 220px; }
+    .req-summary, .tag-summary, .comp-entry-summary { align-items: flex-start; }
+    h1 { font-size: 2rem; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="report-shell">
+    <div class="report-header">
+      <div class="header-row">
+        <div class="header-copy">
+          <div class="eyebrow">ART replay report</div>
+          <h1>ART Comparison Report</h1>
+          <p class="hero-note">Readable comparison output for replay runs, with clear status cards, grouped API diffs, and failure context that is easier to scan during debugging.</p>
+        </div>
+        <div class="overall-status is-ok">SUCCESS</div>
+      </div>
+      <div class="meta-grid">
+        <div class="meta-card">
+          <span class="meta-label">Execution ID</span>
+          <strong class="meta-value meta-mono">art-1783344775782</strong>
+        </div>
+        <div class="meta-card">
+          <span class="meta-label">Started</span>
+          <strong class="meta-value">7/6/2026, 7:01:34 PM</strong>
+        </div>
+        <div class="meta-card">
+          <span class="meta-label">Duration</span>
+          <strong class="meta-value">81.6s</strong>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-label">Orders</span>
+        <strong class="stat-value">1</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Passed</span>
+        <strong class="stat-value stat-ok">1</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Failed</span>
+        <strong class="stat-value stat-fail">0</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Skipped</span>
+        <strong class="stat-value">0</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Comparisons</span>
+        <strong class="stat-value">135</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Mismatches</span>
+        <strong class="stat-value stat-warn">43</strong>
+      </div>
+      
+      
+      
+    </div>
+
+  <!-- API Payload Comparisons per order -->
+  <section class="order-section">
+    <div class="order-head">
+      <h2 class="order-title">
+        <span class="order-id">AM202607051858034272604322097</span>
+        <span class="order-status status-ok">COMPLETED</span>
+      </h2>
+      <div class="order-subtitle">Payload comparison summary</div>
+    </div>
+    <div class="failure-banner"><span class="failure-label">Stopped at</span><code>FIBE_WEBHOOK_RESPONSE</code><span class="failure-reason">Completed successfully</span></div>
+    <div class="summary-pills">
+      <span class="pill pill-total">16 API tags</span>
+      <span class="pill pill-ok">0 matched</span>
+      <span class="pill pill-fail">16 mismatched</span>
+      <span class="pill pill-diff">152 total diffs</span>
+    </div>
+    <div class="tag-list"><details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-0">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">LSP-Eligibility_REQUEST</span>
+      <span class="tag-meta">1 entry · <strong>7</strong> differences</span>
+    </summary>
+    <div class="tag-body"><div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>applicant.productData</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>applicant.businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000.00</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>applicants[0].productData</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>applicants[0].businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000.00</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.entityCategory</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">INDIVIDUAL</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.profileDetails.addressType</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">DELIVERY</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-1">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">Themis-Eligibility_REQUEST</span>
+      <span class="tag-meta">5 entries · <strong>20</strong> differences</span>
+    </summary>
+    <div class="tag-body"><details class="comp-entry" open>
+        <summary class="comp-entry-summary"><span class="entry-label">[5] Themis-Eligibility_REQUEST GATEWAY→THEMIS</span> <span class="ts">7:01:42 PM</span> <span class="diff-badge">4 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>applicant.productData</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-letre8b7dj">{}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.entityCategory</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">INDIVIDUAL</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-type">type mismatch</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">50000.00</span></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000</span></td>
+      <td class="type-cell">DOUBLE</td><td class="type-cell">INTEGER</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.profileDetails.addressType</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">DELIVERY</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[5] Themis-Eligibility_REQUEST GATEWAY→THEMIS</span> <span class="ts">7:01:42 PM</span> <span class="diff-badge">4 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>applicant.productData</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-1satwlsmgvo">{}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.entityCategory</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">INDIVIDUAL</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-type">type mismatch</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">50000.00</span></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000</span></td>
+      <td class="type-cell">DOUBLE</td><td class="type-cell">INTEGER</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.profileDetails.addressType</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">DELIVERY</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[5] Themis-Eligibility_REQUEST GATEWAY→THEMIS</span> <span class="ts">7:01:42 PM</span> <span class="diff-badge">4 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>applicant.productData</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-4u8c7zq81px">{}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.entityCategory</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">INDIVIDUAL</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-type">type mismatch</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">50000.00</span></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000</span></td>
+      <td class="type-cell">DOUBLE</td><td class="type-cell">INTEGER</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.profileDetails.addressType</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">DELIVERY</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[5] Themis-Eligibility_REQUEST GATEWAY→THEMIS</span> <span class="ts">7:01:42 PM</span> <span class="diff-badge">4 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>applicant.productData</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-l1225p9nxs">{}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.entityCategory</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">INDIVIDUAL</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-type">type mismatch</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">50000.00</span></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000</span></td>
+      <td class="type-cell">DOUBLE</td><td class="type-cell">INTEGER</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.profileDetails.addressType</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">DELIVERY</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[15] LSP-Eligibility_RESPONSE GATEWAY→CORE</span> <span class="ts">7:01:42 PM</span> <span class="diff-badge">4 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>applicant.productData</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-aoqzsokuje8">{}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.entityCategory</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">INDIVIDUAL</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-type">type mismatch</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">50000.00</span></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000</span></td>
+      <td class="type-cell">DOUBLE</td><td class="type-cell">INTEGER</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>borrower.profileDetails.addressType</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">DELIVERY</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-2">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">FlipKart-EligibilityStatus_RESPONSE</span>
+      <span class="tag-meta">1 entry · <strong>2</strong> differences</span>
+    </summary>
+    <div class="tag-body"><div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lender_eligibilities</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">expected present, actual missing</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-8jnx3k7siy9">[
+  {
+    &quot;lender_code&quot;: &quot;CHOLA&quot;,
+    &quot;loan_type&quot;: &quot;TERM_LOAN&quot;,
+    &quot;loan_amount&quot;: null,
+    &quot;status&quot;: &quot;FAILURE&quot;,
+    &quot;existing_eligibility&quot;: null,
+    &quot;emi_plans&quot;: null,
+    &quot;limit&quot;: null,
+    &quot;error&quot;: {
+      &quot;error_message&quot;: &quot;LENDER_INTERNAL_CRITERIA_FAILED&quot;,
+      &quot;error_code&quot;: &quot;REJECTED_IN_SOFT_ELIGIBILITY&quot;
+    },
+    &quot;required_step&quot;: []
+  },
+  {
+    &quot;lender_code&quot;: &quot;OLYV&quot;,
+    &quot;loan_type&quot;: &quot;TERM_LOAN&quot;,
+    &quot;loan_amount&quot;: null,
+    &quot;status&quot;: &quot;FAILURE&quot;,
+    &quot;existing_eligibility&quot;: null,
+    &quot;emi_plans&quot;: null,
+    &quot;limit&quot;: null,
+    &quot;error&quot;: {
+      &quot;error_message&quot;: &quot;LENDER_INTERNAL_CRITERIA_FAILED&quot;,
+      &quot;error_code&quot;: &quot;REJECTED_IN_SOFT_ELIGIBILITY&quot;
+    },
+    &quot;required_step&quot;: []
+  },
+  {
+    &quot;lender_code&quot;: &quot;HDB&quot;,
+    &quot;loan_type&quot;: &quot;TERM_LOAN&quot;,
+    &quot;loan_amount&quot;: 604800,
+    &quot;status&quot;: &quot;SUCCESS&quot;,
+    &quot;existing_eligibility&quot;: null,
+    &quot;emi_plans&quot;: [
+      {
+        &quot;apr&quot;: &quot;21.00&quot;,
+        &quot;charge_details&quot;: [
+          {
+            &quot;sub_charges&quot;: [
+              {
+                &quot;charge_code&quot;: &quot;GST&quot;,
+                &quot;charge_value&quot;: &quot;0&quot;,
+                &quot;charge_type&quot;: &quot;FLAT&quot;
+              }
+            ],
+            &quot;charge_code&quot;: &quot;PROCESSING_FEE&quot;,
+            &quot;charge_value&quot;: &quot;0&quot;,
+            &quot;charge_type&quot;: &quot;FLAT&quot;
+          }
+        ],
+        &quot;tenure&quot;: 9,
+        &quot;roi&quot;: &quot;21.00&quot;,
+        &quot;emi_type&quot;: &quot;STANDARD&quot;
+      },
+      {
+        &quot;apr&quot;: &quot;21.00&quot;,
+        &quot;charge_details&quot;: [
+          {
+            &quot;sub_charges&quot;: [
+              {
+                &quot;charge_code&quot;: &quot;GST&quot;,
+                &quot;charge_value&quot;: &quot;0&quot;,
+                &quot;charge_type&quot;: &quot;FLAT&quot;
+              }
+            ],
+            &quot;charge_code&quot;: &quot;PROCESSING_FEE&quot;,
+            &quot;charge_value&quot;: &quot;0&quot;,
+            &quot;charge_type&quot;: &quot;FLAT&quot;
+          }
+        ],
+        &quot;tenure&quot;: 6,
+        &quot;roi&quot;: &quot;21.00&quot;,
+        &quot;emi_type&quot;: &quot;STANDARD&quot;
+      },
+      {
+        &quot;apr&quot;: &quot;21.00&quot;,
+        &quot;charge_details&quot;: [
+          {
+            &quot;sub_charges&quot;: [
+              {
+                &quot;charge_code&quot;: &quot;GST&quot;,
+                &quot;charge_value&quot;: &quot;0&quot;,
+                &quot;charge_type&quot;: &quot;FLAT&quot;
+              }
+            ],
+            &quot;charge_code&quot;: &quot;PROCESSING_FEE&quot;,
+            &quot;charge_value&quot;: &quot;0&quot;,
+            &quot;charge_type&quot;: &quot;FLAT&quot;
+          }
+        ],
+        &quot;tenure&quot;: 3,
+        &quot;roi&quot;: &quot;21.00&quot;,
+        &quot;emi_type&quot;: &quot;STANDARD&quot;
+      },
+      {
+        &quot;apr&quot;: &quot;21.00&quot;,
+        &quot;charge_details&quot;: [
+          {
+            &quot;sub_charges&quot;: [
+              {
+                &quot;charge_code&quot;: &quot;GST&quot;,
+                &quot;charge_value&quot;: &quot;0&quot;,
+                &quot;charge_type&quot;: &quot;FLAT&quot;
+              }
+            ],
+            &quot;charge_code&quot;: &quot;PROCESSING_FEE&quot;,
+            &quot;charge_value&quot;: &quot;0&quot;,
+            &quot;charge_type&quot;: &quot;FLAT&quot;
+          }
+        ],
+        &quot;tenure&quot;: 12,
+        &quot;roi&quot;: &quot;21.00&quot;,
+        &quot;emi_type&quot;: &quot;STANDARD&quot;
+      }
+    ],
+    &quot;limit&quot;: 3000000,
+    &quot;error&quot;: null,
+    &quot;required_step&quot;: []
+  },
+  {
+    &quot;lender_code&quot;: &quot;FIBE&quot;,
+    &quot;loan_type&quot;: &quot;CREDIT_LINE&quot;,
+    &quot;loan_amount&quot;: 604800,
+    &quot;status&quot;: &quot;SUCCESS&quot;,
+    &quot;existing_eligibility&quot;: {
+      &quot;status&quot;: &quot;ACTIVE&quot;,
+      &quot;sanctioned_limit&quot;: 3600000,
+      &quot;current_limit&quot;: 3600000,
+      &quot;expiry&quot;: &quot;2031-07-04T11:49:07.289492522Z&quot;,
+      &quot;steps&quot;: [
+        {
+          &quot;expiry&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+          &quot;step&quot;: &quot;KYC_COMPLETED&quot;
+        },
+        {
+          &quot;expiry&quot;: &quot;2026-10-03T11:49:07.289496322Z&quot;,
+          &quot;step&quot;: &quot;REPAYMENT_SETUP_COMPLETED&quot;
+        }
+      ],
+      &quot;is_eligible&quot;: true
+    },
+    &quot;emi_plans&quot;: [
+      {
+        &quot;apr&quot;: &quot;38.69&quot;,
+        &quot;charge_details&quot;: [
+          {
+            &quot;sub_charges&quot;: [
+              {
+                &quot;charge_code&quot;: &quot;GST&quot;,
+                &quot;charge_value&quot;: &quot;18.00&quot;,
+                &quot;charge_type&quot;: &quot;PERCENTAGE&quot;
+              }
+            ],
+            &quot;charge_code&quot;: &quot;PROCESSING_FEE&quot;,
+            &quot;charge_value&quot;: &quot;2.25&quot;,
+            &quot;charge_type&quot;: &quot;PERCENTAGE&quot;
+          }
+        ],
+        &quot;tenure&quot;: 3,
+        &quot;roi&quot;: &quot;22.00&quot;,
+        &quot;emi_type&quot;: &quot;STANDARD&quot;
+      },
+      {
+        &quot;apr&quot;: &quot;31.61&quot;,
+        &quot;charge_details&quot;: [
+          {
+            &quot;sub_charges&quot;: [
+              {
+                &quot;charge_code&quot;: &quot;GST&quot;,
+                &quot;charge_value&quot;: &quot;18.00&quot;,
+                &quot;charge_type&quot;: &quot;PERCENTAGE&quot;
+              }
+            ],
+            &quot;charge_code&quot;: &quot;PROCESSING_FEE&quot;,
+            &quot;charge_value&quot;: &quot;2.25&quot;,
+            &quot;charge_type&quot;: &quot;PERCENTAGE&quot;
+          }
+        ],
+        &quot;tenure&quot;: 6,
+        &quot;roi&quot;: &quot;22.00&quot;,
+        &quot;emi_type&quot;: &quot;STANDARD&quot;
+      },
+      {
+        &quot;apr&quot;: &quot;28.78&quot;,
+        &quot;charge_details&quot;: [
+          {
+            &quot;sub_charges&quot;: [
+              {
+                &quot;charge_code&quot;: &quot;GST&quot;,
+                &quot;charge_value&quot;: &quot;18.00&quot;,
+                &quot;charge_type&quot;: &quot;PERCENTAGE&quot;
+              }
+            ],
+            &quot;charge_code&quot;: &quot;PROCESSING_FEE&quot;,
+            &quot;charge_value&quot;: &quot;2.25&quot;,
+            &quot;charge_type&quot;: &quot;PERCENTAGE&quot;
+          }
+        ],
+        &quot;tenure&quot;: 9,
+        &quot;roi&quot;: &quot;22.00&quot;,
+        &quot;emi_type&quot;: &quot;STANDARD&quot;
+      }
+    ],
+    &quot;limit&quot;: 5000000,
+    &quot;error&quot;: null,
+    &quot;required_step&quot;: []
+  },
+  {
+    &quot;lender_code&quot;: &quot;TVS_CREDIT&quot;,
+    &quot;loan_type&quot;: &quot;TERM_LOAN&quot;,
+    &quot;loan_amount&quot;: 604800,
+    &quot;status&quot;: &quot;SUCCESS&quot;,
+    &quot;existing_eligibility&quot;: null,
+    &quot;emi_plans&quot;: [
+      {
+        &quot;apr&quot;: &quot;28.70&quot;,
+        &quot;charge_details&quot;: [
+          {
+            &quot;sub_charges&quot;: [
+              {
+                &quot;charge_code&quot;: &quot;GST&quot;,
+                &quot;charge_value&quot;: &quot;3582&quot;,
+                &quot;charge_type&quot;: &quot;FLAT&quot;
+              }
+            ],
+            &quot;charge_code&quot;: &quot;PROCESSING_FEE&quot;,
+            &quot;charge_value&quot;: &quot;19900&quot;,
+            &quot;charge_type&quot;: &quot;FLAT&quot;
+          }
+        ],
+        &quot;tenure&quot;: 12,
+        &quot;roi&quot;: &quot;22.00&quot;,
+        &quot;emi_type&quot;: &quot;STANDARD&quot;
+      }
+    ],
+    &quot;limit&quot;: 3000000,
+    &quot;error&quot;: null,
+    &quot;required_step&quot;: []
+  }
+]</pre></details></td>
+      <td class="val-cell actual-col"><em class="null-val">null</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-mismatch">value mismatch</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">SUCCESS</span></td>
+      <td class="val-cell actual-col"><span class="scalar-val">PENDING</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-3">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">LSP-FetchOfferRequest_REQUEST</span>
+      <span class="tag-meta">2 entries · <strong>12</strong> differences</span>
+    </summary>
+    <div class="tag-body"><details class="comp-entry" open>
+        <summary class="comp-entry-summary"><span class="entry-label">[19] LSP-FetchOfferRequest_REQUEST CORE→GATEWAY</span> <span class="ts">7:01:43 PM</span> <span class="diff-badge">6 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>loanApplication.applicants[0].productData</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplication.applicants[0].businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000.00</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplication.borrower.organizationDetails</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-h00elu7t178">{}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplication.borrower.businessDetails.entityCategory</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">INDIVIDUAL</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplication.borrower.businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplication.borrower.profileDetails.addressType</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">DELIVERY</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[25] LSP-FetchOfferRequest_REQUEST CORE→GATEWAY</span> <span class="ts">7:01:45 PM</span> <span class="diff-badge">6 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>loanApplication.applicants[0].productData</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplication.applicants[0].businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000.00</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplication.borrower.organizationDetails</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-rtjy3nnss3p">{}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplication.borrower.businessDetails.entityCategory</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">INDIVIDUAL</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplication.borrower.businessDetails.monthlyIncome</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">50000</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplication.borrower.profileDetails.addressType</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">DELIVERY</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-4">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">LSP-FetchOfferRequest_RESPONSE</span>
+      <span class="tag-meta">2 entries · <strong>2</strong> differences</span>
+    </summary>
+    <div class="tag-body"><details class="comp-entry" open>
+        <summary class="comp-entry-summary"><span class="entry-label">[20] LSP-FetchOfferRequest_RESPONSE GATEWAY→CORE</span> <span class="ts">7:01:43 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>root</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-i25ksq1syr">{
+  &quot;ack&quot;: {
+    &quot;error&quot;: &quot;0&quot;,
+    &quot;timestamp&quot;: &quot;2026-07-06T13:31:43Z&quot;,
+    &quot;traceId&quot;: &quot;LSPa6e03c0036ad4ed584dfd911e5f4f5f2&quot;
+  }
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[26] FETCH_OFFER_ASYNC_RESPONSE_REQUEST GATEWAY→LSP</span> <span class="ts">7:01:45 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>root</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-28ktfwbkv27">{
+  &quot;ack&quot;: {
+    &quot;error&quot;: &quot;0&quot;,
+    &quot;timestamp&quot;: &quot;2026-07-06T13:31:45Z&quot;,
+    &quot;traceId&quot;: &quot;LSP882c1ebb66524b4b9a14e7c7fdbd95d6&quot;
+  }
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-5">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">FETCH_OFFER_ASYNC_RESPONSE_REQUEST</span>
+      <span class="tag-meta">1 entry · <strong>2</strong> differences</span>
+    </summary>
+    <div class="tag-body"><div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>eligibility.errorMessages[0]</code></td>
+      <td class="reason-cell"><span class="badge badge-mismatch">value mismatch</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">WATING FOR FIBE API RESPONSE</span></td>
+      <td class="val-cell actual-col"><span class="scalar-val">REDIS_NX_KEY_ALREADY_EXISTS</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>response.errorMessage</code></td>
+      <td class="reason-cell"><span class="badge badge-mismatch">value mismatch</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">WATING FOR FIBE API RESPONSE</span></td>
+      <td class="val-cell actual-col"><span class="scalar-val">REDIS_NX_KEY_ALREADY_EXISTS</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-6">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">FECTH_LOAN_APPLICATION_DATA_API_RESPONSE</span>
+      <span class="tag-meta">3 entries · <strong>3</strong> differences</span>
+    </summary>
+    <div class="tag-body"><details class="comp-entry" open>
+        <summary class="comp-entry-summary"><span class="entry-label">[43] FECTH_LOAN_APPLICATION_DATA_API_RESPONSE LSP→GATEWAY</span> <span class="ts">7:01:48 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">SUCCESS</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[108] FECTH_LOAN_APPLICATION_DATA_API_RESPONSE LSP→GATEWAY</span> <span class="ts">7:01:56 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">SUCCESS</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[110] FECTH_LOAN_APPLICATION_DATA_API_RESPONSE LSP→GATEWAY</span> <span class="ts">7:01:56 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">SUCCESS</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-7">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">GetLenderFlows_RESPONSE</span>
+      <span class="tag-meta">1 entry · <strong>5</strong> differences</span>
+    </summary>
+    <div class="tag-body"><div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>actionRequired</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-dzf0fziahc9">[]</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lenderFeatureConfig</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-vbr9m492uz">{
+  &quot;moduleFlows&quot;: [],
+  &quot;smallImage&quot;: &quot;&quot;,
+  &quot;getLocationConsent&quot;: false,
+  &quot;getLink&quot;: false,
+  &quot;longImage&quot;: &quot;&quot;,
+  &quot;name&quot;: &quot;&quot;,
+  &quot;grantLoanPolling&quot;: null,
+  &quot;lenderFlowName&quot;: &quot;XXXXXXXXION_FLOW&quot;,
+  &quot;isRepaymentStatusPolling&quot;: null,
+  &quot;showRepaymentConsent&quot;: null,
+  &quot;tnc&quot;: &quot;&quot;,
+  &quot;callGetJourneyLender&quot;: false,
+  &quot;moduleArrayCheckout&quot;: [],
+  &quot;redirectionType&quot;: &quot;IFRAME&quot;,
+  &quot;pollingConfig&quot;: {
+    &quot;firstRetryAfter&quot;: 1000,
+    &quot;retryAfter&quot;: 10000,
+    &quot;numOfRetries&quot;: 5
+  }
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanApplicationStatus</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">OFFER_ACCEPTED</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">SUCCESS</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>payload</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-xwy95qhv4y">{
+  &quot;loanApplicationStatus&quot;: &quot;OFFER_ACCEPTED&quot;,
+  &quot;status&quot;: &quot;SUCCESS&quot;,
+  &quot;lenderFeatureConfig&quot;: {
+    &quot;moduleFlows&quot;: [],
+    &quot;smallImage&quot;: &quot;&quot;,
+    &quot;getLocationConsent&quot;: false,
+    &quot;getLink&quot;: false,
+    &quot;longImage&quot;: &quot;&quot;,
+    &quot;name&quot;: &quot;&quot;,
+    &quot;grantLoanPolling&quot;: null,
+    &quot;lenderFlowName&quot;: &quot;REDIRECTION_FLOW&quot;,
+    &quot;isRepaymentStatusPolling&quot;: null,
+    &quot;showRepaymentConsent&quot;: null,
+    &quot;tnc&quot;: &quot;&quot;,
+    &quot;callGetJourneyLender&quot;: false,
+    &quot;moduleArrayCheckout&quot;: [],
+    &quot;redirectionType&quot;: &quot;IFRAME&quot;,
+    &quot;pollingConfig&quot;: {
+      &quot;firstRetryAfter&quot;: 1000,
+      &quot;retryAfter&quot;: 10000,
+      &quot;numOfRetries&quot;: 5
+    }
+  },
+  &quot;sessionToken&quot;: &quot;LSP8605734c2c7944d9b3a7b9e65ab3adbc&quot;,
+  &quot;url&quot;: &quot;XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXH4SUnC20260705132845&amp;utm_source=FLIPKARTJUSPAY&quot;,
+  &quot;userId&quot;: &quot;LSP577810fe47054705b4af29e8c523918a&quot;,
+  &quot;deviceTokenId&quot;: &quot;LSP257965efeb434f6a9561759cb07430f3&quot;,
+  &quot;actionRequired&quot;: [],
+  &quot;offerId&quot;: &quot;LSPaea49c6b0d2d40b696c36238b1e7f2ea&quot;
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-8">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">LSP-GetStatus_RESPONSE</span>
+      <span class="tag-meta">8 entries · <strong>8</strong> differences</span>
+    </summary>
+    <div class="tag-body"><details class="comp-entry" open>
+        <summary class="comp-entry-summary"><span class="entry-label">[60] LSP-GetStatus_RESPONSE GATEWAY→CORE</span> <span class="ts">7:01:51 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-l0zy2l5apdf">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[66] LSP-GetStatus_RESPONSE GATEWAY→CORE</span> <span class="ts">7:01:52 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-z4095odaj9s">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[78] LSP-GetStatus_RESPONSE GATEWAY→CORE</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-u25kymsni0c">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[84] LSP-GetStatus_RESPONSE GATEWAY→CORE</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-gdts1bguv1">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[90] LSP-GetStatus_RESPONSE GATEWAY→CORE</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-4sk54yj42gv">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[96] LSP-GetStatus_RESPONSE GATEWAY→CORE</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-hexon7z87d4">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[102] LSP-GetStatus_RESPONSE GATEWAY→CORE</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-ofi2s8efag">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[120] LSP-GetStatus_RESPONSE GATEWAY→CORE</span> <span class="ts">7:01:58 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-6a2hg3vo2me">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-9">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">JuspaySDK-FetchStatus_RESPONSE</span>
+      <span class="tag-meta">8 entries · <strong>80</strong> differences</span>
+    </summary>
+    <div class="tag-body"><details class="comp-entry" open>
+        <summary class="comp-entry-summary"><span class="entry-label">[61] JuspaySDK-FetchStatus_RESPONSE WRAPPER→APP</span> <span class="ts">7:01:52 PM</span> <span class="diff-badge">10 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>amount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>error</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>interestAmount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lastCompletedState</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">REPAYMENT_SETUP_COMPLETED</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lender</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-0hiw49eazwju">{
+  &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+  &quot;name&quot;: &quot;XXbe&quot;,
+  &quot;orgId&quot;: &quot;FIBE&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanStatus</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>numberOfInstallments</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">SUCCESS</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>statusSource</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">LENDER</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>payload</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-zk5keimshnm">{
+  &quot;loanStatus&quot;: null,
+  &quot;status&quot;: &quot;SUCCESS&quot;,
+  &quot;interestAmount&quot;: null,
+  &quot;numberOfInstallments&quot;: null,
+  &quot;error&quot;: null,
+  &quot;lendersLoanId&quot;: null,
+  &quot;lspLoanId&quot;: null,
+  &quot;amount&quot;: null,
+  &quot;lender&quot;: {
+    &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+    &quot;name&quot;: &quot;Fibe&quot;,
+    &quot;orgId&quot;: &quot;FIBE&quot;
+  },
+  &quot;txnUuid&quot;: &quot;PZT2607051857Y9UQU01&quot;,
+  &quot;statusSource&quot;: &quot;LENDER&quot;,
+  &quot;lastCompletedState&quot;: &quot;REPAYMENT_SETUP_COMPLETED&quot;
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[67] JuspaySDK-FetchStatus_RESPONSE WRAPPER→APP</span> <span class="ts">7:01:53 PM</span> <span class="diff-badge">10 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>amount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>error</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>interestAmount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lastCompletedState</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">REPAYMENT_SETUP_COMPLETED</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lender</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-903faea7atc">{
+  &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+  &quot;name&quot;: &quot;XXbe&quot;,
+  &quot;orgId&quot;: &quot;FIBE&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanStatus</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>numberOfInstallments</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">SUCCESS</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>statusSource</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">LENDER</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>payload</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-ub2jqe02n5h">{
+  &quot;loanStatus&quot;: null,
+  &quot;status&quot;: &quot;SUCCESS&quot;,
+  &quot;interestAmount&quot;: null,
+  &quot;numberOfInstallments&quot;: null,
+  &quot;error&quot;: null,
+  &quot;lendersLoanId&quot;: null,
+  &quot;lspLoanId&quot;: null,
+  &quot;amount&quot;: null,
+  &quot;lender&quot;: {
+    &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+    &quot;name&quot;: &quot;Fibe&quot;,
+    &quot;orgId&quot;: &quot;FIBE&quot;
+  },
+  &quot;txnUuid&quot;: &quot;PZT2607051857Y9UQU01&quot;,
+  &quot;statusSource&quot;: &quot;LENDER&quot;,
+  &quot;lastCompletedState&quot;: &quot;REPAYMENT_SETUP_COMPLETED&quot;
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[79] JuspaySDK-FetchStatus_RESPONSE WRAPPER→APP</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">10 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>amount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>error</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>interestAmount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lastCompletedState</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">REPAYMENT_SETUP_COMPLETED</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lender</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-jsemrkr3slk">{
+  &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+  &quot;name&quot;: &quot;XXbe&quot;,
+  &quot;orgId&quot;: &quot;FIBE&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanStatus</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>numberOfInstallments</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">SUCCESS</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>statusSource</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">LENDER</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>ack</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-7yfgcy5lrl6">{
+  &quot;error&quot;: &quot;0&quot;,
+  &quot;timestamp&quot;: &quot;2026-07-06T13:31:54Z&quot;,
+  &quot;traceId&quot;: &quot;LSP01850b086f744c80898f909446398d19&quot;
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[85] JuspaySDK-FetchStatus_RESPONSE WRAPPER→APP</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">10 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>amount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>error</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>interestAmount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lastCompletedState</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">REPAYMENT_SETUP_COMPLETED</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lender</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-46mlb4vv2e9">{
+  &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+  &quot;name&quot;: &quot;XXbe&quot;,
+  &quot;orgId&quot;: &quot;FIBE&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanStatus</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>numberOfInstallments</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">SUCCESS</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>statusSource</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">LENDER</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>payload</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-6hvg2gpx9f3">{
+  &quot;loanStatus&quot;: null,
+  &quot;status&quot;: &quot;SUCCESS&quot;,
+  &quot;interestAmount&quot;: null,
+  &quot;numberOfInstallments&quot;: null,
+  &quot;error&quot;: null,
+  &quot;lendersLoanId&quot;: null,
+  &quot;lspLoanId&quot;: null,
+  &quot;amount&quot;: null,
+  &quot;lender&quot;: {
+    &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+    &quot;name&quot;: &quot;Fibe&quot;,
+    &quot;orgId&quot;: &quot;FIBE&quot;
+  },
+  &quot;txnUuid&quot;: &quot;PZT2607051857Y9UQU01&quot;,
+  &quot;statusSource&quot;: &quot;LENDER&quot;,
+  &quot;lastCompletedState&quot;: &quot;REPAYMENT_SETUP_COMPLETED&quot;
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[91] JuspaySDK-FetchStatus_RESPONSE WRAPPER→APP</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">10 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>amount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>error</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>interestAmount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lastCompletedState</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">REPAYMENT_SETUP_COMPLETED</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lender</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-7xwhpyazn47">{
+  &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+  &quot;name&quot;: &quot;XXbe&quot;,
+  &quot;orgId&quot;: &quot;FIBE&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanStatus</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>numberOfInstallments</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">SUCCESS</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>statusSource</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">LENDER</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>payload</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-xgvhlgnv34">{
+  &quot;loanStatus&quot;: null,
+  &quot;status&quot;: &quot;SUCCESS&quot;,
+  &quot;interestAmount&quot;: null,
+  &quot;numberOfInstallments&quot;: null,
+  &quot;error&quot;: null,
+  &quot;lendersLoanId&quot;: null,
+  &quot;lspLoanId&quot;: null,
+  &quot;amount&quot;: null,
+  &quot;lender&quot;: {
+    &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+    &quot;name&quot;: &quot;Fibe&quot;,
+    &quot;orgId&quot;: &quot;FIBE&quot;
+  },
+  &quot;txnUuid&quot;: &quot;PZT2607051857Y9UQU01&quot;,
+  &quot;statusSource&quot;: &quot;LENDER&quot;,
+  &quot;lastCompletedState&quot;: &quot;REPAYMENT_SETUP_COMPLETED&quot;
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[97] JuspaySDK-FetchStatus_RESPONSE WRAPPER→APP</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">10 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>amount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>error</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>interestAmount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lastCompletedState</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">REPAYMENT_SETUP_COMPLETED</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lender</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-u88bwg9o7z">{
+  &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+  &quot;name&quot;: &quot;XXbe&quot;,
+  &quot;orgId&quot;: &quot;FIBE&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanStatus</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>numberOfInstallments</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">SUCCESS</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>statusSource</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">LENDER</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>payload</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-lufanxoy1j">{
+  &quot;loanStatus&quot;: null,
+  &quot;status&quot;: &quot;SUCCESS&quot;,
+  &quot;interestAmount&quot;: null,
+  &quot;numberOfInstallments&quot;: null,
+  &quot;error&quot;: null,
+  &quot;lendersLoanId&quot;: null,
+  &quot;lspLoanId&quot;: null,
+  &quot;amount&quot;: null,
+  &quot;lender&quot;: {
+    &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+    &quot;name&quot;: &quot;Fibe&quot;,
+    &quot;orgId&quot;: &quot;FIBE&quot;
+  },
+  &quot;txnUuid&quot;: &quot;PZT2607051857Y9UQU01&quot;,
+  &quot;statusSource&quot;: &quot;LENDER&quot;,
+  &quot;lastCompletedState&quot;: &quot;REPAYMENT_SETUP_COMPLETED&quot;
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[103] JuspaySDK-FetchStatus_RESPONSE WRAPPER→APP</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">10 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>amount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>error</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>interestAmount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lastCompletedState</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">REPAYMENT_SETUP_COMPLETED</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lender</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-3kwqhvqerxa">{
+  &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+  &quot;name&quot;: &quot;XXbe&quot;,
+  &quot;orgId&quot;: &quot;FIBE&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanStatus</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>numberOfInstallments</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">SUCCESS</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>statusSource</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">LENDER</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>payload</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-r545xhj9nr8">{
+  &quot;loanStatus&quot;: null,
+  &quot;status&quot;: &quot;SUCCESS&quot;,
+  &quot;interestAmount&quot;: null,
+  &quot;numberOfInstallments&quot;: null,
+  &quot;error&quot;: null,
+  &quot;lendersLoanId&quot;: null,
+  &quot;lspLoanId&quot;: null,
+  &quot;amount&quot;: null,
+  &quot;lender&quot;: {
+    &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+    &quot;name&quot;: &quot;Fibe&quot;,
+    &quot;orgId&quot;: &quot;FIBE&quot;
+  },
+  &quot;txnUuid&quot;: &quot;PZT2607051857Y9UQU01&quot;,
+  &quot;statusSource&quot;: &quot;LENDER&quot;,
+  &quot;lastCompletedState&quot;: &quot;REPAYMENT_SETUP_COMPLETED&quot;
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[121] JuspaySDK-FetchStatus_RESPONSE WRAPPER→APP</span> <span class="ts">7:01:58 PM</span> <span class="diff-badge">10 diffs</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>amount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>error</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>interestAmount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lastCompletedState</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">GRANTED</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>lender</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-r4evo4s5vjg">{
+  &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+  &quot;name&quot;: &quot;XXbe&quot;,
+  &quot;orgId&quot;: &quot;FIBE&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>loanStatus</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>numberOfInstallments</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">SUCCESS</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>statusSource</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">LENDER</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr>
+<tr>
+      <td class="path-cell"><code>payload</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-znwnbj0ceir">{
+  &quot;loanStatus&quot;: null,
+  &quot;status&quot;: &quot;SUCCESS&quot;,
+  &quot;interestAmount&quot;: null,
+  &quot;numberOfInstallments&quot;: null,
+  &quot;error&quot;: null,
+  &quot;lendersLoanId&quot;: null,
+  &quot;lspLoanId&quot;: null,
+  &quot;amount&quot;: null,
+  &quot;lender&quot;: {
+    &quot;id&quot;: &quot;LSP53b4665029c14fef92726fb4e175b1a5&quot;,
+    &quot;name&quot;: &quot;Fibe&quot;,
+    &quot;orgId&quot;: &quot;FIBE&quot;
+  },
+  &quot;txnUuid&quot;: &quot;PZT2607051857Y9UQU01&quot;,
+  &quot;statusSource&quot;: &quot;LENDER&quot;,
+  &quot;lastCompletedState&quot;: &quot;REPAYMENT_SETUP_COMPLETED&quot;
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-10">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">GET_CHECKOUT_STATUS_LS_REQUEST</span>
+      <span class="tag-meta">1 entry · <strong>1</strong> difference</span>
+    </summary>
+    <div class="tag-body"><div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>data</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">FwTr16hig+ktj43vqIQqNLr3BEht8SIeTTUFzjtbPDIM/SwEPPwS04Khj8fgmAhGzsFS4tqji/eO3utw1o7Z8eLeDaBr+9X28EdmGvrUI0h/8/ZFtUYDTyc1xkH96hBK</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-11">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">LOAN_STATUS_ASYNC_RESPONSE_REQUEST</span>
+      <span class="tag-meta">3 entries · <strong>3</strong> differences</span>
+    </summary>
+    <div class="tag-body"><details class="comp-entry" open>
+        <summary class="comp-entry-summary"><span class="entry-label">[72] LOAN_STATUS_ASYNC_RESPONSE_REQUEST GATEWAY→LSP</span> <span class="ts">7:01:54 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-5tqhsjf4va6">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[132] LOAN_STATUS_ASYNC_RESPONSE_REQUEST GATEWAY→LSP</span> <span class="ts">7:02:09 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-qwrjcsil28s">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[141] LOAN_STATUS_ASYNC_RESPONSE_REQUEST GATEWAY→LSP</span> <span class="ts">7:02:10 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-zkoa2xseqkn">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-12">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">PRE_DISBURSAL_CHECK_REQUEST</span>
+      <span class="tag-meta">1 entry · <strong>1</strong> difference</span>
+    </summary>
+    <div class="tag-body"><div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>dpAmount</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">key missing in actual</span></td>
+      <td class="val-cell expected-col"><span class="scalar-val">0</span></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-13">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">WEBHOOK_RESPONSE</span>
+      <span class="tag-meta">3 entries · <strong>3</strong> differences</span>
+    </summary>
+    <div class="tag-body"><details class="comp-entry" open>
+        <summary class="comp-entry-summary"><span class="entry-label">[114] WEBHOOK_RESPONSE LSP→GATEWAY</span> <span class="ts">7:01:56 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">SUCCESS</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[158] WEBHOOK_RESPONSE LSP→GATEWAY</span> <span class="ts">7:02:15 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">SUCCESS</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[254] WEBHOOK_RESPONSE LSP→GATEWAY</span> <span class="ts">7:02:54 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>status</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">extra key in actual</span></td>
+      <td class="val-cell expected-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td class="val-cell actual-col"><span class="scalar-val">SUCCESS</span></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-14">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">Lsp-LoanStatusRequest_RESPONSE</span>
+      <span class="tag-meta">2 entries · <strong>2</strong> differences</span>
+    </summary>
+    <div class="tag-body"><details class="comp-entry" open>
+        <summary class="comp-entry-summary"><span class="entry-label">[129] GET_CHECKOUT_STATUS_LS_REQUEST GATEWAY→LENDER</span> <span class="ts">7:02:09 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>root</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-5j62lxra1ct">{
+  &quot;ack&quot;: {
+    &quot;error&quot;: &quot;0&quot;,
+    &quot;timestamp&quot;: &quot;2026-07-06T13:32:09Z&quot;,
+    &quot;traceId&quot;: &quot;LSP860af981d86b40408719637dff091b9a&quot;
+  }
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details>
+<details class="comp-entry" >
+        <summary class="comp-entry-summary"><span class="entry-label">[137] Lsp-LoanStatusRequest_RESPONSE GATEWAY→CORE</span> <span class="ts">7:02:10 PM</span> <span class="diff-badge">1 diff</span></summary>
+        <div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>root</code></td>
+      <td class="reason-cell"><span class="badge badge-extra">expected missing, actual present</span></td>
+      <td class="val-cell expected-col"><em class="null-val">null</em></td>
+      <td class="val-cell actual-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-ti8xq5p3wnd">{
+  &quot;ack&quot;: {
+    &quot;error&quot;: &quot;0&quot;,
+    &quot;timestamp&quot;: &quot;2026-07-06T13:32:10Z&quot;,
+    &quot;traceId&quot;: &quot;LSP80b6d5a925534de8b64ae9c08df9ecbe&quot;
+  }
+}</pre></details></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div>
+      </details></div>
+  </details>
+<details class="tag-section tag-fail" id="tag-AM202607051858034272604322097-15">
+    <summary class="tag-summary">
+      <span class="tag-icon">❌</span>
+      <span class="tag-name">FETCH_LOAN_STATUS_RESPONSE</span>
+      <span class="tag-meta">1 entry · <strong>1</strong> difference</span>
+    </summary>
+    <div class="tag-body"><div class="table-wrap"><table class="diff-table">
+    <thead>
+      <tr>
+        <th>Path / Key</th>
+        <th>Status</th>
+        <th class="expected-col">Expected</th>
+        <th class="actual-col">Actual</th>
+        <th>Exp. Type</th>
+        <th>Act. Type</th>
+      </tr>
+    </thead>
+    <tbody><tr>
+      <td class="path-cell"><code>lineDetail.lineDetailExtensibleData.journeyData.steps[2]</code></td>
+      <td class="reason-cell"><span class="badge badge-missing">element missing in actual</span></td>
+      <td class="val-cell expected-col"><details class="json-tree"><summary class="json-summary">{ … } <span class="json-toggle">expand</span></summary><pre class="json-block" id="json-knlf7ncvr9l">{
+  &quot;loanApplicationId&quot;: &quot;LSPacff0029479f47b19592ec399133241b&quot;,
+  &quot;expiryAt&quot;: &quot;2027-07-05T11:47:22.018031953Z&quot;,
+  &quot;state&quot;: &quot;KYC_COMPLETED&quot;
+}</pre></details></td>
+      <td class="val-cell actual-col"><em class="missing-val">&lt;missing&gt;</em></td>
+      <td colspan="2" class="type-cell dimmed">—</td>
+    </tr></tbody>
+  </table></div></div>
+  </details></div>
+  </section>
+
+  <!-- Uncovered orders -->
+  
+
+  <!-- Buffer / API failure details -->
+  
+
+  </div>
+
+</div>
+</body>
+</html>
