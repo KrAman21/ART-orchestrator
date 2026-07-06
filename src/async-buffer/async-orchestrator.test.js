@@ -92,6 +92,23 @@ test('uses 5 second wait timeout for self-trigger fallback FECTH_LOAN_APPLICATIO
   assert.equal(timeoutMs, 5000);
 });
 
+test('uses 3 second wait timeout for optional repeated LOAN STATUS API_REQUEST branch', () => {
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.config = {
+    timeoutMs: 90000
+  };
+
+  const entry = {
+    logTag: 'LOAN STATUS API_REQUEST',
+    source: 'GATEWAY',
+    destination: 'LENDER',
+    isRequest: true
+  };
+
+  const timeoutMs = orchestrator.getRequestWaitTimeoutMs(entry);
+  assert.equal(timeoutMs, 3000);
+});
+
 test('registerNearbyImmediateReplaySatisfaction marks a matching nearby replay entry as pre-satisfied', () => {
   const logs = [
     createRequestLog(0, {
@@ -352,6 +369,154 @@ test('LOAN STATUS API_REQUEST becomes optional after timeout when one prior occu
   assert.equal(shouldSkip, true);
 });
 
+test('future GATEWAY->LENDER loan status requests reserve distinct replay entries', async () => {
+  const logs = [
+    createRequestLog(127, {
+      logTag: 'LSP-GetStatus_REQUEST',
+      traceRoute: 'CORE_GATEWAY'
+    }),
+    createRequestLog(128, {
+      logTag: 'LOAN STATUS API_REQUEST',
+      traceRoute: 'GATEWAY_LENDER'
+    }),
+    createRequestLog(129, {
+      logTag: 'LOAN STATUS API_REQUEST',
+      traceRoute: 'GATEWAY_LENDER'
+    }),
+    {
+      messageNumber: 130,
+      message: {
+        log_tag: 'LOAN STATUS API_RESPONSE',
+        trace_route: 'LENDER_GATEWAY',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'TVS_CREDIT'
+      }
+    },
+    {
+      messageNumber: 131,
+      message: {
+        log_tag: 'LOAN STATUS API_RESPONSE',
+        trace_route: 'LENDER_GATEWAY',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'TVS_CREDIT'
+      }
+    }
+  ];
+
+  const validator = new LogSequenceValidator(logs);
+  validator.currentIndex = 0;
+
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.validator = validator;
+  orchestrator.preSatisfiedReplayEntries = new Map();
+  orchestrator.attachBufferedRequestKeyToPreSatisfiedEntry =
+    AsyncReplayOrchestrator.prototype.attachBufferedRequestKeyToPreSatisfiedEntry;
+  let bufferedSequence = 0;
+  orchestrator.bufferManager = {
+    claimIncomingRequestByKey: key => ({ key, request: incoming }),
+    addIncomingRequest: async request => ({
+      key: `buffer-${++bufferedSequence}-${request.requestId || 'no-id'}-${request.logTag}`,
+      deferred: { promise: Promise.resolve({ success: true }) }
+    })
+  };
+
+  const incoming = {
+    source: 'GATEWAY',
+    destination: 'LENDER',
+    logTag: 'LOAN STATUS API_REQUEST',
+    requestId: null,
+    lenderOrgId: 'TVS_CREDIT',
+    loanApplicationId: 'loan-1'
+  };
+
+  await orchestrator.maybeHandleFutureGatewayLenderRequest(
+    incoming,
+    incoming,
+    { foundInLookahead: validator.entries[1], isEarly: true }
+  );
+
+  await orchestrator.maybeHandleFutureGatewayLenderRequest(
+    incoming,
+    incoming,
+    { foundInLookahead: validator.entries[1], isEarly: true }
+  );
+
+  assert.ok(orchestrator.preSatisfiedReplayEntries.has(1));
+  assert.ok(orchestrator.preSatisfiedReplayEntries.has(2));
+  assert.equal(
+    orchestrator.preSatisfiedReplayEntries.get(1)?.bufferedRequestKey,
+    'buffer-1-no-id-LOAN STATUS API_REQUEST'
+  );
+  assert.equal(
+    orchestrator.preSatisfiedReplayEntries.get(2)?.bufferedRequestKey,
+    'buffer-2-no-id-LOAN STATUS API_REQUEST'
+  );
+});
+
+test('current GATEWAY->LENDER replay slot completes reserved buffered request instead of buffering a second same-slot request', async () => {
+  const logs = [
+    createRequestLog(127, {
+      logTag: 'LSP-GetStatus_REQUEST',
+      traceRoute: 'CORE_GATEWAY'
+    }),
+    createRequestLog(128, {
+      logTag: 'LOAN STATUS API_REQUEST',
+      traceRoute: 'GATEWAY_LENDER'
+    }),
+    {
+      messageNumber: 129,
+      message: {
+        log_tag: 'LOAN STATUS API_RESPONSE',
+        trace_route: 'LENDER_GATEWAY',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'TVS_CREDIT',
+        trace_response: { status: 'SUCCESS' }
+      }
+    }
+  ];
+
+  const orchestrator = new AsyncReplayOrchestrator(logs, {
+    timeoutMs: 10000,
+    merchantId: 'flipkart'
+  });
+  orchestrator.isRunning = true;
+  orchestrator.validator.currentIndex = 1;
+
+  const normalizedIncoming = {
+    source: 'GATEWAY',
+    destination: 'LENDER',
+    api: '/MOCK_DATA/loanStatus',
+    logTag: 'LOAN STATUS API_REQUEST',
+    sourceDestination: 'GATEWAY_LENDER',
+    payload: { data: { orderId: 'loan-1' } },
+    requestId: null,
+    lenderOrgId: 'TVS_CREDIT',
+    loanApplicationId: 'loan-1'
+  };
+
+  const reserved = await orchestrator.bufferManager.addIncomingRequest(normalizedIncoming);
+  orchestrator.registerPreSatisfiedReplayEntry(orchestrator.validator.entries[1], {
+    requestId: null,
+    reason: 'unit_test_reserved_current_gateway_lender',
+    bufferedRequestKey: reserved.key
+  });
+
+  const response = await orchestrator.maybeHandleCurrentGatewayLenderRequest(normalizedIncoming);
+  const deferredResult = await reserved.deferred.promise;
+
+  assert.equal(response.success, true);
+  assert.equal(deferredResult.success, true);
+  assert.deepEqual(deferredResult.payload, response.payload);
+  assert.equal(orchestrator.preSatisfiedReplayEntries.has(1), false);
+  assert.equal(orchestrator.validator.processedIndices.has(1), true);
+  assert.equal(orchestrator.validator.processedIndices.has(2), true);
+
+  orchestrator.bufferManager.stop();
+});
+
 test('processNextLogEntry waits briefly before skipping skippable async request', async () => {
   const logs = [
     createRequestLog(0, {
@@ -473,6 +638,68 @@ test('processNextLogEntry self-triggers configured fallback API after normal wai
   assert.equal(fallbackTimeoutMs, 9000);
   assert.equal(validator.processedIndices.has(0), true);
   assert.equal(validator.processedIndices.has(1), true);
+});
+
+test('buildFailureFallbackResponse replays expected response for timed out LSP-GetStatus request', () => {
+  const logs = [
+    createRequestLog(130, {
+      logTag: 'LSP-GetStatus_REQUEST',
+      traceRoute: 'CORE_GATEWAY',
+      requestId: 'req-1'
+    }),
+    {
+      messageNumber: 131,
+      message: {
+        log_tag: 'LSP-GetStatus_RESPONSE',
+        trace_route: 'GATEWAY_CORE',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'TVS_CREDIT',
+        trace_response: {
+          payload: {
+            status: 'SUCCESS',
+            lastCompletedState: 'GRANTED'
+          }
+        }
+      }
+    }
+  ];
+
+  const orchestrator = new AsyncReplayOrchestrator(logs, {
+    timeoutMs: 10000,
+    merchantId: 'flipkart'
+  });
+  orchestrator.orderId = 'order-1';
+  orchestrator.reportGenerator = {
+    recordReplayWarning() {}
+  };
+
+  const fallback = orchestrator.buildFailureFallbackResponse(
+    {
+      logTag: 'LSP-GetStatus_REQUEST',
+      logIndex: 0,
+      requestId: 'req-1'
+    },
+    {
+      status: 400,
+      statusText: 'Bad Request',
+      headers: {}
+    },
+    {
+      error_message: 'Forwarding failed for GATEWAY /gateway/v3.3/fetchLoanStatus: Request req-1 timed out after 10000ms. Expected response for: LSP-GetStatus_RESPONSE'
+    },
+    null
+  );
+
+  assert.ok(fallback);
+  assert.equal(fallback.reason, 'tolerated_batch_timeout_replay_response_fallback');
+  assert.equal(fallback.response.error, false);
+  assert.deepEqual(fallback.response.data, {
+    payload: {
+      status: 'SUCCESS',
+      lastCompletedState: 'GRANTED'
+    }
+  });
 });
 
 test('processNextLogEntry self-triggers GENERATE_TOKEN_API_REQUEST after 2 second buffer wait and advances replay', async () => {

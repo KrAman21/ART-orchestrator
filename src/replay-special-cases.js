@@ -198,10 +198,24 @@ export const REPLAY_SPECIAL_CASES = [
     requirePriorProcessedOccurrence: true
   },
   {
+    logTag: 'OFFER API_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated lender offer requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 3,
+    requirePriorProcessedOccurrence: true
+  },
+  {
     logTag: 'LOAN STATUS API_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow repeated loan-status lender requests to be skipped after one successful occurrence if later repeats never arrive.',
-    optionalAfterSeconds: 5,
+    optionalAfterSeconds: 3,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'LOAN ACTIVATE API_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated loan-activate lender requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 4,
     requirePriorProcessedOccurrence: true
   }
 ];
@@ -239,6 +253,7 @@ export const IMMEDIATE_DIRECT_REPLAY_LOG_TAGS = new Set([
   'LOCK_TENURE_REQUEST',
   'PROFILE_INGESTION_REQUEST',
   'CALCULATE_EMI_REQUEST',
+  'OFFER API_REQUEST',
   'GENERATE PARTNER AUTH TOKEN_REQUEST',
   'OTP GENERATION API_REQUEST',
   'OTP AUTHENTICATION API_REQUEST',
@@ -249,6 +264,10 @@ export const IMMEDIATE_DIRECT_REPLAY_LOG_TAGS = new Set([
   'GET_CHECKOUT_STATUS_LST_REQUEST',
   'GET_CHECKOUT_STATUS_FO_REQUEST',
   'GET_CHECKOUT_STATUS_FO_ENCRYPTED_REQUEST'
+]);
+
+export const IMMEDIATE_FUTURE_CORE_GATEWAY_REQUEST_LOG_TAGS = new Set([
+  'TriggerLenderOTPRequest-LSP_REQUEST'
 ]);
 
 export const SELF_TRIGGER_FALLBACK_WAIT_TIMEOUT_OVERRIDES_MS = {
@@ -263,7 +282,8 @@ export const TOLERATED_BATCH_TIMEOUT_LOG_TAGS = new Set([
   'FlipKart-RealTimeEligibility_REQUEST',
   'LSP-FetchOfferSync_REQUEST',
   'GetAgreementDataRequest-LSP_REQUEST',
-  'FlipKart-CreateLoan_REQUEST'
+  'FlipKart-CreateLoan_REQUEST',
+  'LSP-GetStatus_REQUEST'
 ]);
 
 export const THEMIS_ELIGIBILITY_LOG_TAG = 'Themis-Eligibility_REQUEST';
@@ -291,6 +311,10 @@ export function isSelfTriggerFallbackApiLogTag(logTag) {
 
 export function isImmediateDirectReplayLogTag(logTag) {
   return IMMEDIATE_DIRECT_REPLAY_LOG_TAGS.has(logTag);
+}
+
+export function isImmediateFutureCoreGatewayRequestLogTag(logTag) {
+  return IMMEDIATE_FUTURE_CORE_GATEWAY_REQUEST_LOG_TAGS.has(logTag);
 }
 
 export function isToleratedBatchTimeoutApiLogTag(logTag) {
