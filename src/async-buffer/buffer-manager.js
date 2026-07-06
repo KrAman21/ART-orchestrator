@@ -826,6 +826,29 @@ export class BufferManager {
     return oldest.entry;
   }
 
+  claimIncomingRequestByKey(key, expectedEntry = null) {
+    const entry = this.incomingRequests.get(key);
+    if (!entry || entry.state !== 'buffered') {
+      return null;
+    }
+
+    if (expectedEntry && !this._matchesEntry(entry.request, expectedEntry)) {
+      return null;
+    }
+
+    entry.state = 'claimed';
+    entry.claimedAt = Date.now();
+
+    logger.info('Claimed buffered request by exact key', {
+      key,
+      expected: expectedEntry?.toString?.() || null,
+      bufferedAt: entry.timestamp,
+      claimedAt: entry.claimedAt
+    });
+
+    return entry;
+  }
+
   claimPreservedReplayRequest(key, expectedEntry) {
     const entry = this.incomingRequests.get(key);
     if (!entry || entry.state !== 'buffered' || !entry.preservedOnRewind) {

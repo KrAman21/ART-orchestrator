@@ -201,7 +201,14 @@ export const REPLAY_SPECIAL_CASES = [
     logTag: 'LOAN STATUS API_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow repeated loan-status lender requests to be skipped after one successful occurrence if later repeats never arrive.',
-    optionalAfterSeconds: 5,
+    optionalAfterSeconds: 3,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'LOAN ACTIVATE API_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated loan-activate lender requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 4,
     requirePriorProcessedOccurrence: true
   }
 ];
@@ -263,7 +270,8 @@ export const TOLERATED_BATCH_TIMEOUT_LOG_TAGS = new Set([
   'FlipKart-RealTimeEligibility_REQUEST',
   'LSP-FetchOfferSync_REQUEST',
   'GetAgreementDataRequest-LSP_REQUEST',
-  'FlipKart-CreateLoan_REQUEST'
+  'FlipKart-CreateLoan_REQUEST',
+  'LSP-GetStatus_REQUEST'
 ]);
 
 export const THEMIS_ELIGIBILITY_LOG_TAG = 'Themis-Eligibility_REQUEST';

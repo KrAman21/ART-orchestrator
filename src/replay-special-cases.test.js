@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getOptionalRepeatPolicy, isImmediateDirectReplayLogTag, isPollingApiLogTag, isSelfTriggerFallbackApiLogTag } from './replay-special-cases.js';
+import { getOptionalRepeatPolicy, isImmediateDirectReplayLogTag, isPollingApiLogTag, isSelfTriggerFallbackApiLogTag, isToleratedBatchTimeoutApiLogTag } from './replay-special-cases.js';
 
 test('FlipKart getRedirection request is treated as polling rewind checkpoint', () => {
   assert.equal(isPollingApiLogTag('FlipKart-GetRedirectionURL_REQUEST'), true);
@@ -29,6 +29,10 @@ test('fetch loan application data request is treated as a self-trigger fallback 
 
 test('loan settlement pt request is treated as a self-trigger fallback API', () => {
   assert.equal(isSelfTriggerFallbackApiLogTag('LOAN_SETTLEMENT_PT_REQUEST'), false);
+});
+
+test('lsp get status request is treated as a tolerated timeout replay fallback API', () => {
+  assert.equal(isToleratedBatchTimeoutApiLogTag('LSP-GetStatus_REQUEST'), true);
 });
 
 test('check eligibility lender request becomes skippable after real-time eligibility branch advances', () => {

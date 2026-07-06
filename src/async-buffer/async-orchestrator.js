@@ -97,6 +97,14 @@ function normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanAppli
   };
 }
 
+function isReplayEntryReserved(orchestrator, entry) {
+  if (!orchestrator?.preSatisfiedReplayEntries || !entry) {
+    return false;
+  }
+
+  return orchestrator.preSatisfiedReplayEntries.has(entry.index);
+}
+
 function remapReplayIds(value, stateManager, logTag, keyHint = null, forcedLoanApplicationId = null) {
   if (typeof value === 'string') {
     return stateManager?.remapReplayValue
@@ -1940,6 +1948,22 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return timeoutMs;
     }
 
+    const optionalRepeatPolicy = getOptionalRepeatPolicy(this.config, entry);
+    if (optionalRepeatPolicy) {
+      const timeoutMs = optionalRepeatPolicy.optionalAfterSeconds * 1000;
+      logger.info('Using optional-repeat wait timeout override', {
+        entry: entry?.toString?.(),
+        logTag: entry?.logTag,
+        timeoutMs,
+        optionalAfterSeconds: optionalRepeatPolicy.optionalAfterSeconds,
+        requirePriorProcessedOccurrence:
+          optionalRepeatPolicy.requirePriorProcessedOccurrence,
+        requireBranchAdvance: optionalRepeatPolicy.requireBranchAdvance,
+        allowSkipWithoutAdvance: optionalRepeatPolicy.allowSkipWithoutAdvance || false
+      });
+      return timeoutMs;
+    }
+
     const baseTimeoutMs = this.config.timeoutMs;
     const perLogTagOverrideMs = RETRY_TIMEOUT_OVERRIDES[entry.logTag]
       ? RETRY_TIMEOUT_OVERRIDES[entry.logTag] * 1000
@@ -2881,10 +2905,6 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return null;
     }
 
-    if (!isImmediateDirectReplayLogTag(incoming.logTag)) {
-      return null;
-    }
-
     const currentEntry = this.validator.getCurrentEntry();
     if (
       !currentEntry?.isRequest ||
@@ -2901,6 +2921,14 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     };
 
     if (!this.validator.matchesExpected(currentEntry, normalizedIncoming)) {
+      return null;
+    }
+
+    const marker = this.preSatisfiedReplayEntries?.get(currentEntry.index) || null;
+    const shouldReplayImmediately =
+      isImmediateDirectReplayLogTag(incoming.logTag) || !!marker;
+
+    if (!shouldReplayImmediately) {
       return null;
     }
 
@@ -2927,7 +2955,9 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       entry: currentEntry.toString(),
       requestId: incoming.requestId,
       logTag: incoming.logTag,
-      lenderOrgId: incoming.lenderOrgId
+      lenderOrgId: incoming.lenderOrgId,
+      hasPreSatisfiedMarker: !!marker,
+      preSatisfiedBufferKey: marker?.bufferedRequestKey || null
     });
 
     const responseEntry = this.findCorrespondingResponse(currentEntry, true);
@@ -2943,10 +2973,35 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return fallbackResponse;
     }
 
-    this.recordObservedProcessedResponse(
-      responseEntry,
-      transformRequest(responseEntry.payload, responseEntry.logTag)
-    );
+    const replayResponse = {
+      success: true,
+      payload: transformRequest(responseEntry.payload, responseEntry.logTag)
+    };
+
+    this.recordObservedProcessedResponse(responseEntry, replayResponse.payload);
+
+    let resolvedBufferedGatewayLenderRequest = false;
+    const reservedBuffered =
+      (marker?.bufferedRequestKey
+        ? this.bufferManager?.claimIncomingRequestByKey?.(marker.bufferedRequestKey, currentEntry)
+        : null) ||
+      null;
+
+    if (reservedBuffered) {
+      this.bufferManager?.completeIncomingRequest?.(reservedBuffered.key, replayResponse);
+      resolvedBufferedGatewayLenderRequest = true;
+      logger.info('Resolved reserved buffered GATEWAY->LENDER request while serving current replay slot', {
+        requestEntry: currentEntry.toString(),
+        responseEntry: responseEntry.toString(),
+        bufferKey: reservedBuffered.key,
+        requestId: reservedBuffered.request?.requestId || null,
+        logTag: reservedBuffered.request?.logTag || null
+      });
+    }
+
+    if (marker) {
+      this.preSatisfiedReplayEntries.delete(currentEntry.index);
+    }
 
     if (!this.validator.processedIndices.has(currentEntry.index)) {
       this.validator.markProcessed(currentEntry);
@@ -2983,13 +3038,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       requestEntry: currentEntry.toString(),
       responseEntry: responseEntry.toString(),
       requestId: incoming.requestId,
-      logTag: incoming.logTag
+      logTag: incoming.logTag,
+      resolvedBufferedGatewayLenderRequest
     });
 
-    return {
-      success: true,
-      payload: transformRequest(responseEntry.payload, responseEntry.logTag)
-    };
+    return replayResponse;
   }
 
   async maybeHandleCurrentExpectedIncomingRequest(incoming) {
@@ -3092,11 +3145,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     }
 
     let futureEntry = effectiveValidation?.foundInLookahead || null;
+    if (futureEntry && isReplayEntryReserved(this, futureEntry)) {
+      futureEntry = null;
+    }
 
     if (!futureEntry && effectiveValidation?.isEarly) {
       futureEntry = this.validator.entries.find(entry =>
         entry.index > this.validator.currentIndex &&
         !this.validator.processedIndices.has(entry.index) &&
+        !isReplayEntryReserved(this, entry) &&
         entry.isRequest &&
         this.validator.matchesExpected(entry, normalizedIncoming)
       ) || null;
@@ -3120,6 +3177,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     });
 
     const buffered = await this.bufferManager.addIncomingRequest(normalizedIncoming);
+    this.attachBufferedRequestKeyToPreSatisfiedEntry(futureEntry, buffered.key);
 
     logger.info('Buffered future GATEWAY->LENDER request until replay reaches its recorded position', {
       currentEntry: currentEntry.toString(),
@@ -3331,6 +3389,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       entry.index >= currentIndex &&
       entry.index <= currentIndex + 4 &&
       !this.validator.processedIndices.has(entry.index) &&
+      !isReplayEntryReserved(this, entry) &&
       entry.isRequest &&
       this.validator.matchesExpected(entry, incoming)
     ) || null;
@@ -3367,7 +3426,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       responseIndex: responseEntry?.index ?? null,
       satisfiedAt: Date.now(),
       requestId: options.requestId || null,
-      reason: options.reason || 'pre_satisfied_registration'
+      reason: options.reason || 'pre_satisfied_registration',
+      bufferedRequestKey: options.bufferedRequestKey || null
     });
 
     logger.info('Registered pre-satisfied replay entry after immediate handling', {
@@ -3376,6 +3436,27 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       requestId: options.requestId || null,
       reason: options.reason || 'pre_satisfied_registration',
       currentIndex: this.validator?.currentIndex ?? null
+    });
+
+    return true;
+  }
+
+  attachBufferedRequestKeyToPreSatisfiedEntry(entry, bufferedRequestKey) {
+    if (!entry || !bufferedRequestKey || !this.preSatisfiedReplayEntries) {
+      return false;
+    }
+
+    const marker = this.preSatisfiedReplayEntries.get(entry.index);
+    if (!marker) {
+      return false;
+    }
+
+    marker.bufferedRequestKey = bufferedRequestKey;
+
+    logger.info('Attached buffered request key to pre-satisfied replay entry', {
+      requestEntry: entry.toString(),
+      bufferKey: bufferedRequestKey,
+      reason: marker.reason || null
     });
 
     return true;
@@ -3398,6 +3479,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     const futureEntry = this.validator.entries.find(entry =>
       entry.index >= this.validator.currentIndex &&
       !this.validator.processedIndices.has(entry.index) &&
+      !isReplayEntryReserved(this, entry) &&
       entry.isRequest &&
       entry.source === 'GATEWAY' &&
       entry.destination === 'LENDER' &&
@@ -3457,7 +3539,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
           responseEntry.source === 'LENDER' &&
           responseEntry.destination === 'GATEWAY'
         ) {
-          const buffered = this.bufferManager?.findMatchingRequest?.(entry, { claim: true });
+          const buffered =
+            (marker.bufferedRequestKey
+              ? this.bufferManager?.claimIncomingRequestByKey?.(marker.bufferedRequestKey, entry)
+              : null) ||
+            this.bufferManager?.findMatchingRequest?.(entry, { claim: true });
           if (buffered) {
             const replayResponse = {
               success: true,
