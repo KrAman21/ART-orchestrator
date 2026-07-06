@@ -284,7 +284,7 @@ function buildReplayRequestIdCandidate(candidateRequest, score) {
 }
 
 export function resolveFallbackGatewayRequestId(entry, observedIncomingRequests = []) {
-  if (entry?.logTag !== 'Lsp-LoanStatusRequest_REQUEST') {
+  if (entry?.logTag !== 'Lsp-LoanStatusRequest_REQUEST' && entry?.logTag !== 'LSP-GetStatus_REQUEST') {
     return null;
   }
 
@@ -374,7 +374,11 @@ export function prepareAsyncReplayForwarding(entry, payload, outboundRequestId, 
 }
 
 function buildReplayLenderDetailsSeedPayload(entry, payload, replayMerchantId, observedIncomingRequests = [], validatorEntries = []) {
-  if (entry?.logTag !== 'Lsp-LoanStatusRequest_REQUEST' || !isPlainObject(payload) || !payload.requestId) {
+  if (
+    (entry?.logTag !== 'Lsp-LoanStatusRequest_REQUEST' && entry?.logTag !== 'LSP-GetStatus_REQUEST') ||
+    !isPlainObject(payload) ||
+    !payload.requestId
+  ) {
     return null;
   }
 
@@ -1317,7 +1321,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return false;
     }
 
-    if (!optionalRepeatPolicy.requirePriorProcessedOccurrence && !hasAnyAdvanceSignal) {
+    if (
+      !optionalRepeatPolicy.requirePriorProcessedOccurrence &&
+      !optionalRepeatPolicy.allowSkipWithoutAdvance &&
+      !hasAnyAdvanceSignal
+    ) {
       logger.info('Optional skip evaluation blocked: no advance signal', {
         entry: entry.toString(),
         priorReplayOccurrenceCount: priorReplayOccurrences.length,
@@ -1326,7 +1334,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         branchAdvancedObserved,
         priorAlternateProcessed,
         requirePriorProcessedOccurrence: optionalRepeatPolicy.requirePriorProcessedOccurrence,
-        requireBranchAdvance: optionalRepeatPolicy.requireBranchAdvance
+        requireBranchAdvance: optionalRepeatPolicy.requireBranchAdvance,
+        allowSkipWithoutAdvance: optionalRepeatPolicy.allowSkipWithoutAdvance || false
       });
       return false;
     }
@@ -2007,7 +2016,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         destination: entry.destination
       });
 
-      if (entry.logTag === 'Lsp-LoanStatusRequest_REQUEST' && fallbackReason) {
+      if (
+        (entry.logTag === 'Lsp-LoanStatusRequest_REQUEST' || entry.logTag === 'LSP-GetStatus_REQUEST') &&
+        fallbackReason
+      ) {
         const lenderDetailsSeedPayload = buildReplayLenderDetailsSeedPayload(
           entry,
           forwardingRequest.payload,
@@ -2017,7 +2029,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         );
 
         if (lenderDetailsSeedPayload) {
-          logger.info('Priming gateway lender details before self-triggered loan-status replay', {
+          logger.info('Priming gateway lender details before self-triggered gateway-status replay', {
             logTag: entry.logTag,
             requestId: lenderDetailsSeedPayload.requestId,
             lenderOrgId: lenderDetailsSeedPayload.lenderOrgId,
@@ -2823,6 +2835,12 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return directToleratedBatchLookaheadResponse;
     }
 
+    const directFetchLoanApplicationDataLookaheadResponse =
+      await this.maybeHandleFutureFetchLoanApplicationDataRequest(effectiveIncoming, normalizedIncoming, validation);
+    if (directFetchLoanApplicationDataLookaheadResponse) {
+      return directFetchLoanApplicationDataLookaheadResponse;
+    }
+
     // If replay is already complete, ignore late straggler requests gracefully
     if (this.validator.isComplete()) {
       logger.warn('Ignoring late straggler request after replay completion', {
@@ -3218,6 +3236,89 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       expectedEntry: currentEntry,
       foundInLookahead: futureEntry
     });
+  }
+
+  async maybeHandleFutureFetchLoanApplicationDataRequest(incoming, normalizedIncoming, validation = null) {
+    const sourceDestination = normalizeSourceDestination(
+      `${incoming.source}_${incoming.destination}`,
+      incoming.logTag
+    );
+    const [source, destination] = sourceDestination.split('_');
+
+    const isFetchLoanApplicationDataRequest =
+      source === 'GATEWAY' &&
+      destination === 'LSP' &&
+      (
+        incoming?.api === '/api/fetch/loanApplicationData' ||
+        incoming?.logTag === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' ||
+        incoming?.logTag === 'FETCH_LOAN_APPLICATION_DATA_API_REQUEST'
+      );
+
+    if (!isFetchLoanApplicationDataRequest) {
+      return null;
+    }
+
+    const currentEntry = this.validator.getCurrentEntry();
+    if (!currentEntry) {
+      return null;
+    }
+
+    let effectiveValidation = validation;
+    if (!effectiveValidation) {
+      effectiveValidation = this.validator.validateIncomingRequest({
+        source: normalizedIncoming.source,
+        destination: normalizedIncoming.destination,
+        logTag: normalizedIncoming.logTag,
+        isRequest: true,
+        requestId: normalizedIncoming.requestId,
+        lenderOrgId: normalizedIncoming.lenderOrgId,
+        loanApplicationId: normalizedIncoming.loanApplicationId
+      });
+    }
+
+    const futureEntry = effectiveValidation?.foundInLookahead || null;
+    if (!futureEntry?.isRequest) {
+      return null;
+    }
+
+    if (
+      futureEntry.source !== source ||
+      futureEntry.destination !== destination ||
+      futureEntry.logTag !== normalizedIncoming.logTag
+    ) {
+      return null;
+    }
+
+    logger.info('Processing future fetchLoanApplicationData request immediately to unblock waiting gateway flow', {
+      currentEntry: currentEntry.toString(),
+      futureEntry: futureEntry.toString(),
+      requestId: incoming.requestId || null,
+      logTag: incoming.logTag,
+      requiredData:
+        incoming?.payload?.requiredData ||
+        incoming?.payload?.required_data ||
+        null
+    });
+
+    this.registerPreSatisfiedReplayEntry(futureEntry, {
+      requestId: incoming.requestId || null,
+      reason: 'immediate_future_fetch_loan_application_data'
+    });
+
+    this.registerReplayIdentifierMappings(futureEntry, normalizedIncoming);
+
+    logger.logApiCall(normalizedIncoming.source, normalizedIncoming.destination, normalizedIncoming.api, 'REQUEST', futureEntry.index);
+
+    const comparison = this.comparePayloads(futureEntry.payload, normalizedIncoming.payload, normalizedIncoming.logTag);
+    if (!comparison.match) {
+      logger.warn('Payload mismatch tolerated for immediate future fetchLoanApplicationData request', {
+        entry: futureEntry.toString(),
+        logTag: normalizedIncoming.logTag,
+        differences: comparison.differences
+      });
+    }
+
+    return await this.forwardToDestination(normalizedIncoming, futureEntry);
   }
 
   registerNearbyImmediateReplaySatisfaction(incoming, options = {}) {

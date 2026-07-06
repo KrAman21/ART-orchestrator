@@ -1320,6 +1320,7 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
 
   if (
     !optionalRepeatPolicy.requirePriorProcessedOccurrence &&
+    !optionalRepeatPolicy.allowSkipWithoutAdvance &&
     !hasAnyAdvanceSignal
   ) {
     return false;

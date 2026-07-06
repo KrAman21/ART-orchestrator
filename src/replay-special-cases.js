@@ -148,9 +148,10 @@ export const REPLAY_SPECIAL_CASES = [
     logTag: 'CHECK ELIGIBILITY API_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow the lender eligibility request to be skipped when the real-time eligibility replay branch has already advanced into the later fetch-offer path without emitting the intermediate eligibility callback.',
-    optionalAfterSeconds: 5,
+    optionalAfterSeconds: 4,
     requirePriorProcessedOccurrence: false,
-    requireBranchAdvance: true,
+    requireBranchAdvance: false,
+    allowSkipWithoutAdvance: true,
     advanceWhenSeenLogTags: [
       'LSP-FetchOfferSync_REQUEST',
       'LSP-FetchOfferSync_RESPONSE',
@@ -180,6 +181,28 @@ export const REPLAY_SPECIAL_CASES = [
       'FlipKart-GetRedirectionURL_REQUEST',
       'FlipKart-GetRedirectionURL_RESPONSE'
     ]
+  },
+  {
+    logTag: 'GENERATE PARTNER AUTH TOKEN_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow missing partner auth token lender requests to be skipped after a short wait when the live journey never emits them.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: false,
+    allowSkipWithoutAdvance: true
+  },
+  {
+    logTag: 'LOAN OFFER API_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated loan-offer lender requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 3,
+    requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'LOAN STATUS API_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated loan-status lender requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 5,
+    requirePriorProcessedOccurrence: true
   }
 ];
 
@@ -201,6 +224,7 @@ export const SELF_TRIGGER_FALLBACK_API_LOG_TAGS = new Set([
   'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
   'WEBHOOK_REQUEST',
   'Lsp-LoanStatusRequest_REQUEST',
+  'LSP-GetStatus_REQUEST',
   'GENERATE_TOKEN_API_REQUEST',
   'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
   'FETCH_LOAN_APPLICATION_DATA_API_REQUEST'
@@ -215,6 +239,7 @@ export const IMMEDIATE_DIRECT_REPLAY_LOG_TAGS = new Set([
   'LOCK_TENURE_REQUEST',
   'PROFILE_INGESTION_REQUEST',
   'CALCULATE_EMI_REQUEST',
+  'GENERATE PARTNER AUTH TOKEN_REQUEST',
   'OTP GENERATION API_REQUEST',
   'OTP AUTHENTICATION API_REQUEST',
   'KFS SIGNING API :: PARENT_REQUEST',
@@ -228,6 +253,7 @@ export const IMMEDIATE_DIRECT_REPLAY_LOG_TAGS = new Set([
 
 export const SELF_TRIGGER_FALLBACK_WAIT_TIMEOUT_OVERRIDES_MS = {
   'Lsp-LoanStatusRequest_REQUEST': 3_000,
+  'LSP-GetStatus_REQUEST': 3_000,
   'GENERATE_TOKEN_API_REQUEST': 2_000,
   'FECTH_LOAN_APPLICATION_DATA_API_REQUEST': 5_000,
   'FETCH_LOAN_APPLICATION_DATA_API_REQUEST': 5_000
@@ -295,6 +321,8 @@ export function getOptionalRepeatPolicy(config, currentEntry) {
       5,
     requirePriorProcessedOccurrence:
       builtInSpecialCase?.requirePriorProcessedOccurrence ?? true,
+    allowSkipWithoutAdvance:
+      builtInSpecialCase?.allowSkipWithoutAdvance ?? false,
     allowObservedBranchAdvance:
       builtInSpecialCase?.allowObservedBranchAdvance ?? true,
     requireBranchAdvance:

@@ -46,6 +46,47 @@ export function shouldMergeLoanApplicationLogs(orderLogs, loanApplicationLogs) {
   return loanApplicationTimestamps.every(timestamp => timestamp >= orderStartTime);
 }
 
+function getTopLevelOrderIds(logs) {
+  const orderIds = new Set();
+
+  for (const log of Array.isArray(logs) ? logs : []) {
+    const orderId = log?.message?.order_id;
+    if (typeof orderId === 'string' && orderId.trim()) {
+      orderIds.add(orderId.trim());
+    }
+  }
+
+  return orderIds;
+}
+
+export function shouldDiscardLoanApplicationLogSet(orderId, orderLogs, loanApplicationLogs) {
+  if (!shouldMergeLoanApplicationLogs(orderLogs, loanApplicationLogs)) {
+    return {
+      discard: true,
+      reason: 'predates_order_start_time'
+    };
+  }
+
+  const topLevelOrderIds = getTopLevelOrderIds(loanApplicationLogs);
+  if (
+    typeof orderId === 'string' &&
+    orderId.trim() &&
+    Array.from(topLevelOrderIds).some(loanLogOrderId => loanLogOrderId !== orderId)
+  ) {
+    return {
+      discard: true,
+      reason: 'mismatched_top_level_order_id',
+      topLevelOrderIds: Array.from(topLevelOrderIds)
+    };
+  }
+
+  return {
+    discard: false,
+    reason: null,
+    topLevelOrderIds: Array.from(topLevelOrderIds)
+  };
+}
+
 function dedupeLogs(logs) {
   const seen = new Set();
   const deduped = [];
@@ -179,23 +220,34 @@ export class MultiSourceLogFetcher {
     const preservedLoanApplicationIds = [];
     for (const loanApplicationId of replayContext.loanApplicationIds) {
       const loanApplicationResult = await fetchS3TraceLogsByLoanApplicationId(loanApplicationId, this.sessionToken);
-      if (
-        loanApplicationResult.success &&
-        !shouldMergeLoanApplicationLogs(orderLogsResult.logs, loanApplicationResult.logs)
-      ) {
-        logger.warn('Discarding full LAID log set because at least one log predates order start time', {
-          merchantId,
-          orderId,
-          loanApplicationId,
-          orderStartTime: new Date(getOrderStartTime(orderLogsResult.logs)).toISOString(),
-          earliestLoanApplicationLogAt: new Date(
-            Math.min(
-              ...loanApplicationResult.logs
-                .map(getCreatedAtTime)
-                .filter(Number.isFinite)
-            )
-          ).toISOString()
-        });
+      const loanApplicationDiscardDecision = loanApplicationResult.success
+        ? shouldDiscardLoanApplicationLogSet(orderId, orderLogsResult.logs, loanApplicationResult.logs)
+        : { discard: false, reason: null, topLevelOrderIds: [] };
+
+      if (loanApplicationResult.success && loanApplicationDiscardDecision.discard) {
+        if (loanApplicationDiscardDecision.reason === 'predates_order_start_time') {
+          logger.warn('Discarding full LAID log set because at least one log predates order start time', {
+            merchantId,
+            orderId,
+            loanApplicationId,
+            orderStartTime: new Date(getOrderStartTime(orderLogsResult.logs)).toISOString(),
+            earliestLoanApplicationLogAt: new Date(
+              Math.min(
+                ...loanApplicationResult.logs
+                  .map(getCreatedAtTime)
+                  .filter(Number.isFinite)
+              )
+            ).toISOString()
+          });
+        } else if (loanApplicationDiscardDecision.reason === 'mismatched_top_level_order_id') {
+          logger.warn('Discarding full LAID log set because at least one top-level order_id belongs to a different order', {
+            merchantId,
+            orderId,
+            loanApplicationId,
+            topLevelOrderIds: loanApplicationDiscardDecision.topLevelOrderIds
+          });
+        }
+
         discardedLoanApplicationIds.push(loanApplicationId);
       } else {
         sourceResults.push(loanApplicationResult);
