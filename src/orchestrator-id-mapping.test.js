@@ -321,6 +321,52 @@ test('registerReplayIdentifierMappings does not let E-MANDATE applicationid over
   assert.equal(orchestrator.stateManager.getMappedIdentifier('lineDetailId', 'prod-line-1'), 'live-line-1');
 });
 
+test('registerReplayIdentifierMappings does not let lineDetailId-shaped loanApplicationId overwrite replay loanApplicationId', () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.config = {};
+  orchestrator.orderId = 'order-1';
+
+  orchestrator.registerReplayIdentifierMappings(
+    {
+      logTag: 'JuspaySDK-FetchStatus_REQUEST',
+      payload: {
+        loanApplicationId: 'LA-prod-1'
+      }
+    },
+    {
+      logTag: 'JuspaySDK-FetchStatus_REQUEST',
+      payload: {
+        loanApplicationId: 'LA-live-1'
+      }
+    }
+  );
+
+  orchestrator.registerReplayIdentifierMappings(
+    {
+      logTag: 'LSP-GetStatus_RESPONSE',
+      payload: {
+        loanDetails: {
+          loanApplicationId: 'LA-prod-1'
+        }
+      }
+    },
+    {
+      logTag: 'LSP-GetStatus_RESPONSE',
+      payload: {
+        loanDetails: {
+          loanApplicationId: 'live-line-1'
+        },
+        lineDetail: {
+          lineDetailId: 'live-line-1'
+        }
+      }
+    }
+  );
+
+  assert.equal(orchestrator.stateManager.getMappedIdentifier('loanApplicationId', 'LA-prod-1'), 'LA-live-1');
+});
+
 test('recordObservedIncomingRequest trusts live customerId only from LSP or GATEWAY traffic', () => {
   const orchestrator = Object.create(ReplayOrchestrator.prototype);
   orchestrator.stateManager = new StateManager();

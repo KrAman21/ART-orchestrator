@@ -217,6 +217,13 @@ export const REPLAY_SPECIAL_CASES = [
     description: 'Allow repeated loan-activate lender requests to be skipped after one successful occurrence if later repeats never arrive.',
     optionalAfterSeconds: 4,
     requirePriorProcessedOccurrence: true
+  },
+  {
+    logTag: 'GET_CHECKOUT_STATUS_LST_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow repeated checkout-status polling requests to be skipped after one successful occurrence if later repeats never arrive.',
+    optionalAfterSeconds: 4,
+    requirePriorProcessedOccurrence: true
   }
 ];
 
@@ -238,6 +245,7 @@ export const SELF_TRIGGER_FALLBACK_API_LOG_TAGS = new Set([
   'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
   'WEBHOOK_REQUEST',
   'Lsp-LoanStatusRequest_REQUEST',
+  'VerifyLenderOTPRequest-LSP_REQUEST',
   'LSP-GetStatus_REQUEST',
   'GENERATE_TOKEN_API_REQUEST',
   'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
@@ -263,7 +271,8 @@ export const IMMEDIATE_DIRECT_REPLAY_LOG_TAGS = new Set([
   'GET_CHECKOUT_STATUS_LS_REQUEST',
   'GET_CHECKOUT_STATUS_LST_REQUEST',
   'GET_CHECKOUT_STATUS_FO_REQUEST',
-  'GET_CHECKOUT_STATUS_FO_ENCRYPTED_REQUEST'
+  'GET_CHECKOUT_STATUS_FO_ENCRYPTED_REQUEST',
+  'ORDER_INGESTION_SO_REQUEST'
 ]);
 
 export const IMMEDIATE_FUTURE_CORE_GATEWAY_REQUEST_LOG_TAGS = new Set([
@@ -272,6 +281,7 @@ export const IMMEDIATE_FUTURE_CORE_GATEWAY_REQUEST_LOG_TAGS = new Set([
 
 export const SELF_TRIGGER_FALLBACK_WAIT_TIMEOUT_OVERRIDES_MS = {
   'Lsp-LoanStatusRequest_REQUEST': 3_000,
+  'VerifyLenderOTPRequest-LSP_REQUEST': 4_000,
   'LSP-GetStatus_REQUEST': 3_000,
   'GENERATE_TOKEN_API_REQUEST': 2_000,
   'FECTH_LOAN_APPLICATION_DATA_API_REQUEST': 5_000,

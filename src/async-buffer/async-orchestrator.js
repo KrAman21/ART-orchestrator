@@ -375,7 +375,11 @@ export function prepareAsyncReplayForwarding(entry, payload, outboundRequestId, 
 
 function buildReplayLenderDetailsSeedPayload(entry, payload, replayMerchantId, observedIncomingRequests = [], validatorEntries = []) {
   if (
-    (entry?.logTag !== 'Lsp-LoanStatusRequest_REQUEST' && entry?.logTag !== 'LSP-GetStatus_REQUEST') ||
+    (
+      entry?.logTag !== 'Lsp-LoanStatusRequest_REQUEST' &&
+      entry?.logTag !== 'LSP-GetStatus_REQUEST' &&
+      entry?.logTag !== 'VerifyLenderOTPRequest-LSP_REQUEST'
+    ) ||
     !isPlainObject(payload) ||
     !payload.requestId
   ) {
@@ -1642,7 +1646,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       this.stateManager.registerMappingsFromPayloadPair(
         currentEntry.payload,
         replayBufferedResponseData,
-        { logTag: currentEntry.logTag }
+        {
+          logTag: currentEntry.logTag,
+          expectedPayload: currentEntry.payload || null,
+          actualPayload: replayBufferedResponseData || null
+        }
       );
     }
 
@@ -2017,7 +2025,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       });
 
       if (
-        (entry.logTag === 'Lsp-LoanStatusRequest_REQUEST' || entry.logTag === 'LSP-GetStatus_REQUEST') &&
+        (
+          entry.logTag === 'Lsp-LoanStatusRequest_REQUEST' ||
+          entry.logTag === 'LSP-GetStatus_REQUEST' ||
+          entry.logTag === 'VerifyLenderOTPRequest-LSP_REQUEST'
+        ) &&
         fallbackReason
       ) {
         const lenderDetailsSeedPayload = buildReplayLenderDetailsSeedPayload(

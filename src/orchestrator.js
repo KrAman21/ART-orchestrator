@@ -1355,7 +1355,17 @@ export class ReplayOrchestrator {
 
   registerReplayIdentifierMappings(expectedEntry, incoming) {
     const identifierContext = {
-      logTag: expectedEntry?.logTag || incoming?.logTag || null
+      logTag: expectedEntry?.logTag || incoming?.logTag || null,
+      originalSource: expectedEntry || null,
+      localSource: incoming || null,
+      expectedPayload:
+        expectedEntry?.payload ||
+        expectedEntry?.message ||
+        null,
+      actualPayload:
+        incoming?.payload ||
+        incoming?.message ||
+        null
     };
 
     for (const identifierType of this.stateManager.getTrackedIdentifierTypes()) {

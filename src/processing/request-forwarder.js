@@ -563,11 +563,16 @@ export class RequestForwarder {
         logTag: expectedEntry.logTag
       });
 
+      const correlationRequestId =
+        forwardingRequest.payload?.requestId ||
+        forwardingRequest.payload?.request_id ||
+        forwardingRequest.requestId;
+
       // Generate correlation key for tracking
       const correlationKey = this.stateManager.constructor.generateCorrelationKey(
         endpoint,
         expectedEntry.sourceDestination,
-        forwardingRequest.requestId
+        correlationRequestId
       );
 
       // Find the expected response entry (may not be the immediate next entry)
@@ -617,6 +622,8 @@ export class RequestForwarder {
         destination: incoming.destination,
         api: endpoint,
         requestId: forwardingRequest.requestId,
+        correlationRequestId,
+        correlationKey,
         logTag: expectedEntry.logTag,
         sourceDestination: expectedEntry.sourceDestination,
         logIndex: expectedEntry.index,
@@ -627,6 +634,8 @@ export class RequestForwarder {
         logTag: expectedEntry.logTag,
         sourceDestination: expectedEntry.sourceDestination,
         requestId: forwardingRequest.requestId,
+        correlationRequestId,
+        correlationKey,
         merchantId: forwardingRequest.merchantId,
         originalPayloadRequestId,
         forwardedPayloadRequestId: isPlainObject(transformedPayload) ? transformedPayload.requestId || null : null,
