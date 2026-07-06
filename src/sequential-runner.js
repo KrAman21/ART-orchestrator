@@ -318,6 +318,30 @@ async function maybeLoadExistingFinalFilteredLogs(orderId, finalFilteredLogsPath
   };
 }
 
+async function getArtFinalStoreLogsPath(config, merchantId, orderId) {
+  void merchantId;
+  const storeRoot = config.ART_FINAL_STORE_DIR || 'data/art-final-store';
+  return join(storeRoot, `${orderId}.json`);
+}
+
+async function loadFinalStoreOrderLogs(merchantId, orderId, config) {
+  const finalFilteredLogsPath = await getArtFinalStoreLogsPath(config, merchantId, orderId);
+  const finalFilteredLogs = await fetchLogsFromJSONFile(finalFilteredLogsPath);
+
+  if (!Array.isArray(finalFilteredLogs) || finalFilteredLogs.length === 0) {
+    throw new Error(`No replayable logs found in final store for order ${orderId}`);
+  }
+
+  return {
+    finalFilteredLogs,
+    logsFilePath: null,
+    filteredLogsPath: null,
+    finalFilteredLogsPath: resolve(process.cwd(), finalFilteredLogsPath),
+    source: 'ART_FINAL_STORE',
+    cleanupTempFiles: false
+  };
+}
+
 /**
  * Prefetch pipeline: fetches and filters S3 logs for ALL orders concurrently.
  * Returns a Map<orderId, { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath }>
@@ -1795,7 +1819,7 @@ export async function maybeForceEarlySelfTriggerFallbackEntry(
   }
 }
 
-async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal) {
+async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal, orderProfiler = null) {
   const startTime = Date.now();
   const profileWaitStart = orderProfiler?.enabled ? orderProfiler.now() : 0;
   let timeoutDeadline = startTime + timeoutMs;

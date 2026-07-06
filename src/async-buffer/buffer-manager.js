@@ -1011,6 +1011,31 @@ export class BufferManager {
     return this._buildRequestMatchDetails(request, expectedEntry).matches;
   }
 
+  _getRequestShapeMismatch(incoming = {}, expectedEntry = {}) {
+    const incomingLogTag = canonicalRequestLogTag(incoming.logTag);
+    const expectedLogTag = canonicalRequestLogTag(expectedEntry.logTag);
+
+    if (incomingLogTag !== expectedLogTag) {
+      return `logTag mismatch: ${incomingLogTag || 'null'} !== ${expectedLogTag || 'null'}`;
+    }
+
+    if ((incoming.source || null) !== (expectedEntry.source || null)) {
+      return `source mismatch: ${(incoming.source || 'null')} !== ${(expectedEntry.source || 'null')}`;
+    }
+
+    if ((incoming.destination || null) !== (expectedEntry.destination || null)) {
+      return `destination mismatch: ${(incoming.destination || 'null')} !== ${(expectedEntry.destination || 'null')}`;
+    }
+
+    const incomingSourceDestination = incoming.sourceDestination || null;
+    const expectedSourceDestination = expectedEntry.sourceDestination || null;
+    if (incomingSourceDestination && expectedSourceDestination && incomingSourceDestination !== expectedSourceDestination) {
+      return `sourceDestination mismatch: ${incomingSourceDestination} !== ${expectedSourceDestination}`;
+    }
+
+    return null;
+  }
+
   _isFetchLoanApplicationDataRequest(entry = {}) {
     return (
       entry?.api === '/api/fetch/loanApplicationData' ||
