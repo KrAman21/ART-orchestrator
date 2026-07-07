@@ -68,6 +68,7 @@ export class ArtReportGenerator {
       timeline: [],
       bufferFailures: [],
       fallbackRecoveries: [],
+      unexpectedActualApis: [],
       diagnostics: {
         lastProcessedLog: null,
         timeoutAt: null,
@@ -216,6 +217,16 @@ export class ArtReportGenerator {
     order.fallbackRecoveries.push({
       timestamp: new Date().toISOString(),
       ...recoveryInfo
+    });
+  }
+
+  recordUnexpectedActualApi(orderId, apiInfo) {
+    const order = this.orders.find(o => o.orderId === orderId);
+    if (!order) return;
+
+    order.unexpectedActualApis.push({
+      timestamp: new Date().toISOString(),
+      ...apiInfo
     });
   }
 
@@ -391,6 +402,25 @@ export class ArtReportGenerator {
     };
   }
 
+  buildUnexpectedActualApis(order) {
+    return {
+      orderId: order.orderId,
+      status: order.status,
+      apis: (order.unexpectedActualApis || []).map((api) => ({
+        timestamp: api.timestamp || null,
+        logTag: api.logTag || null,
+        sourceDestination: api.sourceDestination || null,
+        source: api.source || null,
+        destination: api.destination || null,
+        endpoint: api.endpoint || null,
+        requestId: api.requestId || null,
+        currentReplayEntry: api.currentReplayEntry || null,
+        lookaheadWindow: api.lookaheadWindow || [],
+        reason: api.reason || null
+      }))
+    };
+  }
+
   generateReport(overallSuccess) {
     // Finalize any orders that never completed (process terminated mid-run)
     const now = new Date().toISOString();
@@ -413,6 +443,7 @@ export class ArtReportGenerator {
       0
     );
     const totalFallbackRecoveries = this.orders.reduce((acc, order) => acc + (order.fallbackRecoveries?.length || 0), 0);
+    const totalUnexpectedActualApis = this.orders.reduce((acc, order) => acc + (order.unexpectedActualApis?.length || 0), 0);
 
     const orderOutcomes = this.orders.map((order) => this.buildOrderOutcome(order));
     const requestDetails = this.orders
@@ -421,6 +452,9 @@ export class ArtReportGenerator {
     const payloadComparisons = this.orders
       .map((order) => this.buildPayloadComparisons(order))
       .filter((order) => order.comparisons.length > 0);
+    const unexpectedActualApis = this.orders
+      .map((order) => this.buildUnexpectedActualApis(order))
+      .filter((order) => order.apis.length > 0);
 
     const report = {
       executionId: `art-${Date.now()}`,
@@ -444,11 +478,13 @@ export class ArtReportGenerator {
         ordersWithBufferFailures,
         totalFallbackRecoveries,
         totalPayloadComparisons,
-        totalPayloadMismatches
+        totalPayloadMismatches,
+        totalUnexpectedActualApis
       },
       orderOutcomes,
       requestDetails,
-      payloadComparisons
+      payloadComparisons,
+      unexpectedActualApis
     };
 
     try {
