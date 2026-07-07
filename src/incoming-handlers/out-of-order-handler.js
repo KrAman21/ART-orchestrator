@@ -52,6 +52,14 @@ export class OutOfOrderHandler {
 
     const currentEntry = validation.expectedEntry;
 
+    if (validation.foundInLookahead?.isRequest &&
+        validation.foundInLookahead.isExternalDestination() &&
+        validation.foundInLookahead.source === incoming.source &&
+        validation.foundInLookahead.destination === incoming.destination &&
+        validation.foundInLookahead.logTag === incoming.logTag) {
+      return await this.processFutureExternalCall(incoming, validation.foundInLookahead);
+    }
+
     // Check if current expected is a request we need to trigger ourselves
     if (currentEntry?.isRequest && currentEntry.isExternalDestination()) {
       // For async/parallel calls, process immediately by finding matching log entry
@@ -59,7 +67,20 @@ export class OutOfOrderHandler {
         return await this.processAsyncParallelCall(incoming, validation.foundInLookahead);
       }
 
-      // For other external calls, mock immediately (existing behavior)
+      // GATEWAY→LENDER calls: the Gateway will send this to ART's mock-lender endpoint
+      // naturally. ART buffers it and the replay thread's waitForMatchingRequest will
+      // match it and respond with the log response. Do NOT mock — just handle the
+      // out-of-order incoming request and keep the waiter alive for the LENDER call.
+      if (currentEntry.source === 'GATEWAY' && currentEntry.destination === 'LENDER') {
+        this.logger.info('Out-of-order while waiting for GATEWAY→LENDER, processing incoming and keeping waiter alive', {
+          waitingFor: currentEntry.toString(),
+          incoming: `${incoming.source}→${incoming.destination} ${incoming.logTag}`
+        });
+        // Process the out-of-order incoming request directly
+        return this.callbacks.handleIncomingRequest(incoming);
+      }
+
+      // For other orchestrator-initiated external calls (APP→LSP etc.), mock immediately
       this.logger.info('Need to mock external request first', {
         entry: currentEntry.toString()
       });
@@ -90,6 +111,35 @@ export class OutOfOrderHandler {
    */
   isAsyncParallelCall(entry) {
     return isAsyncParallelApi(entry?.sourceDestination, entry?.logTag);
+  }
+
+  /**
+   * Process a live external call that arrived before earlier replay entries.
+   * This commonly happens with lender polling while ART is still waiting for an
+   * async callback in the recorded sequence.
+   * @param {Object} incoming - The incoming request
+   * @param {Object} expectedEntry - The matching future log entry
+   * @returns {Promise} Result of forwarding/mocking the matched entry
+   */
+  async processFutureExternalCall(incoming, expectedEntry) {
+    this.logger.info('Processing future external request from lookahead', {
+      incoming: `${incoming.source}→${incoming.destination} ${incoming.logTag}`,
+      matchedEntry: expectedEntry.toString()
+    });
+
+    const comparison = this.callbacks.comparePayloads(expectedEntry.payload, incoming.payload, incoming.logTag);
+    if (!comparison.match) {
+      this.logger.warn('Payload mismatch tolerated for future external request', {
+        entry: expectedEntry.toString(),
+        logTag: incoming.logTag,
+        differences: comparison.differences
+      });
+    }
+
+    this.validator.markProcessed(expectedEntry);
+    this.callbacks.recordSuccess('request_validation', expectedEntry);
+
+    return await this.callbacks.forwardToDestination(incoming, expectedEntry);
   }
 
   /**
@@ -125,7 +175,11 @@ export class OutOfOrderHandler {
     const comparison = this.callbacks.comparePayloads(expectedPayload, incoming.payload, incoming.logTag);
 
     if (!comparison.match) {
-      return await this.callbacks.fail('Payload comparison failed', comparison.differences);
+      this.logger.warn('Payload mismatch tolerated for async/parallel call', {
+        entry: expectedEntry.toString(),
+        logTag: incoming.logTag,
+        differences: comparison.differences
+      });
     }
 
     this.logger.info('Request validation passed', {

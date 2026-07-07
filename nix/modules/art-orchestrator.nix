@@ -16,6 +16,15 @@
       '';
     };
 
+    packages.report-server = pkgs.writeShellApplication {
+      name = "art-report-server";
+      runtimeInputs = [ pkgs.nodejs ];
+      text = ''
+        cd "${self'.packages.runtime-tree}"
+        exec node src/report-server.js
+      '';
+    };
+
     packages.nodejs-deps = inputs.dream2nix.lib.evalModules {
       packageSets.nixpkgs = inputs.dream2nix.inputs.nixpkgs.legacyPackages.${system};
       specialArgs = { inherit inputs; };

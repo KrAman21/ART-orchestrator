@@ -1,23 +1,25 @@
 export class EnvironmentController {
   constructor(env = process.env.NODE_ENV || 'local') {
     this.env = env;
+    const localLspSocket = process.env.LSP_UNIX_SOCKET || null;
+    const localGwSocket = process.env.GW_UNIX_SOCKET || null;
     this.environments = {
       local: {
         name: 'Local Development',
         LSP: {
-          baseUrl: 'http://localhost:8055',
+          baseUrl: 'http://lsp',
           name: 'LSP-Local',
-          unixSocket: process.env.LSP_UNIX_SOCKET || null
+          unixSocket: localLspSocket
         },
         GW: {
-          baseUrl: 'http://localhost:8066',
+          baseUrl: 'http://gateway',
           name: 'Gateway-Local',
-          unixSocket: process.env.GW_UNIX_SOCKET || null
+          unixSocket: localGwSocket
         },
         GATEWAY: {
-          baseUrl: 'http://localhost:8066',
+          baseUrl: 'http://gateway',
           name: 'Gateway-Local',
-          unixSocket: process.env.GW_UNIX_SOCKET || null
+          unixSocket: localGwSocket
         }
       },
       sbx: {

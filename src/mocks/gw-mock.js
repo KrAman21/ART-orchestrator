@@ -27,7 +27,34 @@ export class GWMockService extends BaseMockService {
       this.app.use(express.json({ limit: '10mb' }));
 
       // Request logging middleware
-      this.app.use((req, _res, next) => {
+      this.app.use((req, res, next) => {
+        const startedAt = Date.now();
+        const requestId = req.headers['x-request-id'] || req.body?.request_id || req.body?.requestId || null;
+
+        logger.logRequestFlow('incoming', {
+          event: 'request_received',
+          service: 'gw-mock',
+          method: req.method,
+          endpoint: req.originalUrl,
+          path: req.path,
+          requestId,
+          headers: req.headers,
+          payload: req.body
+        });
+
+        res.on('finish', () => {
+          logger.logRequestFlow('incoming', {
+            event: 'response_sent',
+            service: 'gw-mock',
+            method: req.method,
+            endpoint: req.originalUrl,
+            path: req.path,
+            requestId,
+            status: res.statusCode,
+            durationMs: Date.now() - startedAt
+          });
+        });
+
         logger.debug('GW mock received request', {
           method: req.method,
           path: req.path,

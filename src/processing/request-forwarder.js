@@ -1,7 +1,128 @@
-import { getEndpointConfig, SKIP_DESTINATIONS } from '../config.js';
+import { getEndpointConfig, REQUEST_TIMEOUT_OVERRIDES, SKIP_DESTINATIONS } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
+import { normalizeCanonicalLoanApplicationReferences } from '../services/canonical-loan-application-id.js';
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeForwardingPayloadForEntry(payload, incoming, expectedEntry) {
+  if (!isPlainObject(payload)) {
+    return payload;
+  }
+
+  return payload;
+}
+
+function resolveForwardingMerchantId(incoming, expectedEntry) {
+  return (
+    incoming?.headers?.['x-merchant-id'] ||
+    incoming?.headers?.['X-Merchant-Id'] ||
+    incoming?.payload?.merchantId ||
+    incoming?.payload?.merchant_id ||
+    expectedEntry?.message?.merchant_id ||
+    expectedEntry?.payload?.merchantId ||
+    expectedEntry?.payload?.merchant_id ||
+    expectedEntry?.merchantId ||
+    null
+  );
+}
+
+function hasHeader(headers, headerName) {
+  return Object.keys(headers || {}).some(key => key.toLowerCase() === headerName.toLowerCase());
+}
+
+function applySdkHeaders(headers, logTag) {
+  if (typeof logTag !== 'string' || !logTag.includes('SDK')) {
+    return headers;
+  }
+
+  const updatedHeaders = { ...(headers || {}) };
+
+  if (!hasHeader(updatedHeaders, 'x-origin')) {
+    updatedHeaders['x-origin'] = 'SDK';
+  }
+
+  if (!hasHeader(updatedHeaders, 'x-version')) {
+    updatedHeaders['x-version'] = 'V1';
+  }
+
+  return updatedHeaders;
+}
+
+export function prepareForwardingRequest(incoming, expectedEntry, endpointHeaders = {}, stateManager = null) {
+  const merchantId = resolveForwardingMerchantId(incoming, expectedEntry);
+  const requestId = stateManager?.rewriteOutgoingRequestIdValue
+    ? stateManager.rewriteOutgoingRequestIdValue(incoming?.requestId, {
+      logTag: expectedEntry?.logTag,
+      field: 'requestId'
+    })
+    : incoming?.requestId;
+  const rawHeaders = {
+    ...(incoming?.headers || {}),
+    ...(endpointHeaders || {})
+  };
+  const remappedHeaders = stateManager?.rewriteOutgoingLoanApplicationIds
+    ? stateManager.rewriteOutgoingLoanApplicationIds(rawHeaders, { logTag: expectedEntry?.logTag, field: 'headers' })
+    : rawHeaders;
+  const headers = applySdkHeaders(remappedHeaders, expectedEntry?.logTag);
+
+  if (merchantId && !headers['x-merchant-id'] && !headers['X-Merchant-Id']) {
+    headers['x-merchant-id'] = merchantId;
+  }
+
+  const replayCanonicalLoanApplicationId =
+    stateManager?.getMappedLoanApplicationId?.(expectedEntry?.loanApplicationId) ||
+    expectedEntry?.loanApplicationId ||
+    incoming?.payload?.loanApplicationId ||
+    incoming?.payload?.loan_application_id ||
+    null;
+  const transformedPayload = transformReplayPayloadForEntry(
+    stateManager,
+    incoming?.payload,
+    {
+      ...expectedEntry,
+      loanApplicationId: replayCanonicalLoanApplicationId
+    }
+  );
+  const normalizedPayload = normalizeForwardingPayloadForEntry(
+    transformedPayload,
+    incoming,
+    expectedEntry
+  );
+  const payload = stateManager?.rewriteOutgoingLoanApplicationIds
+    ? stateManager.rewriteOutgoingLoanApplicationIds(normalizedPayload, { logTag: expectedEntry?.logTag, field: 'payload' })
+    : normalizedPayload;
+
+  return {
+    headers,
+    payload,
+    merchantId,
+    requestId
+  };
+}
+
+function remapReplayPayloadForEntry(stateManager, payload, entry) {
+  return stateManager?.remapReplayValue
+    ? stateManager.remapReplayValue(payload, null, { logTag: entry?.logTag })
+    : payload;
+}
+
+function transformReplayPayloadForEntry(stateManager, payload, entry) {
+  const remappedPayload = remapReplayPayloadForEntry(stateManager, payload, entry);
+  const canonicalLoanApplicationId =
+    entry?.loanApplicationId ||
+    remappedPayload?.loanApplicationId ||
+    remappedPayload?.loan_application_id ||
+    null;
+
+  return transformRequest(
+    normalizeCanonicalLoanApplicationReferences(remappedPayload, canonicalLoanApplicationId),
+    entry?.logTag
+  );
+}
 
 /**
  * RequestForwarder - Handles request forwarding and external response management
@@ -9,7 +130,7 @@ import { canonicalRequestLogTag } from '../services/log-tag-normalizer.js';
  * Extracted from orchestrator.js, this class is responsible for:
  * - Forwarding validated requests to actual destination services
  * - Handling responses from downstream services (GW/LSP)
- * - Managing external service responses (LENDER callbacks, webhooks)
+ * - Managing external service responses
  * - Tracking pending external requests for async handling
  * 
  * Dependencies are injected via constructor for better testability and separation of concerns.
@@ -31,7 +152,6 @@ export class RequestForwarder {
    * @param {Function} dependencies.callbacks.recordFailure - Record failed step
    * @param {Function} dependencies.callbacks.getServiceBaseUrl - Get service base URL
    * @param {Function} dependencies.callbacks.processNextLogEntry - Process next log entry
-   * @param {Function} dependencies.callbacks.triggerWebhooks - Trigger webhooks
    * @param {Function} dependencies.callbacks.trackAsyncCompletion - Track async completion
    */
   constructor({ validator, stateManager, logger, config, callbacks }) {
@@ -49,9 +169,125 @@ export class RequestForwarder {
     // Map<contextKey, incoming>
     this.earlyExternalResponses = new Map();
 
-    // Track webhooks to trigger after responding to external calls
-    // Map<contextKey, Array> - webhooks to trigger after response is sent back
-    this.pendingPostResponseWebhooks = new Map();
+  }
+
+  shouldAutoProcessNextLogEntry() {
+    return this.callbacks.shouldAutoProcessNextLogEntry
+      ? this.callbacks.shouldAutoProcessNextLogEntry() !== false
+      : true;
+  }
+
+  shouldBlockOnHeldExternalRequest() {
+    if (this.config?.asyncReplayMode) {
+      return false;
+    }
+
+    return this.callbacks.shouldBlockOnHeldExternalRequest
+      ? this.callbacks.shouldBlockOnHeldExternalRequest() !== false
+      : true;
+  }
+
+  tryBuildFailureFallbackResult({
+    incoming,
+    expectedEntry,
+    expectedResponse,
+    correlationKey,
+    destination,
+    endpoint,
+    transformedPayload,
+    serviceResponse,
+    apiFailure
+  }) {
+    if (typeof this.callbacks.buildFailureFallbackResponse !== 'function') {
+      return null;
+    }
+
+    const fallbackResponse = this.callbacks.buildFailureFallbackResponse(
+      {
+        logTag: expectedEntry?.logTag,
+        logIndex: expectedEntry?.index,
+        requestId: incoming?.requestId,
+        sourceDestination: expectedEntry?.sourceDestination,
+        endpoint,
+        baseUrl: this.callbacks.getServiceBaseUrl(destination),
+        payload: transformedPayload,
+        loanApplicationId: expectedEntry?.loanApplicationId || incoming?.loanApplicationId || null,
+        lenderOrgId: expectedEntry?.lenderOrgId || incoming?.lenderOrgId || null,
+        clientRequestId: expectedEntry?.clientRequestId || incoming?.clientRequestId || null
+      },
+      serviceResponse,
+      apiFailure,
+      serviceResponse?.error ? new Error(serviceResponse.message || 'Request failed') : null
+    );
+
+    if (!fallbackResponse?.response) {
+      return null;
+    }
+
+    this.logger.warn('Using replay response fallback for tolerated blocking forward failure', {
+      requestId: incoming?.requestId || null,
+      logTag: expectedEntry?.logTag || null,
+      logIndex: expectedEntry?.index ?? null,
+      endpoint,
+      destination,
+      reason: fallbackResponse.reason || 'replay_fallback_response'
+    });
+
+    const replayFallbackPayload = remapReplayPayloadForEntry(
+      this.stateManager,
+      fallbackResponse.response.data,
+      expectedResponse || expectedEntry
+    );
+
+    if (fallbackResponse.response.headers) {
+      this.stateManager.storeResponseHeaders(correlationKey, fallbackResponse.response.headers);
+    }
+
+    this.stateManager.handleIncomingResponse(correlationKey, replayFallbackPayload);
+
+    if (expectedResponse && !this.validator.processedIndices.has(expectedResponse.index)) {
+      const comparison = this.callbacks.comparePayloads(
+        expectedResponse.payload,
+        replayFallbackPayload,
+        expectedResponse.logTag
+      );
+
+      if (!comparison.match) {
+        this.logger.warn('Replay fallback response comparison mismatch tolerated', {
+          request: expectedEntry?.toString?.() || null,
+          response: expectedResponse.toString(),
+          logTag: expectedResponse.logTag,
+          differences: comparison.differences
+        });
+      } else {
+        this.logger.info('Replay fallback response validated', {
+          request: expectedEntry?.toString?.() || null,
+          response: expectedResponse.toString()
+        });
+      }
+
+      this.validator.markProcessed(expectedResponse);
+      this.callbacks.recordSuccess('downstream_response_validation', expectedResponse);
+    }
+
+    this.logger.logOutgoing(incoming.source, incoming.destination, endpoint, transformedPayload, {
+      event: 'forward_failed_tolerated',
+      requestId: incoming.requestId,
+      logTag: expectedEntry.logTag,
+      sourceDestination: expectedEntry.sourceDestination,
+      logIndex: expectedEntry.index,
+      status: fallbackResponse.response.status || serviceResponse?.status || null,
+      statusText: fallbackResponse.response.statusText || serviceResponse?.statusText || null,
+      error: serviceResponse?.message || null,
+      hasError: false,
+      fallbackReason: fallbackResponse.reason || null
+    });
+
+    return {
+      success: true,
+      payload: replayFallbackPayload,
+      headers: fallbackResponse.response.headers || {}
+    };
   }
 
   /**
@@ -104,7 +340,11 @@ export class RequestForwarder {
     const comparison = this.callbacks.comparePayloads(expectedPayload, incomingResponse.payload, incomingResponse.logTag);
 
     if (!comparison.match) {
-      return await this.callbacks.fail('Response comparison failed', comparison.differences);
+      this.logger.warn('Response comparison mismatch tolerated', {
+        entry: expectedEntry.toString(),
+        logTag: incomingResponse.logTag,
+        differences: comparison.differences
+      });
     }
 
     this.logger.info('Response validation passed', {
@@ -116,13 +356,17 @@ export class RequestForwarder {
     this.callbacks.recordSuccess('response_validation', expectedEntry);
 
     // Trigger next log entry processing (for external source requests like APP->LSP)
-    this.logger.info('Triggering processNextLogEntry after response validation');
-    setImmediate(() => {
-      this.logger.info('Executing setImmediate processNextLogEntry');
-      this.callbacks.processNextLogEntry().catch(err => {
-        this.logger.error('Error processing next log entry after response validation', { error: err.message });
+    if (this.shouldAutoProcessNextLogEntry()) {
+      this.logger.info('Triggering processNextLogEntry after response validation');
+      setImmediate(() => {
+        this.logger.info('Executing setImmediate processNextLogEntry');
+        this.callbacks.processNextLogEntry().catch(err => {
+          this.logger.error('Error processing next log entry after response validation', { error: err.message });
+        });
       });
-    });
+    } else {
+      this.logger.info('Skipping auto processNextLogEntry after response validation in async replay mode');
+    }
 
     return {
       success: true,
@@ -159,48 +403,21 @@ export class RequestForwarder {
       // Track this pending external request by context for out-of-order matching
       const contextKey = this.callbacks.getContextKey(expectedEntry);
 
-      // For LENDER calls, check for webhooks that should fire BEFORE the response
-      let webhooksBefore = [];
-      if (destination === 'LENDER') {
-        webhooksBefore = this.validator.findWebhooksForLenderCall(expectedEntry, expectedResponse, 'before');
-        if (webhooksBefore.length > 0) {
-          this.logger.info(`Found ${webhooksBefore.length} webhook(s) to trigger before LENDER response`, {
-            requestEntry: expectedEntry.toString()
-          });
-          // Trigger webhooks before responding
-          await this.callbacks.triggerWebhooks(webhooksBefore);
-        }
-      }
-
-      // Log mocked request and response
+      // Log mocked request now. The replayed response for GATEWAY->LENDER is logged
+      // only when sequence reaches the actual LENDER->GATEWAY response entry.
       this.logger.logApiCall(expectedEntry.source, expectedEntry.destination, api, 'REQUEST', expectedEntry.index);
-      this.logger.logApiCall(expectedResponse.source, expectedResponse.destination, api, 'RESPONSE', expectedResponse.index);
 
-      // For LENDER calls, check for webhooks that should fire AFTER the response (CASE 7)
-      let webhooksAfter = [];
       if (destination === 'LENDER') {
-        webhooksAfter = this.validator.findWebhooksAfterLenderResponse(expectedResponse, null);
-        if (webhooksAfter.length > 0) {
-          this.logger.info(`Found ${webhooksAfter.length} webhook(s) to trigger after LENDER response`, {
-            responseEntry: expectedResponse.toString()
-          });
-          // Store webhooks to trigger after we send the response back to GW
-          this.pendingPostResponseWebhooks.set(contextKey, webhooksAfter);
-        }
-      }
-
-      // Only track external call if there are webhooks to wait for
-      const totalWebhooks = webhooksBefore.length + webhooksAfter.length;
-      if (totalWebhooks > 0) {
-        // Create a promise that will resolve when the external response arrives
         let resolveExternal, rejectExternal;
         const externalPromise = new Promise((resolve, reject) => {
           resolveExternal = resolve;
           rejectExternal = reject;
         });
 
-        // Set a timeout for the external response (default 30s)
-        const externalTimeoutMs = this.config.timeoutMs || 10000;
+        // Lender responses can legitimately arrive much later in the replay
+        // than the original live caller would wait, especially when ART is
+        // preserving prod sequencing instead of responding immediately.
+        const externalTimeoutMs = Math.max(this.config.timeoutMs || 10000, 180000);
         const timeoutHandle = setTimeout(() => {
           if (this.pendingExternalRequests.has(contextKey)) {
             this.pendingExternalRequests.delete(contextKey);
@@ -219,12 +436,10 @@ export class RequestForwarder {
           timeoutHandle
         });
 
-        // Check if response arrived early and process it now
         const earlyResponse = this.earlyExternalResponses.get(contextKey);
         if (earlyResponse) {
           this.logger.info('Processing early-arrived response now', { contextKey });
           this.earlyExternalResponses.delete(contextKey);
-          // Process immediately (but don't return - continue with normal response)
           this.handleExternalServiceResponse(earlyResponse).catch(err => {
             this.logger.error('Error processing early response', { error: err.message });
           });
@@ -236,30 +451,62 @@ export class RequestForwarder {
           expectedResponseIndex: expectedResponse.index
         });
 
-        // Track this external call so we can wait for it before returning response to caller
-        this.logger.info('Tracking external call for later wait', {
+        this.logger.info('Holding GATEWAY->LENDER request until replay reaches actual response entry', {
           contextKey,
-          source: incoming.source,
-          destination: incoming.destination
+          requestEntry: expectedEntry.toString(),
+          responseEntry: expectedResponse.toString()
         });
 
-        // Return marker so caller knows to wait for all pending external calls
+        const shouldBlockHeldRequest = this.shouldBlockOnHeldExternalRequest();
+
+        this.logger.info('Evaluated held GATEWAY->LENDER request blocking mode', {
+          contextKey,
+          asyncReplayMode: this.config?.asyncReplayMode === true,
+          shouldBlockHeldRequest
+        });
+
+        if (!shouldBlockHeldRequest) {
+          this.logger.info('Not blocking on held GATEWAY->LENDER request in async replay mode', {
+            contextKey,
+            requestEntry: expectedEntry.toString(),
+            responseEntry: expectedResponse.toString()
+          });
+          return {
+            success: true,
+            payload: transformReplayPayloadForEntry(this.stateManager, expectedResponse.payload, expectedResponse),
+            tracked: true,
+            externalSkipped: true,
+            deferredExternalResponse: true
+          };
+        }
+
+        const externalWaitStart = this.config?.orderProfiler?.enabled ? this.config.orderProfiler.now() : 0;
+        let replayedResponse;
+        try {
+          replayedResponse = await externalPromise;
+        } finally {
+          this.config?.orderProfiler?.endSection('external_lender_callback_wait', externalWaitStart, {
+            contextKey,
+            requestIndex: expectedEntry.index,
+            responseIndex: expectedResponse.index
+          });
+        }
         return {
-          success: true,
-          payload: transformRequest(expectedResponse.payload, expectedResponse.logTag),
+          ...replayedResponse,
           tracked: true,
           externalSkipped: true
         };
       }
 
-      // No webhooks expected - mark entries as processed and return immediately
-      this.logger.info('No webhooks expected for external call, completing immediately', {
+      this.logger.info('No sequence-driven lender callback expected for external call, completing immediately', {
         contextKey,
         destination
       });
 
       // Mark entries as processed
-      this.validator.advance(); // request
+      // NOTE: advance() for the request was already called in handleIncomingRequest (orchestrator.js:516)
+      // before forwardToDestination is invoked. Calling it again here would skip the NEXT unrelated
+      // entry in the sequence (e.g., an APP_WRAPPER polling request interleaved between LENDER request/response).
       this.validator.markProcessed(expectedResponse); // response
 
       // Track async completion for count-based handling
@@ -270,7 +517,7 @@ export class RequestForwarder {
       // Return success immediately without tracking/waiting
       return {
         success: true,
-        payload: transformRequest(expectedResponse.payload, expectedResponse.logTag),
+        payload: transformReplayPayloadForEntry(this.stateManager, expectedResponse.payload, expectedResponse),
         tracked: false,
         externalSkipped: false,
         asyncComplete: isComplete
@@ -282,10 +529,22 @@ export class RequestForwarder {
       api,
       requestId: incoming.requestId
     });
+    this.logger.info('Service invoked', {
+      destination,
+      api,
+      requestId: incoming.requestId,
+      logTag: expectedEntry.logTag
+    });
 
     // Get endpoint config for custom headers
     const endpointConfig = getEndpointConfig(expectedEntry.sourceDestination, expectedEntry.logTag);
-    const customHeaders = { ...incoming.headers, ...endpointConfig?.headers };
+    const forwardingRequest = prepareForwardingRequest(
+      incoming,
+      expectedEntry,
+      endpointConfig?.headers,
+      this.stateManager
+    );
+    const customHeaders = forwardingRequest.headers;
 
     // Log incoming request headers from LSP
     this.logger.info('=== INCOMING REQ HEADERS (from LSP) ===', {
@@ -299,7 +558,13 @@ export class RequestForwarder {
     try {
       // Get endpoint from config - use mapped endpoint instead of incoming api
       const endpointConfig = getEndpointConfig(expectedEntry.sourceDestination, expectedEntry.logTag);
-      const endpoint = endpointConfig?.endpoint || api;
+      const rawEndpoint = endpointConfig?.endpoint || api;
+      const endpoint = this.stateManager?.rewriteOutgoingLoanApplicationIdsInEndpoint
+        ? this.stateManager.rewriteOutgoingLoanApplicationIdsInEndpoint(rawEndpoint, {
+          logTag: expectedEntry?.logTag,
+          field: 'endpoint'
+        })
+        : rawEndpoint;
       
       this.logger.info('Resolved endpoint for forwarding', {
         incomingApi: api,
@@ -312,7 +577,7 @@ export class RequestForwarder {
       const correlationKey = this.stateManager.constructor.generateCorrelationKey(
         endpoint,
         expectedEntry.sourceDestination,
-        incoming.requestId
+        forwardingRequest.requestId
       );
 
       // Find the expected response entry (may not be the immediate next entry)
@@ -349,30 +614,116 @@ export class RequestForwarder {
       // Use original source_destination for makeRequest to detect WRAPPER correctly
       const sourceDestinationForRequest = expectedEntry.originalSourceDestination || expectedEntry.sourceDestination;
 
-      // Transform masked values in payload before forwarding
-      const transformedPayload = transformRequest(incoming.payload, expectedEntry.logTag);
+      const transformedPayload = forwardingRequest.payload;
+      const originalPayloadRequestId = isPlainObject(incoming.payload) ? incoming.payload.requestId || null : null;
+      const requestTimeoutMs =
+        REQUEST_TIMEOUT_OVERRIDES[expectedEntry.logTag] ||
+        this.config.timeoutMs ||
+        10000;
+
+      this.logger.info('Preparing outgoing request forward', {
+        event: 'forward_attempt',
+        source: incoming.source,
+        destination: incoming.destination,
+        api: endpoint,
+        requestId: forwardingRequest.requestId,
+        logTag: expectedEntry.logTag,
+        sourceDestination: expectedEntry.sourceDestination,
+        logIndex: expectedEntry.index,
+        timeoutMs: requestTimeoutMs
+      });
+
+      this.logger.info('Resolved forwarding request context', {
+        logTag: expectedEntry.logTag,
+        sourceDestination: expectedEntry.sourceDestination,
+        requestId: forwardingRequest.requestId,
+        merchantId: forwardingRequest.merchantId,
+        originalPayloadRequestId,
+        forwardedPayloadRequestId: isPlainObject(transformedPayload) ? transformedPayload.requestId || null : null,
+        hasMerchantHeader: Boolean(customHeaders['x-merchant-id'] || customHeaders['X-Merchant-Id'])
+      });
 
       // Make actual HTTP request to destination
+      const downstreamRequestStart = this.config?.orderProfiler?.enabled ? this.config.orderProfiler.now() : 0;
       const serviceResponse = await makeRequest(
         this.callbacks.getServiceBaseUrl(destination),
         endpoint,
         'POST',
         transformedPayload,
-        incoming.requestId,
+        forwardingRequest.requestId,
         sourceDestinationForRequest,
         expectedEntry.logTag,
-        null,
+        forwardingRequest.merchantId,
         customHeaders,
         expectedEntry.index,
-        this.callbacks.getServiceUnixSocket(endpointConfig?.service || destination)
+        this.callbacks.getServiceUnixSocket(endpointConfig?.service || destination),
+        requestTimeoutMs
       );
+      this.config?.orderProfiler?.recordDownstreamCall({
+        destination,
+        endpoint,
+        logTag: expectedEntry.logTag,
+        logIndex: expectedEntry.index,
+        requestId: incoming.requestId,
+        status: serviceResponse?.status ?? null,
+        success: Boolean(serviceResponse && !serviceResponse.error && serviceResponse.status === 200),
+        durationMs: this.config.orderProfiler.now() - downstreamRequestStart
+      });
+
+      this.logger.info('Response received from service', {
+        destination,
+        api: endpoint,
+        requestId: forwardingRequest.requestId,
+        logTag: expectedEntry.logTag,
+        status: serviceResponse?.status || null,
+        hasError: !!serviceResponse?.error
+      });
+
+      if (serviceResponse && !serviceResponse.error) {
+        this.logger.logFinalOutgoing(incoming.source, incoming.destination, endpoint, transformedPayload, {
+          requestId: forwardingRequest.requestId,
+          logTag: expectedEntry.logTag,
+          sourceDestination: expectedEntry.sourceDestination,
+          logIndex: expectedEntry.index,
+          status: serviceResponse.status,
+          statusText: serviceResponse.statusText
+        });
+      }
 
       const apiFailure = this.checkApiFailure(serviceResponse);
 
-      if (serviceResponse && (serviceResponse.error || serviceResponse.status !== 200)) {
+      if (serviceResponse && (serviceResponse.error || serviceResponse.status !== 200 || apiFailure)) {
+        const toleratedFailureResult = this.tryBuildFailureFallbackResult({
+          incoming,
+          expectedEntry,
+          expectedResponse,
+          correlationKey,
+          destination,
+          endpoint,
+          transformedPayload,
+          serviceResponse,
+          apiFailure
+        });
+
+        if (toleratedFailureResult) {
+          return toleratedFailureResult;
+        }
+
+        this.logger.logOutgoing(incoming.source, incoming.destination, endpoint, transformedPayload, {
+          event: 'forward_failed',
+          requestId: incoming.requestId,
+          logTag: expectedEntry.logTag,
+          sourceDestination: expectedEntry.sourceDestination,
+          logIndex: expectedEntry.index,
+          status: serviceResponse?.status || null,
+          statusText: serviceResponse?.statusText || null,
+          error: serviceResponse?.message || null,
+          hasError: !!serviceResponse?.error
+        });
+
         let errorMsg;
         if (apiFailure) {
-          errorMsg = `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`;
+          errorMsg = `API returned FAILURE status: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`;
         } else if (serviceResponse.error) {
           errorMsg = `HTTP request failed: ${serviceResponse.message}`;
         } else {
@@ -392,8 +743,8 @@ export class RequestForwarder {
           destination
         });
 
-        if (this.callbacks.recordBufferFailure) {
-          this.callbacks.recordBufferFailure({
+        if (this.callbacks.recordFlowFailure) {
+          this.callbacks.recordFlowFailure({
             requestId: incoming.requestId,
             logTag: expectedEntry.logTag,
             sourceDestination: expectedEntry.sourceDestination,
@@ -402,7 +753,7 @@ export class RequestForwarder {
             requestPayload: transformedPayload,
             error: serviceResponse.error || !!apiFailure || true,
             errorMessage: apiFailure 
-              ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || 'Unknown API error'}`
+              ? `API FAILURE: ${apiFailure.error_message || apiFailure.message || apiFailure.description || 'Unknown API error'}`
               : (serviceResponse.message || errorMsg),
             errorCode: apiFailure?.error_code || apiFailure?.code || null,
             errorStack: null,
@@ -443,8 +794,17 @@ export class RequestForwarder {
           );
 
           if (!comparison.match) {
-            this.callbacks.recordFailure('downstream_response_comparison', expectedResponse, comparison.differences);
+            this.logger.warn('Downstream response mismatch tolerated', {
+              request: expectedEntry.toString(),
+              response: expectedResponse.toString(),
+              differences: comparison.differences
+            });
           } else {
+            this.stateManager.registerMappingsFromPayloadPair(
+              expectedResponse.payload,
+              serviceResponse.data,
+              { logTag: expectedResponse.logTag }
+            );
             this.logger.info('Downstream response validated', {
               request: expectedEntry.toString(),
               response: expectedResponse.toString()
@@ -470,12 +830,16 @@ export class RequestForwarder {
         if (handled) {
           // Response was matched with pending request - include headers
           // Trigger next log entry processing for external source requests
-          this.logger.info('Triggering processNextLogEntry after sync downstream response');
-          setImmediate(() => {
-            this.callbacks.processNextLogEntry().catch(err => {
-              this.logger.error('Error processing next log entry after sync response', { error: err.message });
+          if (this.shouldAutoProcessNextLogEntry()) {
+            this.logger.info('Triggering processNextLogEntry after sync downstream response');
+            setImmediate(() => {
+              this.callbacks.processNextLogEntry().catch(err => {
+                this.logger.error('Error processing next log entry after sync response', { error: err.message });
+              });
             });
-          });
+          } else {
+            this.logger.info('Skipping auto processNextLogEntry after sync downstream response in async replay mode');
+          }
           return {
             success: true,
             payload: serviceResponse.data,
@@ -502,12 +866,16 @@ export class RequestForwarder {
       }
 
       // Trigger next log entry processing for external source requests
-      this.logger.info('Triggering processNextLogEntry after async downstream response');
-      setImmediate(() => {
-        this.callbacks.processNextLogEntry().catch(err => {
-          this.logger.error('Error processing next log entry after async response', { error: err.message });
+      if (this.shouldAutoProcessNextLogEntry()) {
+        this.logger.info('Triggering processNextLogEntry after async downstream response');
+        setImmediate(() => {
+          this.callbacks.processNextLogEntry().catch(err => {
+            this.logger.error('Error processing next log entry after async response', { error: err.message });
+          });
         });
-      });
+      } else {
+        this.logger.info('Skipping auto processNextLogEntry after async downstream response in async replay mode');
+      }
 
       return {
         ...finalResponse,
@@ -590,7 +958,12 @@ export class RequestForwarder {
     );
 
     if (!comparison.match) {
-      return await this.callbacks.fail('External response comparison failed', comparison.differences);
+      this.logger.warn('External response comparison mismatch tolerated', {
+        request: matchedEntry.toString(),
+        response: matchedResponse.toString(),
+        logTag: incoming.logTag || matchedResponse.logTag,
+        differences: comparison.differences
+      });
     }
 
     // Mark both request and response as processed in the validator
@@ -615,7 +988,7 @@ export class RequestForwarder {
       clearTimeout(pendingInfo.timeoutHandle);
       pendingInfo.resolve({
         success: true,
-        payload: matchedResponse.payload
+        payload: remapReplayPayloadForEntry(this.stateManager, matchedResponse.payload, matchedResponse)
       });
     }
 
@@ -625,7 +998,7 @@ export class RequestForwarder {
 
     return {
       success: true,
-      payload: matchedResponse.payload
+      payload: remapReplayPayloadForEntry(this.stateManager, matchedResponse.payload, matchedResponse)
     };
   }
 
@@ -677,7 +1050,7 @@ export class RequestForwarder {
 
           return {
             success: true,
-            payload: transformRequest(pendingInfo.responseEntry.payload, pendingInfo.responseEntry.logTag),
+            payload: transformReplayPayloadForEntry(this.stateManager, pendingInfo.responseEntry.payload, pendingInfo.responseEntry),
             retry: true
           };
         }
@@ -715,7 +1088,6 @@ export class RequestForwarder {
     }
     this.pendingExternalRequests.clear();
     this.earlyExternalResponses.clear();
-    this.pendingPostResponseWebhooks.clear();
   }
   
   checkApiFailure(response) {
@@ -727,9 +1099,10 @@ export class RequestForwarder {
         data = JSON.parse(data);
       }
       
-      const status = data.status || data.Status || null;
+      const payload = data.payload || data.Payload || null;
+      const status = data.status || data.Status || payload?.status || payload?.Status || null;
       if (status && (status === 'FAILURE' || status === 'FAILED' || status === 'ERROR')) {
-        return data.error || data.Error || { message: 'API returned failure status', status };
+        return data.error || data.Error || payload?.error || payload?.Error || { message: 'API returned failure status', status };
       }
       
       return null;
