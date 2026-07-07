@@ -1002,6 +1002,60 @@ test('handleIncomingRequest responds immediately for GENERATE PARTNER AUTH TOKEN
   orchestrator.bufferManager.stop();
 });
 
+test('handleIncomingRequest records unexpected actual gateway-side APIs that are absent from replay sequence', async () => {
+  const logs = [
+    createRequestLog(0, {
+      logTag: 'SetRepaymentPlanRequest-LSP_REQUEST',
+      traceRoute: 'CORE_GATEWAY'
+    }),
+    {
+      messageNumber: 1,
+      message: {
+        log_tag: 'SetRepaymentPlanRequest-LSP_RESPONSE',
+        trace_route: 'GATEWAY_CORE',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'DMI'
+      }
+    }
+  ];
+
+  const recordedUnexpectedApis = [];
+  const orchestrator = new AsyncReplayOrchestrator(logs, {
+    timeoutMs: 10000,
+    merchantId: 'flipkart'
+  });
+  orchestrator.isRunning = true;
+  orchestrator.orderId = 'order-1';
+  orchestrator.reportGenerator = {
+    recordUnexpectedActualApi(orderId, apiInfo) {
+      recordedUnexpectedApis.push({ orderId, apiInfo });
+    },
+    recordReplayWarning() {}
+  };
+
+  orchestrator.handleIncomingRequest({
+    source: 'GATEWAY',
+    destination: 'LENDER',
+    api: '/prod/polling',
+    logTag: 'POLLING API :: LINE_STATUS_REQUEST',
+    sourceDestination: 'GATEWAY_LENDER',
+    payload: {
+      applicationid: 'live-line-detail'
+    },
+    requestId: 'unexpected-1'
+  }).catch(() => {});
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.equal(recordedUnexpectedApis.length, 1);
+  assert.equal(recordedUnexpectedApis[0].orderId, 'order-1');
+  assert.equal(recordedUnexpectedApis[0].apiInfo.logTag, 'POLLING API :: LINE_STATUS_REQUEST');
+  assert.equal(recordedUnexpectedApis[0].apiInfo.sourceDestination, 'GATEWAY_LENDER');
+
+  orchestrator.bufferManager.stop();
+});
+
 test('processNextLogEntry reuses in-flight processing for the same self-trigger fallback entry', async () => {
   const logs = [
     createRequestLog(0, {

@@ -107,7 +107,7 @@ export class ArtReportGenerator {
       flowFailures: [],
       bufferFailures: [],
       fallbackRecoveries: [],
-      ...(this.enableOrderProfiling ? { orderProfile: null } : {}),
+      unexpectedActualApis: [],
       diagnostics: {
         lastProcessedLog: null,
         timeoutAt: null,
@@ -302,6 +302,16 @@ export class ArtReportGenerator {
     order.fallbackRecoveries.push({
       timestamp: new Date().toISOString(),
       ...recoveryInfo
+    });
+  }
+
+  recordUnexpectedActualApi(orderId, apiInfo) {
+    const order = this.orders.find(o => o.orderId === orderId);
+    if (!order) return;
+
+    order.unexpectedActualApis.push({
+      timestamp: new Date().toISOString(),
+      ...apiInfo
     });
   }
 
@@ -659,6 +669,25 @@ export class ArtReportGenerator {
     };
   }
 
+  buildUnexpectedActualApis(order) {
+    return {
+      orderId: order.orderId,
+      status: order.status,
+      apis: (order.unexpectedActualApis || []).map((api) => ({
+        timestamp: api.timestamp || null,
+        logTag: api.logTag || null,
+        sourceDestination: api.sourceDestination || null,
+        source: api.source || null,
+        destination: api.destination || null,
+        endpoint: api.endpoint || null,
+        requestId: api.requestId || null,
+        currentReplayEntry: api.currentReplayEntry || null,
+        lookaheadWindow: api.lookaheadWindow || [],
+        reason: api.reason || null
+      }))
+    };
+  }
+
   generateReport(overallSuccess) {
     if (this.reportGenerated) {
       return null;
@@ -694,18 +723,7 @@ export class ArtReportGenerator {
       0
     );
     const totalFallbackRecoveries = this.orders.reduce((acc, order) => acc + (order.fallbackRecoveries?.length || 0), 0);
-    const profilingEnabled = this.enableOrderProfiling === true;
-    const profiledOrders = profilingEnabled
-      ? this.orders.filter(order => order.orderProfile)
-      : [];
-    const profilingSummary = profilingEnabled ? {
-      enabled: true,
-      profiledOrders: profiledOrders.length,
-      totalProfiledMs: profiledOrders.reduce((sum, order) => sum + (order.orderProfile?.totalProfiledMs || 0), 0),
-      totalWaitMs: profiledOrders.reduce((sum, order) => sum + (order.orderProfile?.totalWaitMs || 0), 0),
-      totalLspServerLatencyMs: profiledOrders.reduce((sum, order) => sum + (order.orderProfile?.totalLspServerLatencyMs || 0), 0),
-      totalLspCalls: profiledOrders.reduce((sum, order) => sum + (order.orderProfile?.lspServerLatency?.count || 0), 0)
-    } : null;
+    const totalUnexpectedActualApis = this.orders.reduce((acc, order) => acc + (order.unexpectedActualApis?.length || 0), 0);
 
     const orderOutcomes = this.orders.map((order) => this.buildOrderOutcome(order));
     const replayDecisionFailures = orderOutcomes.filter((order) =>
@@ -727,6 +745,9 @@ export class ArtReportGenerator {
     const payloadComparisons = this.orders
       .map((order) => this.buildPayloadComparisons(order))
       .filter((order) => order.comparisons.length > 0);
+    const unexpectedActualApis = this.orders
+      .map((order) => this.buildUnexpectedActualApis(order))
+      .filter((order) => order.apis.length > 0);
 
     const report = {
       executionId: `art-${Date.now()}`,
@@ -756,18 +777,12 @@ export class ArtReportGenerator {
         totalFallbackRecoveries,
         totalPayloadComparisons,
         totalPayloadMismatches,
-        ...(profilingSummary ? { profiling: profilingSummary } : {})
+        totalUnexpectedActualApis
       },
       orderOutcomes,
       requestDetails,
-      bufferFailureDetails,
-      artFailureDetails,
       payloadComparisons,
-      ...(profilingEnabled ? {
-        orderProfiles: this.orders
-          .filter(order => order.orderProfile)
-          .map(order => order.orderProfile)
-      } : {})
+      unexpectedActualApis
     };
 
     try {

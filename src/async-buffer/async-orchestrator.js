@@ -2888,6 +2888,49 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return directFetchLoanApplicationDataLookaheadResponse;
     }
 
+    if (
+      this.reportGenerator &&
+      this.orderId &&
+      normalizedIncoming?.source === 'GATEWAY' &&
+      (
+        normalizedIncoming?.destination === 'LENDER' ||
+        normalizedIncoming?.destination === 'LSP' ||
+        normalizedIncoming?.destination === 'THEMIS'
+      ) &&
+      !validation?.match &&
+      !validation?.foundInLookahead
+    ) {
+      const currentEntry = this.validator.getCurrentEntry();
+      const lookaheadWindow = (this.validator.entries || [])
+        .filter(entry =>
+          entry.index >= this.validator.currentIndex &&
+          entry.index < this.validator.currentIndex + 8
+        )
+        .map(entry => ({
+          index: entry.index,
+          logTag: entry.logTag,
+          sourceDestination: entry.sourceDestination
+        }));
+
+      const unexpectedActualApiInfo = {
+        type: 'UNEXPECTED_ACTUAL_API',
+        logTag: normalizedIncoming.logTag || null,
+        sourceDestination: normalizedIncoming.sourceDestination || normalizedSourceDestination,
+        source: normalizedIncoming.source || null,
+        destination: normalizedIncoming.destination || null,
+        endpoint: normalizedIncoming.api || null,
+        requestId: normalizedIncoming.requestId || null,
+        currentReplayEntry: currentEntry?.toString?.() || null,
+        lookaheadWindow,
+        reason: 'Observed in actual replay traffic but no matching replay entry was found in current/lookahead sequence'
+      };
+
+      this.reportGenerator.recordUnexpectedActualApi(this.orderId, unexpectedActualApiInfo);
+      this.reportGenerator.recordReplayWarning(this.orderId, unexpectedActualApiInfo);
+
+      logger.warn('Observed unexpected actual API during replay; recording for order diagnostics', unexpectedActualApiInfo);
+    }
+
     // If replay is already complete, ignore late straggler requests gracefully
     if (this.validator.isComplete()) {
       logger.warn('Ignoring late straggler request after replay completion', {
