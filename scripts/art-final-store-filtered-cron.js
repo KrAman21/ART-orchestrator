@@ -18,17 +18,7 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, '..');
 
 const DEFAULT_FILTER_CONFIG = [
-  // { merchantId: 'flipkart', status: 'SUCCESS', lenderOrgId: 'DMI' },
-  // { merchantId: 'flipkart', status: 'SUCCESS', lenderOrgId: 'HDB' },
-  // { merchantId: 'flipkartSM', status: 'SUCCESS' }
-];
-
-const DEFAULT_SUCCESS_SAMPLE_MERCHANT_IDS = [
-  'flipkart',
-  'flipkartSM',
-  'starhealth',
-  'adityabirla_health',
-  'amity'
+  { merchantId: 'flipkartSM', status: 'SUCCESS' }
 ];
 
 function parseBooleanOption(value, defaultValue = false) {
@@ -226,11 +216,28 @@ function buildExtendedOrderFetchFilters(filterConfig) {
   return combineFiltersWithAnd(filters);
 }
 
-async function fetchOrderIdsFromQAPIExtended(startDate, endDate, filterConfig) {
+function buildQapiMetrics(filterConfig) {
+  return filterConfig?.merchantId
+    ? ['fetch_order_id']
+    : ['fetch_order_id', 'fetch_merchant_id'];
+}
+
+function describeOrderFetchQuery(filterConfig) {
+  return {
+    merchantId: filterConfig?.merchantId || null,
+    status: filterConfig?.status || null,
+    lenderOrgId: filterConfig?.lenderOrgId || null,
+    flowType: filterConfig?.flowType || null,
+    subType: filterConfig?.subType || null,
+    filters: Array.isArray(filterConfig?.filters) ? filterConfig.filters : []
+  };
+}
+
+async function fetchOrderIdsFromQAPIExtended(startDate, endDate, filterConfig, fetchLimit = null) {
   const endpoint = '/analytics/query';
   const url = `${QAPI_CONFIG.baseUrl}${endpoint}`;
   const payload = {
-    metric: 'fetch_order_id',
+    metric: buildQapiMetrics(filterConfig),
     dimensions: [],
     filters: buildExtendedOrderFetchFilters(filterConfig),
     domain: 'orderAnalytics',
@@ -239,6 +246,16 @@ async function fetchOrderIdsFromQAPIExtended(startDate, endDate, filterConfig) {
       end: endDate
     }
   };
+  const querySummary = describeOrderFetchQuery(filterConfig);
+
+  console.log('[order-fetch:qapi] request', {
+    url,
+    fetchLimit,
+    startDate,
+    endDate,
+    metrics: payload.metric,
+    query: querySummary
+  });
 
   try {
     const response = await fetch(url, {
@@ -298,6 +315,7 @@ async function fetchOrderIdsFromQAPIExtended(startDate, endDate, filterConfig) {
       .map(row => ({
         orderId: row.fetch_order_id || row.order_id || row.orderId || row.ORDER_ID || row.id || null,
         merchantId:
+          row.fetch_merchant_id ||
           row.merchant_id ||
           row.merchantId ||
           row.MERCHANT_ID ||
@@ -305,9 +323,23 @@ async function fetchOrderIdsFromQAPIExtended(startDate, endDate, filterConfig) {
       }))
       .filter(order => order.orderId && String(order.orderId).trim() !== '');
 
+    const dedupedOrders = dedupeOrders(orders);
+
+    console.log('[order-fetch:qapi] response', {
+      fetchLimit,
+      startDate,
+      endDate,
+      metrics: payload.metric,
+      query: querySummary,
+      rawRowCount: resultRows.length,
+      normalizedRowCount: normalizedRows.length,
+      parsedOrderCount: orders.length,
+      dedupedOrderCount: dedupedOrders.length
+    });
+
     return {
       success: true,
-      orders: dedupeOrders(orders),
+      orders: dedupedOrders,
       count: orders.length
     };
   } catch (error) {
@@ -446,6 +478,22 @@ function buildOrderListPayload(stats, orders) {
   };
 }
 
+function calculateQuota(total, ratio) {
+  return Math.floor(total * ratio);
+}
+
+function buildSelectionTargets(totalOrderLimit) {
+  const configured = calculateQuota(totalOrderLimit, 0.2);
+  const success = calculateQuota(totalOrderLimit, 0.7);
+  const nonSuccess = totalOrderLimit - configured - success;
+
+  return {
+    configured,
+    success,
+    nonSuccess
+  };
+}
+
 function normalizeFilterConfig() {
   const rawConfig = process.env.ART_FILTER_CONFIG_JSON
     ? JSON.parse(process.env.ART_FILTER_CONFIG_JSON)
@@ -484,19 +532,39 @@ function normalizeFilterConfig() {
 }
 
 async function fetchOrdersForConfig(interval, filterConfig, orderLimitPerFilter) {
-  const qapiResult = await fetchOrderIdsFromQAPIExtended(interval.startDate, interval.endDate, filterConfig);
+  console.log('[order-fetch:limit] executing fetch', {
+    fetchLimit: orderLimitPerFilter,
+    interval,
+    query: describeOrderFetchQuery(filterConfig)
+  });
+
+  const qapiResult = await fetchOrderIdsFromQAPIExtended(
+    interval.startDate,
+    interval.endDate,
+    filterConfig,
+    orderLimitPerFilter
+  );
 
   if (!qapiResult.success) {
     throw new Error(`Failed to fetch order IDs for ${JSON.stringify(filterConfig)}: ${qapiResult.error}`);
   }
 
-  return (Array.isArray(qapiResult.orders) ? qapiResult.orders : [])
+  const limitedOrders = (Array.isArray(qapiResult.orders) ? qapiResult.orders : [])
     .slice(0, orderLimitPerFilter)
     .map(order => ({
       merchantId: order.merchantId || filterConfig.merchantId,
       orderId: order.orderId
     }))
     .filter(order => order.orderId);
+
+  console.log('[order-fetch:limit] completed fetch', {
+    fetchLimit: orderLimitPerFilter,
+    interval,
+    query: describeOrderFetchQuery(filterConfig),
+    returnedOrderCount: limitedOrders.length
+  });
+
+  return limitedOrders;
 }
 
 async function fetchOrdersForConfigs(interval, filterConfigEntries, orderLimit, debugLogsEnabled) {
@@ -519,6 +587,23 @@ async function fetchOrdersForConfigs(interval, filterConfigEntries, orderLimit, 
   }
 
   return dedupeOrders(combinedOrders).slice(0, orderLimit);
+}
+
+async function fetchOrdersForSingleConfig(interval, filterConfig, orderLimit, debugLogsEnabled) {
+  if (orderLimit <= 0) {
+    return [];
+  }
+
+  const orders = await fetchOrdersForConfig(interval, filterConfig, orderLimit);
+
+  if (debugLogsEnabled) {
+    console.log(
+      `[debug] fetched ${orders.length} candidate orders for window ${interval.startDate} -> ${interval.endDate}`,
+      filterConfig
+    );
+  }
+
+  return dedupeOrders(orders).slice(0, orderLimit);
 }
 
 async function fetchAndPrepareReplayLogs(merchantId, orderId, options) {
@@ -726,6 +811,7 @@ async function main() {
   const subType = process.env.SUB_TYPE || null;
   const interval = resolveInterval();
   const filterConfig = normalizeFilterConfig();
+  const selectionTargets = buildSelectionTargets(totalOrderLimit);
 
   if (workerCount <= 0) {
     throw new Error('ART_FILTERED_STORE_WORKERS must be a positive integer');
@@ -753,6 +839,9 @@ async function main() {
   console.log(`Batch Size: ${windowBatchSize}`);
   console.log(`Window Minutes: ${windowMinutes}`);
   console.log(`Filter Config Count: ${filterConfig.length}`);
+  console.log(`Configured Target: ${selectionTargets.configured}`);
+  console.log(`SUCCESS Target: ${selectionTargets.success}`);
+  console.log(`Non-SUCCESS Target: ${selectionTargets.nonSuccess}`);
   console.log(`Success Sample Count: ${successSampleCount}`);
   console.log(`Use Order Context Lookup: ${useOrderContextLookup}`);
   console.log(`Debug Logs: ${debugLogsEnabled}`);
@@ -780,6 +869,12 @@ async function main() {
       windowMinutes,
       totalWindowsPlanned: windows.length
     },
+    selectionTargets,
+    selectionProgress: {
+      configured: 0,
+      success: 0,
+      nonSuccess: 0
+    },
     storeRoot: resolveFromRepoRoot(storeRoot)
   };
 
@@ -798,44 +893,83 @@ async function main() {
       mode: 'windowed'
     };
 
-    const configuredOrders = await fetchOrdersForConfigs(
-      windowInterval,
-      filterConfig,
-      Math.min(window.maxOrders, remainingCapacity),
-      debugLogsEnabled
-    );
+    const windowLimit = Math.min(window.maxOrders, remainingCapacity);
+    const remainingConfiguredTarget = Math.max(0, selectionTargets.configured - stats.selectionProgress.configured);
+    const remainingSuccessTarget = Math.max(0, selectionTargets.success - stats.selectionProgress.success);
+    const remainingNonSuccessTarget = Math.max(0, selectionTargets.nonSuccess - stats.selectionProgress.nonSuccess);
+    const configuredFetchLimit = Math.min(windowLimit, remainingConfiguredTarget);
+    const successFetchLimit = Math.min(windowLimit, remainingSuccessTarget);
+    const nonSuccessFetchLimit = Math.min(windowLimit, remainingNonSuccessTarget);
 
-    const remainingAfterConfiguredOrders =
-      Math.min(window.maxOrders, remainingCapacity) - configuredOrders.length;
+    console.log('[order-fetch:window-plan]', {
+      batchIndex: window.index,
+      windowStart: window.startDate,
+      windowEnd: window.endDate,
+      windowLimit,
+      remainingCapacity,
+      limits: {
+        configured: configuredFetchLimit,
+        success: successFetchLimit,
+        nonSuccess: nonSuccessFetchLimit
+      },
+      progress: { ...stats.selectionProgress },
+      targets: selectionTargets
+    });
 
-    const successSampleMerchantIds = filterConfig.length > 0
-      ? [...new Set(filterConfig.map(entry => entry.merchantId).filter(Boolean))]
-      : DEFAULT_SUCCESS_SAMPLE_MERCHANT_IDS;
-
-    const successOrders = remainingAfterConfiguredOrders > 0 && successSampleMerchantIds.length > 0
+    const configuredOrders = filterConfig.length > 0
       ? await fetchOrdersForConfigs(
           windowInterval,
-          successSampleMerchantIds.map(merchantId => ({
-            merchantId,
-            status: 'SUCCESS',
-            lenderOrgId: null,
-            flowType: null,
-            subType: null,
-            filters: []
-          })),
-          remainingAfterConfiguredOrders,
+          filterConfig,
+          configuredFetchLimit,
           debugLogsEnabled
         )
       : [];
 
-    if (remainingAfterConfiguredOrders > 0 && successSampleMerchantIds.length === 0 && debugLogsEnabled) {
-      console.warn(
-        `[debug] skipping SUCCESS sample fetch for window ${window.startDate} -> ${window.endDate} because no merchantIds are configured`
-      );
-    }
+    const successOrders = await fetchOrdersForSingleConfig(
+      windowInterval,
+      {
+        merchantId: null,
+        status: null,
+        lenderOrgId: null,
+        flowType: null,
+        subType: null,
+        filters: [
+          {
+            field: 'status',
+            condition: 'In',
+            val: ['SUCCESS']
+          }
+        ]
+      },
+      successFetchLimit,
+      debugLogsEnabled
+    );
 
-    const sampledSuccessOrders = shuffle(successOrders).slice(0, remainingAfterConfiguredOrders);
-    const windowOrders = dedupeOrders([...configuredOrders, ...sampledSuccessOrders])
+    const nonSuccessOrders = await fetchOrdersForSingleConfig(
+      windowInterval,
+      {
+        merchantId: null,
+        status: null,
+        lenderOrgId: null,
+        flowType: null,
+        subType: null,
+        filters: [
+          {
+            field: 'status',
+            condition: 'NotIn',
+            val: ['SUCCESS']
+          }
+        ]
+      },
+      nonSuccessFetchLimit,
+      debugLogsEnabled
+    );
+
+    const windowOrders = dedupeOrders([
+      ...configuredOrders,
+      ...shuffle(successOrders),
+      ...shuffle(nonSuccessOrders)
+    ])
       .filter(order => {
         const key = `${order.merchantId}:${order.orderId}`;
         if (seenOrderKeys.has(key)) {
@@ -844,15 +978,68 @@ async function main() {
         seenOrderKeys.add(key);
         return true;
       })
-      .slice(0, Math.min(window.maxOrders, remainingCapacity));
+      .slice(0, windowLimit);
+
+    const configuredKeys = new Set(configuredOrders.map(order => `${order.merchantId}:${order.orderId}`));
+    const successKeys = new Set(successOrders.map(order => `${order.merchantId}:${order.orderId}`));
+    const nonSuccessKeys = new Set(nonSuccessOrders.map(order => `${order.merchantId}:${order.orderId}`));
+
+    let acceptedConfiguredOrders = 0;
+    let acceptedSuccessOrders = 0;
+    let acceptedNonSuccessOrders = 0;
+
+    for (const order of windowOrders) {
+      const key = `${order.merchantId}:${order.orderId}`;
+
+      if (configuredKeys.has(key)) {
+        acceptedConfiguredOrders += 1;
+        continue;
+      }
+
+      if (successKeys.has(key)) {
+        acceptedSuccessOrders += 1;
+        continue;
+      }
+
+      if (nonSuccessKeys.has(key)) {
+        acceptedNonSuccessOrders += 1;
+      }
+    }
+
+    stats.selectionProgress.configured += acceptedConfiguredOrders;
+    stats.selectionProgress.success += acceptedSuccessOrders;
+    stats.selectionProgress.nonSuccess += acceptedNonSuccessOrders;
 
     stats.processedBatches.push({
       batchIndex: window.index,
       windowStart: window.startDate,
       windowEnd: window.endDate,
       fetchedOrders: windowOrders.length,
-      configuredOrders: configuredOrders.length,
-      sampledSuccessOrders: sampledSuccessOrders.length
+      configuredOrders: acceptedConfiguredOrders,
+      successOrders: acceptedSuccessOrders,
+      nonSuccessOrders: acceptedNonSuccessOrders
+    });
+
+    console.log('[order-fetch:window-result]', {
+      batchIndex: window.index,
+      windowStart: window.startDate,
+      windowEnd: window.endDate,
+      requested: {
+        configured: configuredFetchLimit,
+        success: successFetchLimit,
+        nonSuccess: nonSuccessFetchLimit
+      },
+      received: {
+        configured: configuredOrders.length,
+        success: successOrders.length,
+        nonSuccess: nonSuccessOrders.length
+      },
+      accepted: {
+        configured: acceptedConfiguredOrders,
+        success: acceptedSuccessOrders,
+        nonSuccess: acceptedNonSuccessOrders
+      },
+      finalWindowOrders: windowOrders.length
     });
 
     if (windowOrders.length === 0) {
