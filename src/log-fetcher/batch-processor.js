@@ -1,6 +1,6 @@
 import { writeFile, mkdir } from 'fs/promises';
 import { dirname, resolve } from 'path';
-import { fetchS3TraceLogs } from './s3-trace-logs-client.js';
+import { MultiSourceLogFetcher } from './multi-source-log-fetcher.js';
 import { logger } from '../utils/logger.js';
 
 export class BatchLogFetcher {
@@ -14,45 +14,15 @@ export class BatchLogFetcher {
   }
 
   async fetchLogsForOrder(merchantId, orderId, retries = 0) {
-    logger.info(`Fetching logs for order: ${merchantId}/${orderId}`, {
-      merchantId,
-      orderId,
-      attempt: retries + 1
+    const fetcher = new MultiSourceLogFetcher({
+      sessionToken: this.sessionToken,
+      outputPath: this.outputPath,
+      delayBetweenRequests: this.delayBetweenRequests,
+      maxRetries: this.maxRetries,
+      retryDelay: this.retryDelay
     });
 
-    const result = await fetchS3TraceLogs(merchantId, orderId, this.sessionToken);
-
-    if (result.success) {
-      logger.info(`Successfully fetched ${result.count} logs for order ${orderId}`);
-      return {
-        success: true,
-        logs: result.logs || [],
-        count: result.count,
-        merchantId,
-        orderId
-      };
-    }
-
-    if (retries < this.maxRetries) {
-      logger.warn(`Fetch failed for order ${orderId}, retrying (${retries + 1}/${this.maxRetries})...`, {
-        error: result.error
-      });
-      await this.sleep(this.retryDelay * (retries + 1));
-      return this.fetchLogsForOrder(merchantId, orderId, retries + 1);
-    }
-
-    logger.error(`Failed to fetch logs for order ${orderId} after ${this.maxRetries} attempts`, {
-      error: result.error
-    });
-
-    return {
-      success: false,
-      error: result.error,
-      logs: [],
-      count: 0,
-      merchantId,
-      orderId
-    };
+    return fetcher.fetchLogsForOrder(merchantId, orderId, retries);
   }
 
   async fetchLogsForOrders(orderList) {

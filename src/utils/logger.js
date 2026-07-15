@@ -12,6 +12,7 @@ const LOG_LEVELS = {
 const CURRENT_LEVEL = LOG_LEVELS[process.env.LOG_LEVEL?.toUpperCase()] ?? LOG_LEVELS.INFO;
 const LOG_FILE = process.env.LOG_FILE || 'orchestrator-output.log';
 const LOG_TO_FILE = process.env.LOG_TO_FILE !== 'false';
+const DIRECTION_LOGS_TO_FILE = process.env.DIRECTION_LOGS_TO_FILE !== 'false';
 
 function canWriteToDir(dirPath) {
   try {
@@ -38,25 +39,63 @@ function getDefaultLogDir() {
   return candidates.find(canWriteToDir) || '/tmp/art-orchestrator';
 }
 
-const LOG_FILE_PATH = process.env.LOG_FILE
-  ? resolve(process.cwd(), process.env.LOG_FILE)
-  : resolve(getDefaultLogDir(), LOG_FILE);
+function resolveLogPath(envPath, fileName) {
+  if (envPath) {
+    return resolve(process.cwd(), envPath);
+  }
+
+  const contextPath =
+    process.env.REPORT_PATH ||
+    process.env.ART_DEBUG_LOG_PATH ||
+    process.env.ART_USER_LOG_PATH ||
+    process.env.LOG_FILE;
+
+  if (contextPath) {
+    return resolve(dirname(resolve(process.cwd(), contextPath)), fileName);
+  }
+
+  return resolve(LOG_DIR, fileName);
+}
+
+const LOG_DIR = getDefaultLogDir();
+const LOG_FILE_PATH = resolveLogPath(process.env.LOG_FILE, LOG_FILE);
+const INCOMING_LOG_FILE = resolveLogPath(process.env.ART_INCOMING_LOG_PATH, 'art-incoming.log');
+const OUTGOING_LOG_FILE = resolveLogPath(process.env.ART_OUTGOING_LOG_PATH, 'art-outgoing.log');
+
+function initLogFile(filePath) {
+  try {
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, '', { encoding: 'utf-8' });
+  } catch (_) {}
+}
 
 const GLOBAL_KEY = '__art_logger_initialized__';
-if (LOG_TO_FILE && !global[GLOBAL_KEY]) {
+if ((LOG_TO_FILE || DIRECTION_LOGS_TO_FILE) && !global[GLOBAL_KEY]) {
   try {
-    mkdirSync(dirname(LOG_FILE_PATH), { recursive: true });
-    writeFileSync(LOG_FILE_PATH, '', { encoding: 'utf-8' });
+    if (LOG_TO_FILE) {
+      initLogFile(LOG_FILE_PATH);
+    }
+    if (DIRECTION_LOGS_TO_FILE) {
+      initLogFile(INCOMING_LOG_FILE);
+      initLogFile(OUTGOING_LOG_FILE);
+    }
     global[GLOBAL_KEY] = true;
-    console.log(`[LOGGER_INIT] Initialized log file: ${LOG_FILE_PATH}`);
+    console.log(
+      `[LOGGER_INIT] Initialized log files: ${[
+        LOG_TO_FILE ? LOG_FILE_PATH : null,
+        DIRECTION_LOGS_TO_FILE ? INCOMING_LOG_FILE : null,
+        DIRECTION_LOGS_TO_FILE ? OUTGOING_LOG_FILE : null
+      ].filter(Boolean).join(', ')}`
+    );
   } catch (error) {
     console.error(`[LOGGER_INIT] Failed: ${error.message}`);
   }
-} else if (LOG_TO_FILE) {
+} else if (LOG_TO_FILE || DIRECTION_LOGS_TO_FILE) {
   console.log(`[LOGGER_INIT] Already initialized, skipping file clear`);
 }
 
 const sessionContext = new AsyncLocalStorage();
+let directionLogReplayContext = null;
 
 const subscribers = new Map();
 let subscriberCounter = 0;
@@ -65,13 +104,65 @@ function formatTimestamp() {
   return new Date().toISOString();
 }
 
-function logToFile(logEntry) {
+function logToFile(logEntry, filePath = LOG_FILE_PATH) {
   if (!LOG_TO_FILE) return;
 
   try {
     const line = JSON.stringify(logEntry) + '\n';
-    appendFileSync(LOG_FILE_PATH, line, { encoding: 'utf-8' });
+    appendFileSync(filePath, line, { encoding: 'utf-8' });
   } catch (_) {}
+}
+
+function logToDirectionFile(direction, logEntry) {
+  if (!DIRECTION_LOGS_TO_FILE) return;
+  const filePath = direction === 'incoming' ? INCOMING_LOG_FILE : OUTGOING_LOG_FILE;
+  try {
+    const replayMeta = directionLogReplayContext
+      ? {
+          replayAttempt: directionLogReplayContext.replayAttempt,
+          rewind: directionLogReplayContext.rewind,
+          replayOrderId: directionLogReplayContext.orderId || null
+        }
+      : {};
+    const entry = { ...logEntry, ...replayMeta, _direction: direction, _timestamp: formatTimestamp() };
+    const line = JSON.stringify(entry) + '\n';
+    appendFileSync(filePath, line, { encoding: 'utf-8' });
+  } catch (_) {}
+}
+
+function prioritizeDirectionLogFields(logEntry = {}) {
+  const preferredOrder = [
+    'timestamp',
+    'entryIndex',
+    'logIndex',
+    'replayAttempt',
+    'rewind',
+    'replayOrderId',
+    'direction',
+    'event',
+    'source',
+    'destination',
+    'api',
+    'requestId',
+    'logTag',
+    'sourceDestination'
+  ];
+
+  const prioritized = {};
+
+  for (const key of preferredOrder) {
+    if (Object.prototype.hasOwnProperty.call(logEntry, key)) {
+      prioritized[key] = logEntry[key];
+    }
+  }
+
+  for (const [key, value] of Object.entries(logEntry)) {
+    if (!Object.prototype.hasOwnProperty.call(prioritized, key)) {
+      prioritized[key] = value;
+    }
+  }
+
+  return prioritized;
 }
 
 function log(level, message, meta = {}) {
@@ -124,6 +215,18 @@ export function runInSession(sessionId, fn) {
   return sessionContext.run({ sessionId }, fn);
 }
 
+export function setDirectionLogReplayContext(context = {}) {
+  directionLogReplayContext = {
+    orderId: context.orderId || null,
+    replayAttempt: Number.isInteger(context.replayAttempt) ? context.replayAttempt : 1,
+    rewind: Boolean(context.rewind)
+  };
+}
+
+export function clearDirectionLogReplayContext() {
+  directionLogReplayContext = null;
+}
+
 export const logger = {
   debug: (msg, meta) => log('DEBUG', msg, meta),
   info: (msg, meta) => log('INFO', msg, meta),
@@ -133,6 +236,8 @@ export const logger = {
   subscribe,
   unsubscribe,
   runInSession,
+  setDirectionLogReplayContext,
+  clearDirectionLogReplayContext,
 
   logStart: (totalLogs) => log('INFO', 'Starting ART replay', { totalLogs }),
   logComplete: (summary) => log('INFO', 'ART replay completed', summary),
@@ -168,6 +273,72 @@ export const logger = {
 
   logError: (error, context = {}) => {
     log('ERROR', error.message, { stack: error.stack, ...context });
+  },
+
+  logIncoming: (source, destination, api, payload, meta = {}) => {
+    const entry = {
+      timestamp: formatTimestamp(),
+      direction: 'incoming',
+      source,
+      destination,
+      api,
+      payload,
+      ...meta
+    };
+    logToDirectionFile('incoming', entry);
+  },
+
+  logOutgoing: (source, destination, api, payload, meta = {}) => {
+    const normalizedMeta = {
+      ...meta,
+      entryIndex:
+        meta.entryIndex ??
+        (typeof meta.logIndex === 'number' ? meta.logIndex : null)
+    };
+    const entry = prioritizeDirectionLogFields({
+      timestamp: formatTimestamp(),
+      direction: 'outgoing',
+      source,
+      destination,
+      api,
+      payload,
+      ...normalizedMeta
+    });
+    logToDirectionFile('outgoing', entry);
+  },
+
+  logFinalIncoming: (source, destination, api, payload, meta = {}) => {
+    const entry = {
+      timestamp: formatTimestamp(),
+      direction: 'incoming',
+      event: 'received',
+      source,
+      destination,
+      api,
+      payload,
+      ...meta
+    };
+    logToDirectionFile('incoming', entry);
+  },
+
+  logFinalOutgoing: (source, destination, api, payload, meta = {}) => {
+    const normalizedMeta = {
+      ...meta,
+      entryIndex:
+        meta.entryIndex ??
+        (typeof meta.logIndex === 'number' ? meta.logIndex : null)
+    };
+    const entry = prioritizeDirectionLogFields({
+      timestamp: formatTimestamp(),
+      direction: 'outgoing',
+      event: 'forwarded',
+      source,
+      destination,
+      api,
+      payload,
+      ...normalizedMeta
+    });
+    logToDirectionFile('outgoing', entry);
   }
 };
 

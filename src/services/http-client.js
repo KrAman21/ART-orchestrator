@@ -2,8 +2,138 @@ import { logger } from '../utils/logger.js';
 import { MOCK_CONFIG, QAPI_CONFIG } from '../config.js';
 import { fetchS3TraceLogs as fetchS3TraceLogsFromClient } from '../log-fetcher/s3-trace-logs-client.js';
 import { unixSocketRequest } from './unix-socket-client.js';
+import crypto from 'crypto';
+import { isAbsoluteUrl, resolveReplayEndpoint } from './replay-request-resolver.js';
 
-export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null) {
+function buildRequestUrl(baseUrl, endpoint) {
+  if (isAbsoluteUrl(endpoint)) {
+    const parsed = new URL(endpoint);
+    return {
+      url: endpoint,
+      socketEndpoint: `${parsed.pathname}${parsed.search}`
+    };
+  }
+
+  const socketEndpoint = resolveReplayEndpoint(endpoint) || endpoint;
+  return {
+    url: `${baseUrl}${socketEndpoint}`,
+    socketEndpoint
+  };
+}
+
+function inferMerchantIdFromEndpoint(endpoint) {
+  if (typeof endpoint !== 'string') {
+    return null;
+  }
+
+  if (endpoint.startsWith('/flipkartSM/')) {
+    return 'flipkartSM';
+  }
+
+  if (endpoint.startsWith('/flipkart2w/')) {
+    return 'flipkart2w';
+  }
+
+  if (endpoint.startsWith('/flipkart/')) {
+    return 'flipkart';
+  }
+
+  return null;
+}
+
+function resolveMerchantIdForRequest(merchantId, customHeaders, endpoint) {
+  return (
+    merchantId ||
+    customHeaders?.['x-merchant-id'] ||
+    customHeaders?.['X-Merchant-Id'] ||
+    inferMerchantIdFromEndpoint(endpoint) ||
+    null
+  );
+}
+
+function buildBasicMerchantAuthorization(merchantId) {
+  return merchantId ? `Basic ${merchantId}` : 'Basic flipkart';
+}
+
+const APP_CORE_ENVELOPE_HEADER_KEY_MAP = {
+  'x-merchant-id': 'X-Merchant-Id',
+  'x-session-token': 'X-Session-Token',
+  'x-user-id': 'X-User-Id',
+  'x-order-id': 'X-Order-Id',
+  'x-device-token-id': 'X-Device-Token-Id',
+  'x-forwarded-for': 'X-Forwarded-For',
+  'x-loan-request-info-id': 'X-LoanRequestInfoId',
+  'x-logging-flag': 'X-Logging-Flag',
+  'x-client-auth-token': 'X-Client-Auth-Token',
+  'x-origin': 'X-Origin',
+  'x-version': 'X-Version'
+};
+
+function canonicalizeAppCoreEnvelopeHeaders(customHeaders = {}) {
+  const canonicalHeaders = {};
+
+  for (const [key, value] of Object.entries(customHeaders || {})) {
+    if (value === undefined) {
+      continue;
+    }
+
+    const mappedKey = APP_CORE_ENVELOPE_HEADER_KEY_MAP[key] || key;
+    canonicalHeaders[mappedKey] = value;
+  }
+
+  return canonicalHeaders;
+}
+
+function shouldSendAppCoreAsTextEnvelope(sourceDestination, logTag, method) {
+  return (
+    sourceDestination === 'APP_CORE' &&
+    method !== 'GET'
+  );
+}
+
+function buildAppCoreTextEnvelope(payload, requestId, merchantId, customHeaders = {}) {
+  const canonicalHeaders = canonicalizeAppCoreEnvelopeHeaders(customHeaders);
+
+  return {
+    payload: payload ?? {},
+    header: {
+      'X-Merchant-Id': merchantId || payload?.merchantId || payload?.merchant_id || 'flipkart',
+      ...(payload?.clientAuthToken ? { 'X-Client-Auth-Token': payload.clientAuthToken } : {}),
+      ...canonicalHeaders
+    },
+    timeStamp: new Date().toISOString(),
+    requestId: requestId || payload?.requestId || crypto.randomUUID()
+  };
+}
+
+function shouldSendSdkWrapperAsTextEnvelope(sourceDestination, logTag, endpoint, method) {
+  if (sourceDestination !== 'APP_WRAPPER' || method === 'GET') {
+    return false;
+  }
+
+  if (typeof logTag === 'string' && logTag.includes('SDK')) {
+    return true;
+  }
+
+  return typeof endpoint === 'string' && (
+    endpoint.includes('/sdk/') ||
+    endpoint.includes('credit/sdk/')
+  );
+}
+
+function buildWrapperJsonEnvelope(payload, requestId, merchantId, customHeaders = {}) {
+  return {
+    payload: payload ?? {},
+    header: {
+      'X-Merchant-Id': merchantId || payload?.merchantId || payload?.merchant_id || 'flipkart',
+      ...customHeaders
+    },
+    timeStamp: new Date().toISOString(),
+    requestId: requestId || payload?.requestId || crypto.randomUUID()
+  };
+}
+
+export async function makeRequest(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, timeoutMs = 30000) {
   const parts = sourceDestination?.split('_') || [];
   const source = parts[0] || '';
   const dest = parts[1] || '';
@@ -12,7 +142,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     logger.logApiCall(source, dest, endpoint, 'REQUEST', logIndex);
   }
 
-  logger.info('Making HTTP request', {
+  logger.info('Making request', {
     baseUrl,
     endpoint,
     method,
@@ -25,25 +155,19 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     unixSocket
   });
 
-  if (baseUrl.includes('8070')) {
-    logger.info('=== LSP CALL INITIATED ===', {
-      baseUrl,
-      endpoint,
-      url: `${baseUrl}${endpoint}`,
-      method,
-      requestId,
-      logTag,
-      headers: customHeaders,
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  const url = `${baseUrl}${endpoint}`;
+  const { url, socketEndpoint } = buildRequestUrl(baseUrl, endpoint);
+  const resolvedMerchantId = resolveMerchantIdForRequest(merchantId, customHeaders, endpoint);
   const headers = {
     ...customHeaders,
     'Content-Type': 'application/json',
     'Accept': 'application/json'
   };
+
+  // The payload may be transformed after we receive the original request.
+  // Let the HTTP client recalculate body-specific/hop-by-hop headers.
+  for (const headerName of ['content-length', 'Content-Length', 'host', 'Host', 'connection', 'Connection']) {
+    delete headers[headerName];
+  }
 
   if (requestId) {
     headers['x-request-id'] = requestId;
@@ -54,23 +178,58 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
   }
 
   // Add merchant ID to headers if provided
-  if (merchantId) {
-    headers['x-merchant-id'] = merchantId;
+  if (resolvedMerchantId) {
+    headers['x-merchant-id'] = resolvedMerchantId;
   }
 
   try {
     let body = method !== 'GET' ? JSON.stringify(payload ?? {}) : undefined;
+    const usesSdkWrapperTextEnvelope =
+      shouldSendSdkWrapperAsTextEnvelope(sourceDestination, logTag, endpoint, method);
+
+    if (shouldSendAppCoreAsTextEnvelope(sourceDestination, logTag, method)) {
+      const requestPayload = buildAppCoreTextEnvelope(payload, requestId, merchantId, customHeaders);
+      body = JSON.stringify(JSON.stringify(requestPayload));
+      logger.info('Prepared APP_CORE request as unencrypted JwtPayload text envelope on first attempt', {
+        requestId,
+        endpoint,
+        logTag,
+        envelopeRequestId: requestPayload.requestId
+      });
+    }
+
+    if (usesSdkWrapperTextEnvelope) {
+      const requestPayload = buildWrapperJsonEnvelope(payload, requestId, merchantId, customHeaders);
+      body = JSON.stringify(JSON.stringify(requestPayload));
+      logger.info('Prepared SDK wrapper request as stringified JSON envelope on first attempt', {
+        requestId,
+        endpoint,
+        logTag,
+        envelopeRequestId: requestPayload.requestId
+      });
+    }
 
     if (dest === 'WRAPPER' && body) {
       // body is already stringified above; just add WRAPPER-specific headers
       headers['disable_encryption'] = customHeaders['disable_encryption'] || 'TRUE';
-      headers['authorization'] = customHeaders['authorization'] || 'Basic flipkart';
+      headers['authorization'] =
+        customHeaders['authorization']
+          ? customHeaders['authorization'].replace(/^Basic\s+.+$/i, buildBasicMerchantAuthorization(resolvedMerchantId))
+          : buildBasicMerchantAuthorization(resolvedMerchantId);
       
       // When disable_encryption is TRUE, LSP expects body as JSON String (not Object)
       // because Servant route type is ReqBody '[JSON] Text
-      if (headers['disable_encryption'] === 'TRUE') {
+      if (headers['disable_encryption'] === 'TRUE' && !usesSdkWrapperTextEnvelope) {
         body = JSON.stringify(body);
       }
+
+      logger.info('Resolved WRAPPER authorization header', {
+        merchantId,
+        resolvedMerchantId,
+        authorization: headers['authorization'],
+        logTag,
+        requestId
+      });
     }
 
     logger.info('Request body prepared', {
@@ -78,60 +237,35 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       contentType: headers['Content-Type']
     });
 
-    if (baseUrl.includes('8070')) {
-      logger.info('=== LSP REQUEST DETAILS ===', {
-        url,
-        method,
-        headers: { ...headers },
-        body: body,
-        requestId,
-        logTag,
-        timestamp: new Date().toISOString()
-      });
-    }
+    const sendRequest = async (requestBody) => {
+      if (unixSocket) {
+        logger.info('Using Unix socket for request', { socket: unixSocket, serviceUrl: url, timeoutMs });
+        const socketResponse = await unixSocketRequest(unixSocket, baseUrl, socketEndpoint, {
+          method,
+          body: requestBody,
+          headers,
+          timeout: timeoutMs
+        });
+        return {
+          ok: socketResponse.ok,
+          status: socketResponse.status,
+          statusText: socketResponse.statusText,
+          json: () => Promise.resolve(socketResponse.data),
+          headers: new Map(Object.entries(socketResponse.headers || {}))
+        };
+      }
 
-    let response;
-    if (unixSocket) {
-      console.log(`🔌 Using Unix socket for request: ${unixSocket}`);
-      console.log(`🔌 URL: ${url}`);
-      logger.info('Using Unix socket for request', { socket: unixSocket, url });
-      const socketResponse = await unixSocketRequest(unixSocket, baseUrl, endpoint, {
-        method,
-        body,
-        headers
-      });
-      response = {
-        ok: socketResponse.ok,
-        status: socketResponse.status,
-        statusText: socketResponse.statusText,
-        json: () => Promise.resolve(socketResponse.data),
-        headers: new Map(Object.entries(socketResponse.headers || {}))
-      };
-    } else {
-      response = await fetch(url, {
+      return fetch(url, {
         method,
         headers,
-        body
+        body: requestBody,
+        signal: AbortSignal.timeout(timeoutMs)
       });
-    }
+    };
 
-    const data = await response.json().catch(() => null);
+    let response = await sendRequest(body);
 
-    // Detailed logging for LSP calls (port 8070)
-    if (baseUrl.includes('8070')) {
-      logger.info('=== LSP CALL RESPONSE ===', {
-        url,
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok,
-        hasData: !!data,
-        dataKeys: data ? Object.keys(data) : [],
-        data: data,
-        error: !response.ok ? (data?.error || 'HTTP error') : null,
-        requestId,
-        timestamp: new Date().toISOString()
-      });
-    }
+    let data = await response.json().catch(() => null);
 
     logger.info('HTTP_RESPONSE_FULL_BODY', {
       requestId,
@@ -141,6 +275,37 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       data: data,
       dataString: data ? JSON.stringify(data) : null
     });
+
+    if (
+      sourceDestination === 'APP_CORE' &&
+      method !== 'GET' &&
+      response.status === 400 &&
+      data?.expectedValue === 'String' &&
+      data?.actualValue === 'Object' &&
+      body
+    ) {
+      const requestPayload = buildAppCoreTextEnvelope(payload, requestId, merchantId, customHeaders);
+      const retryBody = JSON.stringify(JSON.stringify(requestPayload));
+      logger.warn('Retrying APP_CORE request as unencrypted JwtPayload text after LSP type mismatch', {
+        requestId,
+        endpoint,
+        logTag,
+        envelopeRequestId: requestPayload.requestId
+      });
+
+      response = await sendRequest(retryBody);
+      data = await response.json().catch(() => null);
+
+      logger.info('HTTP_RESPONSE_FULL_BODY', {
+        requestId,
+        url,
+        status: response.status,
+        statusText: response.statusText,
+        data: data,
+        dataString: data ? JSON.stringify(data) : null,
+        retry: 'APP_CORE_UNENCRYPTED_JWT_TEXT'
+      });
+    }
 
     logger.debug('HTTP response received', {
       status: response.status,
@@ -186,11 +351,17 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
  * @returns {Promise<Object>} - Response from GW
  */
 export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = {}, gwUnixSocket = null) {
-  const endpoint = `/gateway/webhook/${lenderOrgId}`;
-  const url = `${gwBaseUrl}${endpoint}`;
+  const replayUrl = headers.__artReplayUrl;
+  const method = headers.__artReplayMethod || 'POST';
+  delete headers.__artReplayUrl;
+  delete headers.__artReplayMethod;
+
+  const endpoint = resolveReplayEndpoint(replayUrl) || `/gateway/webhook/${lenderOrgId}`;
+  const { url, socketEndpoint } = buildRequestUrl(gwBaseUrl, endpoint);
 
   logger.info('Triggering webhook to GW', {
     endpoint,
+    method,
     lenderOrgId,
     payloadPreview: payload ? JSON.stringify(payload).substring(0, 200) : null
   });
@@ -199,8 +370,8 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
     let response;
     if (gwUnixSocket) {
       logger.info('Using Unix socket for webhook request', { socket: gwUnixSocket, url });
-      const socketResponse = await unixSocketRequest(gwUnixSocket, gwBaseUrl, endpoint, {
-        method: 'POST',
+      const socketResponse = await unixSocketRequest(gwUnixSocket, gwBaseUrl, socketEndpoint, {
+        method,
         body: JSON.stringify(payload),
         headers: {
           'Content-Type': 'application/json',
@@ -216,7 +387,7 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
       };
     } else {
       response = await fetch(url, {
-        method: 'POST',
+        method,
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
@@ -258,10 +429,19 @@ export async function triggerWebhook(gwBaseUrl, lenderOrgId, payload, headers = 
  */
 export async function checkHealth(serviceConfig) {
   try {
-    const response = await fetch(`${serviceConfig.baseUrl}/health`, {
-      method: 'GET',
-      timeout: 2000
-    });
+    let response;
+    if (serviceConfig.unixSocket) {
+      const socketResponse = await unixSocketRequest(serviceConfig.unixSocket, serviceConfig.baseUrl, '/health', {
+        method: 'GET',
+        timeout: 2000
+      });
+      response = { ok: socketResponse.ok };
+    } else {
+      response = await fetch(`${serviceConfig.baseUrl}/health`, {
+        method: 'GET',
+        timeout: 2000
+      });
+    }
 
     const healthy = response.ok;
     logger.logHealthCheck(serviceConfig.name, healthy);
@@ -355,7 +535,7 @@ export async function fetchOrderIdsFromQAPI(startDate, endDate, merchantIds = nu
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-Web-LoginToken': QAPI_CONFIG.token,
+        'Authorization': QAPI_CONFIG.authorization,
         'Consumer-Credit-Dashboard': 'Consumer-Credit-Dashboard',
         'Referer': 'https://dashboard.credit.juspay.in/'
       },

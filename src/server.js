@@ -1,9 +1,10 @@
 import express from 'express';
 import { logger } from './utils/logger.js';
-import { getApiMapping, QAPI_CONFIG } from './config.js';
-import { fetchS3TraceLogs, fetchOrderIdsFromQAPI } from './services/http-client.js';
+import { API_TO_LOGTAG_MAP, getApiMapping, QAPI_CONFIG } from './config.js';
+import { fetchOrderIdsFromQAPI } from './services/http-client.js';
 import { writeFile } from 'fs/promises';
 import { resolve } from 'path';
+import { MultiSourceLogFetcher } from './log-fetcher/multi-source-log-fetcher.js';
 
 /**
  * Create Express server with routes for LSP and GW
@@ -15,6 +16,65 @@ import { resolve } from 'path';
  */
 export function createServer(orchestrator) {
   const app = express();
+
+  function buildBodyPreview(value, limit = 1200) {
+    if (value === undefined) return '<undefined>';
+    try {
+      const serialized = JSON.stringify(value);
+      if (!serialized) return '<empty>';
+      return serialized.length > limit ? `${serialized.slice(0, limit)}...<truncated>` : serialized;
+    } catch (_error) {
+      return '<unserializable>';
+    }
+  }
+
+  function getIncomingHeader(req, headerName) {
+    return req.headers[headerName] || req.headers[headerName.toLowerCase()] || null;
+  }
+
+  function extractIncomingLenderOrgId(req) {
+    return req.body?.lender_org_id ||
+      req.body?.themisDetail?.lenderOrgId ||
+      req.body?.lenderOrgId ||
+      getIncomingHeader(req, 'x-lender-org-id');
+  }
+
+  function resolveMappingFromHeader(api, req) {
+    const headerLogTag = getIncomingHeader(req, 'x-logtag');
+    const headerSourceDestination = getIncomingHeader(req, 'x-source_destination');
+
+    if (!headerLogTag || typeof headerLogTag !== 'string' || !headerLogTag.trim()) {
+      return null;
+    }
+
+    const normalizedHeaderLogTag = headerLogTag.trim().endsWith('_REQUEST')
+      ? headerLogTag.trim()
+      : `${headerLogTag.trim()}_REQUEST`;
+
+    if (headerSourceDestination && typeof headerSourceDestination === 'string' && headerSourceDestination.trim()) {
+      return {
+        logTag: normalizedHeaderLogTag,
+        api,
+        sourceDestination: headerSourceDestination.trim()
+      };
+    }
+
+    const baseMapping = API_TO_LOGTAG_MAP[api];
+    if (!baseMapping) {
+      return null;
+    }
+
+    let sourceDestination = baseMapping.sourceDestination;
+    if (api === '/lsp/generateKFS' && extractIncomingLenderOrgId(req)) {
+      sourceDestination = 'GATEWAY_LENDER';
+    }
+
+    return {
+      ...baseMapping,
+      logTag: normalizedHeaderLogTag,
+      sourceDestination
+    };
+  }
 
   // Middleware
   app.use(express.json({ limit: '10mb' }));
@@ -58,15 +118,38 @@ export function createServer(orchestrator) {
       const api = '/' + req.params.api;
       console.log(`Handling API: ${api}`);
       const payload = req.body;
-      const requestId = req.headers['x-request-id'] || req.body.request_id;
+      const requestId = req.headers['x-request-id'] || req.body.request_id || req.body.requestId;
+      const nextExpectedEntry = orchestrator.validator?.entries?.[orchestrator.validator?.currentIndex] || null;
+      const lookaheadLogTags = orchestrator.validator?.entries
+        ?.slice(orchestrator.validator?.currentIndex || 0, (orchestrator.validator?.currentIndex || 0) + 8)
+        ?.map(entry => entry?.logTag)
+        ?.filter(Boolean) || [];
+      const lookaheadEntries = orchestrator.validator?.entries
+        ?.slice(orchestrator.validator?.currentIndex || 0, (orchestrator.validator?.currentIndex || 0) + 8)
+        ?.map(entry => ({ logTag: entry?.logTag, index: entry?.index }))
+        ?.filter(entry => entry?.logTag) || [];
       
 
-      // Determine source/destination and logTag from API endpoint mapping
-      const mapping = getApiMapping(api, { payload: req.body, headers: req.headers });
+      const headerLogTag = getIncomingHeader(req, 'x-logtag');
+      const headerSourceDestination = getIncomingHeader(req, 'x-source_destination');
+      const headerDerivedMapping = resolveMappingFromHeader(api, req);
+
+      // Prefer explicit logTag from the request headers. If absent, fall back
+      // to contextual API mapping to infer the logTag from the route.
+      const configDerivedMapping = getApiMapping(api, {
+        payload: req.body,
+        headers: req.headers,
+        nextExpectedLogTag: nextExpectedEntry?.logTag || null,
+        lookaheadLogTags,
+        lookaheadEntries,
+        currentReplayIndex: orchestrator.validator?.currentIndex || 0,
+        replayScopeKey: orchestrator.config?.registrySessionId || orchestrator.orderId || 'single-server'
+      });
+      const mapping = headerDerivedMapping || configDerivedMapping;
       if (!mapping) {
         // Unknown API endpoint - likely a webhook/callback, ignore gracefully
         logger.info(`Ignoring unmapped API endpoint (webhook): ${api}`);
-        return res.json({ success: true, ignored: true, message: 'Webhook ignored' });
+        return res.json('Webhook ignored');
       }
 
       // Source/destination always from mapping
@@ -74,6 +157,34 @@ export function createServer(orchestrator) {
       const source = parts[0];
       const destination = parts[1];
       const logTag = mapping.logTag;
+
+      logger.info('ART_INCOMING_MAPPING_DEBUG', {
+        api,
+        method: req.method,
+        requestId,
+        rawHeaders: req.headers,
+        rawBodyPreview: buildBodyPreview(payload),
+        headerDerived: {
+          logTag: headerLogTag,
+          sourceDestination: headerSourceDestination,
+          mapping: headerDerivedMapping
+        },
+        configDerived: configDerivedMapping,
+        finalized: {
+          logTag,
+          sourceDestination: mapping.sourceDestination,
+          source,
+          destination
+        },
+        nextExpectedEntry: nextExpectedEntry
+          ? {
+              index: nextExpectedEntry.index,
+              logTag: nextExpectedEntry.logTag,
+              sourceDestination: nextExpectedEntry.sourceDestination
+            }
+          : null,
+        lookaheadEntries
+      });
 
       // console.log('Request headers: ', req.headers);
       
@@ -86,6 +197,8 @@ export function createServer(orchestrator) {
         logTag: logTag,
         headers: {
           'x-request-id': req.headers['x-request-id'],
+          'x-logtag': headerLogTag,
+          'x-source_destination': getIncomingHeader(req, 'x-source_destination'),
           'x-art-callback-url': req.headers['x-art-callback-url'],
           'x-art-enabled': req.headers['x-art-enabled'],
           'content-type': req.headers['content-type'],
@@ -99,11 +212,7 @@ export function createServer(orchestrator) {
       // Extract correlation fields from payload for matching
       const loanApplicationId = payload?.loan_application_id || payload?.loanApplicationId || req.headers['x-loan-application-id'];
       // lender_org_id can be at top level, nested in themisDetail, or in headers
-      const lenderOrgId = payload?.lender_org_id ||
-                          payload?.themisDetail?.lenderOrgId ||
-                          payload?.lenderOrgId ||
-                          req.headers['x-lender-org-id'] ||
-                          req.headers['X-Lender-Org-Id'];
+      const lenderOrgId = extractIncomingLenderOrgId(req);
 
       if (api === '/v1.0/fetchOfferResponse') {
         logger.info('FETCH_OFFER_ASYNC callback received on direct server', {
@@ -207,13 +316,34 @@ export function createServer(orchestrator) {
 
       logger.info('Fetching logs from external API', { merchantId, orderId });
 
-      const result = await fetchS3TraceLogs(merchantId, orderId);
+      const fetcher = new MultiSourceLogFetcher({
+        sessionToken: process.env.SESSION_TOKEN,
+        outputPath: 'data/logs.json'
+      });
+      const result = await fetcher.fetchLogsForOrder(merchantId, orderId);
 
       if (!result.success) {
         return res.status(500).json({
           success: false,
           error: result.error,
           message: result.message
+        });
+      }
+
+      if (result.skipped) {
+        logger.warn('Skipping log fetch replay for order due to order-context multi-LAID guard', {
+          merchantId,
+          orderId,
+          skipReason: result.skipReason,
+          context: result.context
+        });
+
+        return res.json({
+          success: true,
+          skipped: true,
+          skipReason: result.skipReason,
+          context: result.context,
+          logCount: 0
         });
       }
 
@@ -224,6 +354,7 @@ export function createServer(orchestrator) {
         merchantId,
         orderId,
         logCount: result.count,
+        context: result.context,
         filePath: logsFilePath
       });
 
@@ -340,7 +471,23 @@ export function createServer(orchestrator) {
         try {
           logger.info(`[${i + 1}/${orderIds.length}] Processing order: ${orderId}`);
 
-          const logsResult = await fetchS3TraceLogs(QAPI_CONFIG.merchantId, orderId);
+          const logsFetcher = new MultiSourceLogFetcher({
+            sessionToken: process.env.SESSION_TOKEN,
+            outputPath: 'data/logs.json'
+          });
+          const logsResult = await logsFetcher.fetchLogsForOrder(QAPI_CONFIG.merchantId, orderId);
+
+          if (logsResult.skipped) {
+            orderResultItem.status = 'skipped';
+            orderResultItem.error = logsResult.skipReason;
+            orderResultItem.skipped = true;
+            results.orderResults.push(orderResultItem);
+            logger.warn(`[${i + 1}/${orderIds.length}] Skipping order: ${orderId}`, {
+              skipReason: logsResult.skipReason,
+              context: logsResult.context
+            });
+            continue;
+          }
 
           if (!logsResult.success) {
             orderResultItem.status = 'failed';

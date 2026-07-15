@@ -5,7 +5,7 @@ const FIELD_TRANSFORMS = {
     'mobile_number': { value: '9876543210', check: (v) => typeof v === 'string' && v.startsWith('XX') },
     'phone': { value: '9876543210', check: (v) => typeof v === 'string' && v.startsWith('XX') },
     'date_of_birth': { value: '01-01-1990', check: (v) => typeof v === 'string' && (v.startsWith('XX') || v === 'MASKED') },
-    'dateOfBirth': { value: '01-01-1990', check: (v) => typeof v === 'string' && v.startsWith('XX') },
+    'dateOfBirth': { value: '1990-01-01', check: (v) => typeof v === 'string' && (v.startsWith('XX') || v === 'MASKED') },
     'pan_number': { value: 'EHZPA1234F', check: (v) => typeof v === 'string' && v.startsWith('XX') },
     'pan': { value: 'EHZPA1234F', check: (v) => typeof v === 'string' && v.startsWith('XX') },
     'first_name': { value: 'TestFirst', check: (v) => typeof v === 'string' && v.startsWith('XX') },
@@ -27,6 +27,8 @@ const EXPIRY_TIME_FIELDS = [
     'order_expiry_time',
     'expiry_time',
     'expiration_time',
+    'expiry_at',
+    'orderExpiry',
     'expiryAt',
     'expires_at'
 ];
@@ -37,8 +39,8 @@ function isMasked(value) {
 
 function isISOTimestamp(value) {
     if (typeof value !== 'string') return false;
-    const isoRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z$/;
-    return isoRegex.test(value);
+    const isoRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
+    return isoRegex.test(value) && !Number.isNaN(Date.parse(value));
 }
 
 function generateFutureTimestamp(minutesFromNow) {

@@ -1,16 +1,39 @@
 import { fetchLogsFromJSONFile, filterAndSortLogs, filterOrchestratorSkippableLogs } from './services/log-fetcher.js';
 import { ReplayOrchestrator } from './orchestrator.js';
 import { AsyncReplayOrchestrator } from './async-buffer/async-orchestrator.js';
-import { createServer } from './server.js';
 import { createMockController } from './mocks/index.js';
 import { MOCK_CONFIG, SERVICE_MAP, RETRY_CONFIG, RETRY_TIMEOUT_OVERRIDES } from './config.js';
 import { BatchLogFetcher } from './log-fetcher/index.js';
 import { ArtReportGenerator } from './services/art-report-generator.js';
 import { logger } from './utils/logger.js';
 import { basename, dirname, extname, join } from 'path';
-import { unlink } from 'fs/promises';
-import { getOptionalRepeatPolicy } from './replay-special-cases.js';
+import { access, unlink } from 'fs/promises';
+import { REPLAY_SPECIAL_CASES, getOptionalRepeatPolicy, isPollingApiLogTag, isSelfTriggerFallbackApiLogTag } from './replay-special-cases.js';
 import { findCorrespondingResponseEntry } from './services/response-matcher.js';
+
+function extractReadableFailureMessage(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value !== 'object') {
+    return String(value);
+  }
+
+  return (
+    value.errorMessage ||
+    value.error_message ||
+    value.description ||
+    value.message ||
+    value.error ||
+    value.code ||
+    null
+  );
+}
 
 export async function runSequentialArt(orderList, config) {
   const maxJourneyTimeMs = config.MAX_JOURNEY_TIME_MS || 3 * 60 * 1000;
@@ -59,6 +82,13 @@ export async function runSequentialArt(orderList, config) {
   console.log(`========================================\n`);
 
   reportGenerator.startExecution();
+
+  // Start all S3 fetches concurrently in the background — returns a Map of Promises.
+  // Workers await only their own order's promise, so replay and fetching overlap.
+  console.log(`\n[PREFETCH] Starting background log fetch for all ${orderList.length} orders...`);
+  const prefetchPromises = startPrefetchPromises(orderList, config);
+  console.log(`[PREFETCH] Workers starting — fetching and replaying will run concurrently.\n`);
+
   const results = new Array(orderList.length);
   let nextOrderIndex = 0;
 
@@ -87,7 +117,8 @@ export async function runSequentialArt(orderList, config) {
         absoluteIndex + 1,
         orderList.length,
         maxJourneyTimeMs,
-        reportGenerator
+        reportGenerator,
+        await (prefetchPromises?.get(orderId) ?? Promise.resolve(null))
       );
 
       const result = {
@@ -169,15 +200,156 @@ export async function runSequentialArt(orderList, config) {
   return { success: failed === 0, results: finalizedResults };
 }
 
-async function processSingleOrder(merchantId, orderId, config, orderIndex, totalOrders, maxJourneyTimeMs, reportGenerator) {
+/**
+ * Fetches logs from S3 and runs the full filter pipeline for a single order.
+ * Returns the final filtered logs array, or throws on failure.
+ */
+async function fetchAndFilterOrderLogs(merchantId, orderId, config, logsFilePath, filteredLogsPath, finalFilteredLogsPath) {
+  const maxFetchAttempts = 5;
+  const fetchRetryIntervalMs = 2000;
+  let fetchResult = null;
+
+  for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
+    const fetcher = new BatchLogFetcher({
+      sessionToken: config.SESSION_TOKEN,
+      outputPath: logsFilePath,
+      delayBetweenRequests: 500,
+      maxRetries: 3
+    });
+
+    fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+
+    if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
+      break;
+    }
+
+    logger.warn(`[PREFETCH] Fetch attempt ${attempt}/${maxFetchAttempts} failed for order ${orderId}`, {
+      attempt,
+      maxFetchAttempts,
+      totalLogs: fetchResult.stats?.totalLogs || 0,
+      error: fetchResult.error || 'No logs found'
+    });
+
+    if (attempt < maxFetchAttempts) {
+      await sleep(fetchRetryIntervalMs);
+    }
+  }
+
+  if (!fetchResult?.success || fetchResult.stats.totalLogs === 0) {
+    throw new Error(`No logs found after ${maxFetchAttempts} attempts`);
+  }
+
+  const logs = await fetchLogsFromJSONFile(logsFilePath);
+  if (logs.length === 0) throw new Error('No logs to process after fetch');
+
+  const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
+  if (filteredLogs.length === 0) throw new Error('No logs remaining after filterAndSortLogs');
+
+  const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
+  if (finalFilteredLogs.length === 0) throw new Error('No logs remaining after filterOrchestratorSkippableLogs');
+
+  return finalFilteredLogs;
+}
+
+async function maybeLoadExistingFinalFilteredLogs(orderId, finalFilteredLogsPath, config) {
+  if (config.USE_EXISTING_FINAL_FILTERED_LOGS !== true) {
+    return null;
+  }
+
+  try {
+    await access(finalFilteredLogsPath);
+  } catch (_error) {
+    logger.info('Testing shortcut enabled but final filtered logs file is not present yet', {
+      orderId,
+      finalFilteredLogsPath
+    });
+    return null;
+  }
+
+  const finalFilteredLogs = await fetchLogsFromJSONFile(finalFilteredLogsPath);
+  if (!Array.isArray(finalFilteredLogs) || finalFilteredLogs.length === 0) {
+    logger.warn('Existing final filtered logs file was found but empty; falling back to normal fetch flow', {
+      orderId,
+      finalFilteredLogsPath
+    });
+    return null;
+  }
+
+  logger.info('Using existing final filtered logs file directly for testing run', {
+    orderId,
+    finalFilteredLogsPath,
+    logCount: finalFilteredLogs.length
+  });
+
+  return {
+    finalFilteredLogs,
+    logsFilePath: null,
+    filteredLogsPath: null,
+    finalFilteredLogsPath
+  };
+}
+
+/**
+ * Prefetch pipeline: fetches and filters S3 logs for ALL orders concurrently.
+ * Returns a Map<orderId, { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath }>
+ * (or { error, logsFilePath, ... } on failure).
+ * Workers consume pre-fetched data and skip the S3 wait entirely.
+ */
+function startPrefetchPromises(orderList, config) {
+  // Returns Map<orderId, Promise<{finalFilteredLogs,...}|{error,...}>> immediately.
+  // All fetches fire concurrently in the background. Each worker awaits its own.
+  const promises = new Map();
+
+  for (const { merchantId, orderId } of orderList) {
+    // idx matches position in orderList, same as what processSingleOrder uses
+    const orderIndex = orderList.findIndex(o => o.orderId === orderId) + 1;
+    const logsFilePath          = getPerOrderFilePath(config.LOGS_FILE_PATH             || 'data/logs.json',              orderId, orderIndex, config);
+    const filteredLogsPath      = getPerOrderFilePath(config.FILTERED_LOGS_PATH         || 'data/filtered-logs.json',      orderId, orderIndex, config);
+    const finalFilteredLogsPath = getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH   || 'data/final-filtered-logs.json', orderId, orderIndex, config);
+
+    const p = (async () => {
+      const existingFinalFilteredLogs = await maybeLoadExistingFinalFilteredLogs(
+        orderId,
+        finalFilteredLogsPath,
+        config
+      );
+
+      if (existingFinalFilteredLogs) {
+        console.log(`[PREFETCH] ✓ ${orderId}: ${existingFinalFilteredLogs.finalFilteredLogs.length} logs loaded directly from existing final filtered file`);
+        return existingFinalFilteredLogs;
+      }
+
+      return fetchAndFilterOrderLogs(
+        merchantId, orderId, config,
+        logsFilePath, filteredLogsPath, finalFilteredLogsPath
+      ).then(
+        finalFilteredLogs => {
+          console.log(`[PREFETCH] ✓ ${orderId}: ${finalFilteredLogs.length} logs ready`);
+          return { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
+        },
+        error => {
+          console.log(`[PREFETCH] ✗ ${orderId}: ${error.message}`);
+          logger.warn(`[PREFETCH] Failed for order ${orderId}`, { orderId, error: error.message });
+          return { error: error.message, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
+        }
+      );
+    })();
+
+    promises.set(orderId, p);
+  }
+
+  return promises;
+}
+
+async function processSingleOrder(merchantId, orderId, config, orderIndex, totalOrders, maxJourneyTimeMs, reportGenerator, prefetchedData = null) {
   let server = null;
   let orchestrator = null;
   let mocks = null;
   let progressInterval = null;
   const registrySessionId = getRegistrySessionId(config, orderId);
-  const logsFilePath = getPerOrderFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex, config);
-  const filteredLogsPath = getPerOrderFilePath(config.FILTERED_LOGS_PATH || 'data/filtered-logs.json', orderId, orderIndex, config);
-  const finalFilteredLogsPath = getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json', orderId, orderIndex, config);
+  const logsFilePath = prefetchedData?.logsFilePath ?? getPerOrderFilePath(config.LOGS_FILE_PATH || 'data/logs.json', orderId, orderIndex, config);
+  const filteredLogsPath = prefetchedData?.filteredLogsPath ?? getPerOrderFilePath(config.FILTERED_LOGS_PATH || 'data/filtered-logs.json', orderId, orderIndex, config);
+  const finalFilteredLogsPath = prefetchedData?.finalFilteredLogsPath ?? getPerOrderFilePath(config.FINAL_FILTERED_LOGS_PATH || 'data/final-filtered-logs.json', orderId, orderIndex, config);
 
   console.log(`Replay artifacts for ${orderId}:`);
   console.log(`  Raw logs: ${logsFilePath}`);
@@ -192,26 +364,54 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
   });
 
   try {
-    logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 1: Fetching logs`, {
-      orderId,
-      orderIndex,
-      totalOrders,
-      phase: 'FETCH_LOGS'
-    });
+    let finalFilteredLogs;
 
-    let fetchResult = null;
-    const maxFetchAttempts = 5;
-    const fetchRetryIntervalMs = 2000;
-
-    const preCachedLogs = await fetchLogsFromJSONFile(logsFilePath).catch(() => []);
-    if (preCachedLogs.length > 0) {
-      console.log(`  Using pre-cached logs for order ${orderId} (${preCachedLogs.length} entries)`);
-      fetchResult = {
-        success: true,
-        stats: { totalLogs: preCachedLogs.length },
-        allLogs: preCachedLogs
-      };
+    if (prefetchedData?.finalFilteredLogs) {
+      finalFilteredLogs = prefetchedData.finalFilteredLogs;
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Using pre-fetched logs`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        logCount: finalFilteredLogs.length,
+        phase: 'PREFETCH_HIT'
+      });
+      console.log(`[PREFETCH] Using ${finalFilteredLogs.length} pre-fetched logs for order ${orderId}`);
     } else {
+      const existingFinalFilteredLogs = await maybeLoadExistingFinalFilteredLogs(
+        orderId,
+        finalFilteredLogsPath,
+        config
+      );
+
+      if (existingFinalFilteredLogs?.finalFilteredLogs) {
+        finalFilteredLogs = existingFinalFilteredLogs.finalFilteredLogs;
+        logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Using existing final filtered logs file`, {
+          orderId,
+          orderIndex,
+          totalOrders,
+          logCount: finalFilteredLogs.length,
+          finalFilteredLogsPath,
+          phase: 'FINAL_FILTERED_FILE_HIT'
+        });
+      } else {
+      if (prefetchedData?.error) {
+        logger.warn(`[PREFETCH] Pre-fetch failed for order ${orderId}, falling back to inline fetch`, {
+          orderId,
+          error: prefetchedData.error
+        });
+      }
+
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 1: Fetching logs`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        phase: 'FETCH_LOGS'
+      });
+
+      let fetchResult = null;
+      const maxFetchAttempts = 5;
+      const fetchRetryIntervalMs = 2000;
+
       for (let attempt = 1; attempt <= maxFetchAttempts; attempt++) {
         const fetcher = new BatchLogFetcher({
           sessionToken: config.SESSION_TOKEN,
@@ -221,6 +421,35 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         });
 
         fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+
+        if (fetchResult.results?.[0]?.skipped) {
+          const skipReason = fetchResult.results[0].skipReason || 'Skipped due to order-context multi-LAID guard';
+          logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - ${skipReason}`, {
+            orderId,
+            orderIndex,
+            totalOrders,
+            phase: 'ORDER_SKIPPED'
+          });
+
+          reportGenerator.finalizeOrder(orderId, {
+            success: true,
+            skipped: true,
+            stopReason: skipReason,
+            logsProcessed: 0,
+            artResults: {
+              passed: 0,
+              failed: 0,
+              processedLogs: [],
+              payloadComparisons: []
+            }
+          });
+
+          return {
+            success: true,
+            skipped: true,
+            logCount: 0
+          };
+        }
 
         if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
           break;
@@ -238,104 +467,137 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
           await new Promise(resolve => setTimeout(resolve, fetchRetryIntervalMs));
         }
       }
-    }
 
-    if (!fetchResult.success || fetchResult.stats.totalLogs === 0) {
-      const error = `No logs found after ${maxFetchAttempts} attempts`;
-      console.log(`  Failed to fetch logs for order ${orderId} after ${maxFetchAttempts} attempts, skipping.`);
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: error,
-        logsProcessed: 0
+      if (!fetchResult.success || fetchResult.stats.totalLogs === 0) {
+        const error = `No logs found after ${maxFetchAttempts} attempts`;
+        console.log(`  Failed to fetch logs for order ${orderId} after ${maxFetchAttempts} attempts, skipping.`);
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: error,
+          logsProcessed: 0
+        });
+        return {
+          success: false,
+          logCount: 0,
+          error
+        };
+      }
+
+      console.log(`Fetched ${fetchResult.stats.totalLogs} logs for order ${orderId} (attempt ${fetchResult.stats.totalLogs > 0 ? 'succeeded' : 'exhausted'})`);
+
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 2: Loading and filtering logs`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        phase: 'FILTER_LOGS'
       });
-      return {
-        success: false,
-        logCount: 0,
-        error
-      };
-    }
 
-    console.log(`Fetched ${fetchResult.stats.totalLogs} logs for order ${orderId} (attempt ${fetchResult.stats.totalLogs > 0 ? 'succeeded' : 'exhausted'})`);
+      const logs = await fetchLogsFromJSONFile(logsFilePath);
 
-    logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 2: Loading and filtering logs`, {
-      orderId,
-      orderIndex,
-      totalOrders,
-      phase: 'FILTER_LOGS'
-    });
-    
-    const logs = await fetchLogsFromJSONFile(logsFilePath);
+      if (logs.length === 0) {
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: 'No logs to process',
+          logsProcessed: 0
+        });
+        return { success: false, logCount: 0, error: 'No logs to process' };
+      }
 
-    if (logs.length === 0) {
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: 'No logs to process',
-        logsProcessed: 0
-      });
-      return { success: false, logCount: 0, error: 'No logs to process' };
-    }
+      console.log(`Loaded ${logs.length} logs`);
 
-    console.log(`Loaded ${logs.length} logs`);
+      const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
 
-    const filteredLogs = await filterAndSortLogs(logs, filteredLogsPath);
-    
-    if (filteredLogs.length === 0) {
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: 'No logs after filtering',
-        logsProcessed: 0
-      });
-      return { success: false, logCount: 0, error: 'No logs after filtering' };
-    }
+      if (filteredLogs.length === 0) {
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: 'No logs after filtering',
+          logsProcessed: 0
+        });
+        return { success: false, logCount: 0, error: 'No logs after filtering' };
+      }
 
-    const finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
-    
-    if (finalFilteredLogs.length === 0) {
-      reportGenerator.finalizeOrder(orderId, {
-        success: false,
-        stopReason: 'No logs after second filtering',
-        logsProcessed: 0
-      });
-      return { success: false, logCount: 0, error: 'No logs after second filtering' };
+      finalFilteredLogs = await filterOrchestratorSkippableLogs(filteredLogs, finalFilteredLogsPath);
+
+      if (finalFilteredLogs.length === 0) {
+        reportGenerator.finalizeOrder(orderId, {
+          success: false,
+          stopReason: 'No logs after second filtering',
+          logsProcessed: 0
+        });
+        return { success: false, logCount: 0, error: 'No logs after second filtering' };
+      }
+      }
     }
 
     orderReport.logsTotal = finalFilteredLogs.length;
     console.log(`Ready to replay ${finalFilteredLogs.length} unique logs`);
 
-    if (MOCK_CONFIG.enabled) {
-      console.log('\nMock mode enabled - starting mock services...');
-      const lspPort = new URL(MOCK_CONFIG.mockLspUrl).port || 4232;
-      const gwPort = new URL(MOCK_CONFIG.mockGwUrl).port || 2344;
+    const replayLenderOrgIds = getReplayLenderOrgIds(finalFilteredLogs);
+    const skippedLenderOrgIds = (config.SKIP_LENDER_ORG_IDS || []).filter(lenderOrgId =>
+      replayLenderOrgIds.includes(lenderOrgId)
+    );
 
-      mocks = createMockController({
-        lspPort: parseInt(lspPort, 10),
-        gwPort: parseInt(gwPort, 10),
-        orchestratorUrl: `http://localhost:${config.PORT}`
+    if (skippedLenderOrgIds.length > 0) {
+      const skipReason = `Skipped by config: replay contains lenderOrgId(s) ${skippedLenderOrgIds.join(', ')}`;
+      logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - ${skipReason}`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        replayLenderOrgIds,
+        skippedLenderOrgIds,
+        phase: 'ORDER_SKIPPED'
       });
 
-      await mocks.start(logs);
+      reportGenerator.finalizeOrder(orderId, {
+        success: true,
+        skipped: true,
+        stopReason: skipReason,
+        logsProcessed: 0,
+        artResults: {
+          passed: 0,
+          failed: 0,
+          processedLogs: [],
+          payloadComparisons: []
+        }
+      });
 
-      SERVICE_MAP.LSP.baseUrl = MOCK_CONFIG.mockLspUrl;
-      SERVICE_MAP.GW.baseUrl = MOCK_CONFIG.mockGwUrl;
-
-      console.log(`Mock services started`);
+      return {
+        success: true,
+        skipped: true,
+        logCount: 0
+      };
     }
 
+    if (MOCK_CONFIG.enabled) {
+      throw new Error('MOCK_CONFIG.enabled is not supported in unix-socket-only ART mode.');
+    }
+
+    const OrchestratorClass = config.USE_ASYNC_ORCHESTRATOR ? AsyncReplayOrchestrator : ReplayOrchestrator;
+    const attemptedReplayStartIndices = new Set([0]);
+    let replayAttempt = 1;
+    let finalAttemptResult = null;
+    logger.setDirectionLogReplayContext({
+      orderId,
+      replayAttempt,
+      rewind: false
+    });
     logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 3: Starting ART replay`, {
       orderId,
       orderIndex,
       totalOrders,
       totalLogs: finalFilteredLogs.length,
+      replayAttempt,
       phase: 'START_REPLAY'
     });
-    
-    const OrchestratorClass = config.USE_ASYNC_ORCHESTRATOR ? AsyncReplayOrchestrator : ReplayOrchestrator;
+
     orchestrator = new OrchestratorClass(finalFilteredLogs, {
       timeoutMs: config.TIMEOUT_MS,
       orderId,
       orderIndex,
       totalOrders,
-      reportGenerator
+      reportGenerator,
+      registrySessionId,
+      onLoanApplicationId: config.onLoanApplicationId
     });
 
     if (config.onOrchestratorReady) {
@@ -347,129 +609,188 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         config.onLoanApplicationId?.(laId, orderId, registrySessionId);
       }
     } else {
-      const app = createServer(orchestrator);
-      await new Promise((resolve, reject) => {
-        server = app.listen(config.PORT, () => {
-          console.log(`\nART Server running on port ${config.PORT} for order ${orderId}`);
-          resolve();
-        });
-        server.on('error', reject);
-      });
+      throw new Error('Legacy per-order TCP server mode is no longer supported. Use the unix-socket multiplexer flow.');
     }
 
     logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 4: Running ART replay`, {
       orderId,
       orderIndex,
       totalOrders,
+      replayAttempt,
       phase: 'RUNNING_REPLAY'
     });
-    
+
     await orchestrator.start();
 
-    progressInterval = setInterval(() => {
-      if (!orchestrator || !orchestrator.isRunning) {
+    while (true) {
+      progressInterval = setInterval(() => {
+        if (!orchestrator || !orchestrator.isRunning) {
+          clearInterval(progressInterval);
+          return;
+        }
+
+        const progress = orchestrator.validator?.getProgress();
+        const currentEntry = orchestrator.validator?.getCurrentEntry();
+
+        if (progress && currentEntry) {
+          logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Processing ${progress.progress} - Current: ${currentEntry.logTag || 'N/A'}`, {
+            orderId,
+            orderIndex,
+            totalOrders,
+            replayAttempt,
+            currentLogTag: currentEntry.logTag,
+            currentLogIndex: currentEntry.index,
+            progressPercent: progress.progress,
+            processed: progress.processed,
+            remaining: progress.remaining,
+            total: progress.total,
+            phase: 'IN_PROGRESS'
+          });
+
+          reportGenerator.updateOrderProgress(orderId, {
+            logTag: currentEntry.logTag,
+            logIndex: currentEntry.index,
+            logsProcessed: progress.processed,
+            timeline: {
+              logTag: currentEntry.logTag,
+              progress: progress.progress,
+              action: 'processing'
+            }
+          });
+        }
+      }, 5000);
+
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 5: Waiting for completion (max ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes)`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        replayAttempt,
+        maxJourneyTimeMinutes: Math.round(maxJourneyTimeMs / 1000 / 60),
+        phase: 'WAITING_COMPLETION'
+      });
+
+      const completionResult = await waitForCompletionWithTimeout(
+        orchestrator,
+        maxJourneyTimeMs,
+        orderId,
+        orderIndex,
+        totalOrders,
+        reportGenerator,
+        config.stopSignal
+      );
+
+      if (progressInterval) {
         clearInterval(progressInterval);
-        return;
+        progressInterval = null;
       }
 
-      const progress = orchestrator.validator?.getProgress();
-      const currentEntry = orchestrator.validator?.getCurrentEntry();
-      
-      if (progress && currentEntry) {
-        logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Processing ${progress.progress} - Current: ${currentEntry.logTag || 'N/A'}`, {
+      const artResults = orchestrator.getResults();
+
+      console.log(`\nOrder ${orderId} Results:`);
+      console.log(`  Passed: ${artResults.passed}`);
+      console.log(`  Failed: ${artResults.failed}`);
+      console.log(`  Total: ${artResults.processedLogs?.length || 0}`);
+
+      if (orchestrator.isComplete()) {
+        logger.info('Suppressing stale completion timeout/rewind handling because replay is already complete', {
           orderId,
           orderIndex,
           totalOrders,
-          currentLogTag: currentEntry.logTag,
-          currentLogIndex: currentEntry.index,
-          progressPercent: progress.progress,
-          processed: progress.processed,
-          remaining: progress.remaining,
-          total: progress.total,
-          phase: 'IN_PROGRESS'
+          replayAttempt,
+          completionTimedOut: completionResult?.timedOut === true,
+          completionFailed: completionResult?.failed === true,
+          completionError: completionResult?.error || null
         });
-
-        reportGenerator.updateOrderProgress(orderId, {
-          logTag: currentEntry.logTag,
-          logIndex: currentEntry.index,
-          logsProcessed: progress.processed,
-          timeline: {
-            logTag: currentEntry.logTag,
-            progress: progress.progress,
-            action: 'processing'
-          }
-        });
+        completionResult.timedOut = false;
+        completionResult.failed = false;
+        completionResult.error = null;
       }
-    }, 5000);
 
-    logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Step 5: Waiting for completion (max ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes)`, {
-      orderId,
-      orderIndex,
-      totalOrders,
-      maxJourneyTimeMinutes: Math.round(maxJourneyTimeMs / 1000 / 60),
-      phase: 'WAITING_COMPLETION'
-    });
-    
-    const completionResult = await waitForCompletionWithTimeout(
-      orchestrator,
-      maxJourneyTimeMs,
-      orderId,
-      orderIndex,
-      totalOrders,
-      reportGenerator,
-      config.stopSignal
-    );
+      const restartPlan = buildPollingReplayRestartPlan(
+        orchestrator,
+        completionResult,
+        attemptedReplayStartIndices
+      );
 
-    if (progressInterval) {
-      clearInterval(progressInterval);
+      if (restartPlan) {
+        logger.warn(
+          `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Buffer wait got stuck, rewinding replay to last polling API sequence index ${restartPlan.restartIndexAbsolute}`,
+          {
+            orderId,
+            orderIndex,
+            totalOrders,
+            replayAttempt,
+            stuckLogTag: completionResult.stuckEntry?.logTag || null,
+            stuckLogIndex: completionResult.stuckEntry?.index ?? null,
+            restartFromLogTag: restartPlan.lastPollingEntry.logTag,
+            restartFromIndex: restartPlan.restartIndexAbsolute,
+            waitReason: restartPlan.waitReason,
+            phase: 'RESTART_FROM_LAST_POLLING_API'
+          }
+        );
+
+        attemptedReplayStartIndices.add(restartPlan.restartIndexAbsolute);
+        orchestrator.rewindToReplayIndex(restartPlan.restartIndexAbsolute);
+        replayAttempt += 1;
+        logger.setDirectionLogReplayContext({
+          orderId,
+          replayAttempt,
+          rewind: true
+        });
+        continue;
+      }
+
+      if (completionResult.timedOut) {
+        const currentEntry = orchestrator.validator?.getCurrentEntry();
+        const timeoutReason = resolveBufferWaitReason(orchestrator)
+          || `Timeout after ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes`;
+
+        reportGenerator.markOrderStuck(orderId, {
+          logTag: currentEntry?.logTag || 'unknown',
+          logIndex: currentEntry?.index || 0,
+          reason: timeoutReason
+        });
+
+        printBufferDebugInfo(orchestrator, orderId);
+      }
+
+      const failedBufferRequests = artResults.failedBufferRequests || [];
+      const latestBufferFailure = failedBufferRequests[failedBufferRequests.length - 1];
+      const apiErrorMessage = latestBufferFailure?.errorMessage
+        || extractReadableFailureMessage(latestBufferFailure?.responseData)
+        || extractReadableFailureMessage(artResults.failureReason)
+        || (completionResult.failed ? completionResult.error : null);
+
+      const stopReason = completionResult.stopped
+        ? 'Stopped by user'
+        : completionResult.failed
+          ? `API Failure: ${apiErrorMessage || completionResult.error || 'Unknown API error'}`
+          : completionResult.timedOut
+            ? `Timeout: ${resolveBufferWaitReason(orchestrator) || `Max journey time of ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes exceeded`}`
+            : (artResults.failed > 0 ? `${artResults.failed} assertions failed` : 'Completed successfully');
+
+      finalAttemptResult = {
+        completionResult,
+        artResults,
+        apiErrorMessage,
+        stopReason
+      };
+
+      break;
     }
 
-    const artResults = orchestrator.getResults();
-    
-    console.log(`\nOrder ${orderId} Results:`);
-    console.log(`  Passed: ${artResults.passed}`);
-    console.log(`  Failed: ${artResults.failed}`);
-    console.log(`  Total: ${artResults.processedLogs?.length || 0}`);
-
-    if (completionResult.timedOut) {
-      const currentEntry = orchestrator.validator?.getCurrentEntry();
-      reportGenerator.markOrderStuck(orderId, {
-        logTag: currentEntry?.logTag || 'unknown',
-        logIndex: currentEntry?.index || 0,
-        reason: `Timeout after ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes`
-      });
-
-      printBufferDebugInfo(orchestrator, orderId);
+    if (!finalAttemptResult) {
+      throw new Error('ART replay exhausted all restart points without producing a final result');
     }
 
-    // failedBufferRequests comes from httpClient.failedRequests (non-blocking-http.js)
-    // and has the properly formatted errorMessage with the actual API error_message field.
-    // Fall back to the orchestrator's failureReason which is set in fail().
-    const failedBufferRequests = artResults.failedBufferRequests || [];
-    const latestBufferFailure = failedBufferRequests[failedBufferRequests.length - 1];
-    const apiErrorMessage = latestBufferFailure?.errorMessage
-      || (completionResult.failed ? completionResult.error : null);
-
-    const stopReason = completionResult.stopped
-      ? 'Stopped by user'
-      : completionResult.failed
-        ? `API Failure: ${apiErrorMessage || completionResult.error || 'Unknown API error'}`
-        : completionResult.timedOut
-          ? `Timeout: Max journey time of ${Math.round(maxJourneyTimeMs / 1000 / 60)} minutes exceeded`
-          : (artResults.failed > 0 ? `${artResults.failed} assertions failed` : 'Completed successfully');
-
-    reportGenerator.finalizeOrder(orderId, {
-      success: !completionResult.timedOut && !completionResult.stopped && !completionResult.failed && artResults.failed === 0,
-      stopReason,
-      errorMessage: completionResult.failed ? apiErrorMessage : null,
-      logsProcessed: artResults.processedLogs?.length || 0,
-      artResults
-    });
-
-    await orchestrator.stop();
+    if (orchestrator) {
+      await orchestrator.stop();
+      orchestrator = null;
+    }
 
     if (server) {
       await new Promise(resolve => server.close(resolve));
+      server = null;
     }
 
     if (config.onOrchestratorReady) {
@@ -478,12 +799,24 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
 
     if (mocks) {
       await mocks.stop();
+      mocks = null;
     }
 
+    reportGenerator.finalizeOrder(orderId, {
+      success: !finalAttemptResult.completionResult.timedOut && !finalAttemptResult.completionResult.stopped && !finalAttemptResult.completionResult.failed && finalAttemptResult.artResults.failed === 0,
+      stopReason: finalAttemptResult.stopReason,
+      errorMessage: finalAttemptResult.completionResult.failed ? finalAttemptResult.apiErrorMessage : null,
+      logsProcessed: finalAttemptResult.artResults.processedLogs?.length || 0,
+      artResults: finalAttemptResult.artResults
+    });
+
     return {
-      success: !completionResult.timedOut && artResults.failed === 0,
+      success: !finalAttemptResult.completionResult.timedOut && finalAttemptResult.artResults.failed === 0,
       logCount: finalFilteredLogs.length,
-      artResults
+      artResults: finalAttemptResult.artResults,
+      error: !finalAttemptResult.completionResult.timedOut && finalAttemptResult.artResults.failed === 0
+        ? null
+        : (finalAttemptResult.apiErrorMessage || finalAttemptResult.stopReason || finalAttemptResult.artResults.failureReason || 'ART replay failed')
     };
 
   } catch (error) {
@@ -522,6 +855,7 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       error: error.message
     };
   } finally {
+    logger.clearDirectionLogReplayContext();
     if (shouldCleanupOrderTempFiles(config)) {
       await cleanupOrderTempFiles(orderId, orderIndex, [
         logsFilePath,
@@ -534,6 +868,179 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function resolveBufferWaitReason(orchestrator) {
+  const lastMatchTimeout = orchestrator?.bufferManager?.getLastMatchTimeout?.() || null;
+  const pendingWaiters = orchestrator?.bufferManager?.getPendingRequestWaiters?.() || [];
+  const primaryPendingWaiter = pendingWaiters[0] || null;
+
+  if (lastMatchTimeout?.expected) {
+    return `Timed out waiting for matching request ${lastMatchTimeout.expected}`;
+  }
+
+  if (primaryPendingWaiter?.expected) {
+    return `Timed out while waiting on pending request ${primaryPendingWaiter.expected}`;
+  }
+
+  return null;
+}
+
+function getEffectiveEntryRetryMs(orchestrator, currentEntry, fallbackRetryMs) {
+  const replayWaitMs = typeof orchestrator?.getRequestWaitTimeoutMs === 'function' && currentEntry?.isRequest
+    ? orchestrator.getRequestWaitTimeoutMs(currentEntry)
+    : 0;
+
+  if (!replayWaitMs) {
+    return fallbackRetryMs;
+  }
+
+  const effectiveRetryMs = Math.max(fallbackRetryMs, replayWaitMs + 5_000);
+
+  logger.info('Adjusted outer entry timeout to respect replay wait window', {
+    entry: currentEntry?.toString?.() || null,
+    fallbackRetryMs,
+    replayWaitMs,
+    effectiveRetryMs
+  });
+
+  return effectiveRetryMs;
+}
+
+function findLastProcessedPollingEntry(orchestrator) {
+  const entries = orchestrator?.validator?.entries || [];
+  const processedIndices = orchestrator?.validator?.processedIndices || new Set();
+  let lastPollingEntry = null;
+
+  for (const entry of entries) {
+    if (!entry?.isRequest || !isPollingApiLogTag(entry.logTag)) {
+      continue;
+    }
+
+    if (!processedIndices.has(entry.index)) {
+      continue;
+    }
+
+    if (!lastPollingEntry || entry.index > lastPollingEntry.index) {
+      lastPollingEntry = entry;
+    }
+  }
+
+  return lastPollingEntry;
+}
+
+function isBufferWaitFailure(completionResult, waitReason) {
+  if (completionResult?.timedOut) {
+    return true;
+  }
+
+  if (waitReason) {
+    return true;
+  }
+
+  const errorText = completionResult?.error || '';
+  return typeof errorText === 'string'
+    && (
+      errorText.includes('Timed out waiting for matching request')
+      || errorText.includes('Timed out while waiting on pending request')
+    );
+}
+
+function isPollingRewindEnabled() {
+  const rawValue = process.env.ART_ENABLE_POLLING_REWIND;
+  if (typeof rawValue !== 'string' || rawValue.trim() === '') {
+    return true;
+  }
+
+  return !['false', '0', 'no', 'off'].includes(rawValue.trim().toLowerCase());
+}
+
+function buildPollingReplayRestartPlan(orchestrator, completionResult, attemptedReplayStartIndices) {
+  if (!isPollingRewindEnabled()) {
+    logger.info('Skipping polling rewind plan because polling rewind is disabled by config', {
+      env: 'ART_ENABLE_POLLING_REWIND',
+      configuredValue: process.env.ART_ENABLE_POLLING_REWIND ?? null
+    });
+    return null;
+  }
+
+  const progress = orchestrator?.validator?.getProgress?.() || null;
+  const replayAlreadyComplete =
+    orchestrator?.isComplete?.() === true ||
+    orchestrator?.validator?.isComplete?.() === true ||
+    (
+      progress &&
+      progress.remaining === 0 &&
+      progress.total > 0 &&
+      progress.processed >= progress.total
+    );
+
+  if (replayAlreadyComplete) {
+    logger.info('Skipping polling rewind plan because replay is already complete', {
+      completionTimedOut: completionResult?.timedOut === true,
+      completionFailed: completionResult?.failed === true,
+      completionError: completionResult?.error || null,
+      progress
+    });
+    return null;
+  }
+
+  const waitReason = resolveBufferWaitReason(orchestrator);
+  if (!isBufferWaitFailure(completionResult, waitReason)) {
+    logger.info('Skipping polling rewind plan because failure was not caused by buffered-request wait exhaustion', {
+      completionTimedOut: completionResult?.timedOut === true,
+      completionFailed: completionResult?.failed === true,
+      completionError: completionResult?.error || null,
+      waitReason: waitReason || null
+    });
+    return null;
+  }
+
+  const stuckEntry = completionResult.stuckEntry || orchestrator.validator?.getCurrentEntry?.() || null;
+
+  if (isSelfTriggerFallbackApiLogTag(stuckEntry?.logTag)) {
+    logger.info('Skipping polling rewind plan because current stuck entry is configured for self-trigger fallback', {
+      stuckEntry: stuckEntry?.toString?.() || null,
+      stuckLogTag: stuckEntry?.logTag || null,
+      waitReason: waitReason || null
+    });
+    return null;
+  }
+
+  if (!waitReason) {
+    logger.info('Skipping polling rewind plan because no buffered-request wait diagnostics were available', {
+      stuckEntry: stuckEntry?.toString?.() || null,
+      completionTimedOut: completionResult?.timedOut === true,
+      completionFailed: completionResult?.failed === true,
+      completionError: completionResult?.error || null
+    });
+    return null;
+  }
+
+  const lastPollingEntry = findLastProcessedPollingEntry(orchestrator);
+  if (!lastPollingEntry) {
+    logger.info('Skipping polling rewind plan because no processed polling API was found before the stuck entry', {
+      stuckEntry: stuckEntry?.toString?.() || null,
+      waitReason
+    });
+    return null;
+  }
+
+  const restartIndexAbsolute = lastPollingEntry.index;
+  if (attemptedReplayStartIndices.has(restartIndexAbsolute)) {
+    logger.info('Skipping polling rewind plan because this polling restart index was already attempted', {
+      restartIndexAbsolute,
+      restartFromLogTag: lastPollingEntry.logTag,
+      waitReason
+    });
+    return null;
+  }
+
+  return {
+    lastPollingEntry,
+    restartIndexAbsolute,
+    waitReason
+  };
 }
 
 function shouldCleanupOrderTempFiles(config) {
@@ -608,6 +1115,51 @@ function sharesReplayContext(leftEntry, rightEntry) {
   return true;
 }
 
+function collectLenderOrgIds(value, acc = new Set()) {
+  if (value === null || value === undefined) {
+    return acc;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectLenderOrgIds(item, acc);
+    }
+    return acc;
+  }
+
+  if (typeof value !== 'object') {
+    return acc;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    if ((key === 'lenderOrgId' || key === 'lender_org_id') && typeof nestedValue === 'string' && nestedValue.trim()) {
+      acc.add(nestedValue.trim());
+    }
+    collectLenderOrgIds(nestedValue, acc);
+  }
+
+  return acc;
+}
+
+function getReplayLenderOrgIds(finalFilteredLogs) {
+  const lenderOrgIds = new Set();
+
+  for (const rawLog of finalFilteredLogs || []) {
+    const message = rawLog?.message || {};
+    if (message.log_tag !== 'LSP-FetchOfferRequest_REQUEST') {
+      continue;
+    }
+
+    collectLenderOrgIds(message.trace_request, lenderOrgIds);
+
+    if (typeof message.lender_org_id === 'string' && message.lender_org_id.trim()) {
+      lenderOrgIds.add(message.lender_org_id.trim());
+    }
+  }
+
+  return [...lenderOrgIds];
+}
+
 function hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy) {
   if (!optionalRepeatPolicy.advanceWhenSeenLogTags?.length) {
     return false;
@@ -623,6 +1175,10 @@ function hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPol
 }
 
 function hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy) {
+  if (optionalRepeatPolicy.allowObservedBranchAdvance === false) {
+    return false;
+  }
+
   if (!optionalRepeatPolicy.advanceWhenSeenLogTags?.length) {
     return false;
   }
@@ -635,17 +1191,128 @@ function hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPoli
   );
 }
 
-function hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy) {
-  if (!optionalRepeatPolicy.skipWhenPriorProcessedLogTags?.length) {
+function getPayloadValueAtPath(payload, payloadPath) {
+  if (!payload || !payloadPath) {
+    return undefined;
+  }
+
+  return payloadPath.split('.').reduce((current, segment) => {
+    if (current === null || current === undefined) {
+      return undefined;
+    }
+
+    return current[segment];
+  }, payload);
+}
+
+function matchesPriorProcessedEntryCondition(entry, condition) {
+  if (!condition || entry?.logTag !== condition.logTag) {
     return false;
+  }
+
+  if (!condition.payloadPath) {
+    return true;
+  }
+
+  return getPayloadValueAtPath(entry.payload, condition.payloadPath) === condition.equals;
+}
+
+function matchesObservedProcessedResponseCondition(entry, condition) {
+  if (!condition || entry?.logTag !== condition.logTag) {
+    return false;
+  }
+
+  if (!condition.payloadPath) {
+    return true;
+  }
+
+  return getPayloadValueAtPath(entry.payload, condition.payloadPath) === condition.equals;
+}
+
+function hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy) {
+  const hasTagBasedRules = optionalRepeatPolicy.skipWhenPriorProcessedLogTags?.length;
+  const hasConditionalRules = optionalRepeatPolicy.skipWhenPriorProcessedEntries?.length;
+
+  if (!hasTagBasedRules && !hasConditionalRules) {
+    return false;
+  }
+
+  const observedProcessedResponses = orchestrator.observedProcessedResponses || [];
+  const matchingObservedResponse = observedProcessedResponses.some(entry =>
+    optionalRepeatPolicy.skipWhenPriorProcessedEntries.some(condition =>
+      matchesObservedProcessedResponseCondition(entry, condition)
+    ) &&
+    sharesReplayContext(currentEntry, entry)
+  );
+
+  if (matchingObservedResponse) {
+    return true;
   }
 
   return orchestrator.validator.entries.some((entry, index) =>
     orchestrator.validator.processedIndices.has(index) &&
     index < currentEntry.index &&
-    optionalRepeatPolicy.skipWhenPriorProcessedLogTags.includes(entry.logTag) &&
+    (
+      optionalRepeatPolicy.skipWhenPriorProcessedLogTags.includes(entry.logTag) ||
+      optionalRepeatPolicy.skipWhenPriorProcessedEntries.some(condition =>
+        matchesPriorProcessedEntryCondition(entry, condition)
+      )
+    ) &&
     sharesReplayContext(currentEntry, entry)
   );
+}
+
+/**
+ * For GATEWAY→LENDER entries that have `skipAfterTimeoutFallback` in REPLAY_SPECIAL_CASES:
+ * if the gateway does not make the call within N seconds (default 4s), skip both
+ * the request and its corresponding response and let replay continue.
+ *
+ * If the request DOES arrive before the timeout the bufferManager will match it
+ * and respond with the prod-log response — this function will never fire.
+ */
+function maybeSkipGatewayLenderAuthFallback(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
+  if (!currentEntry?.isRequest) return false;
+  if (currentEntry.source !== 'GATEWAY' || currentEntry.destination !== 'LENDER') return false;
+
+  const specialCase = REPLAY_SPECIAL_CASES.find(
+    sc => sc.logTag === currentEntry.logTag && sc.handler === 'skipAfterTimeoutFallback'
+  );
+  if (!specialCase) return false;
+
+  const optionalAfterMs = (specialCase.optionalAfterSeconds ?? 4) * 1000;
+  if (stuckDurationMs < optionalAfterMs) return false;
+
+  const responseEntry = findCorrespondingResponseEntry(
+    orchestrator.validator.entries,
+    currentEntry,
+    { searchAll: false, processedIndices: orchestrator.validator.processedIndices }
+  );
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Skipping optional GATEWAY→LENDER auth entry after ${specialCase.optionalAfterSeconds}s (token likely cached) - logTag: ${currentEntry.logTag}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      skippedResponseIndex: responseEntry?.index ?? null,
+      optionalAfterSeconds: specialCase.optionalAfterSeconds,
+      phase: 'GATEWAY_LENDER_AUTH_SKIP'
+    }
+  );
+
+  // Unblock the async-orchestrator's waitForMatchingRequest before marking processed
+  if (typeof orchestrator.bufferManager?.skipWaiter === 'function') {
+    orchestrator.bufferManager.skipWaiter(currentEntry);
+  }
+
+  orchestrator.validator.markProcessed(currentEntry);
+  if (responseEntry) {
+    orchestrator.validator.markProcessed(responseEntry);
+  }
+
+  return true;
 }
 
 function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs) {
@@ -675,26 +1342,39 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
   const branchAdvanced = hasProcessedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
   const branchAdvancedObserved = hasObservedBranchAdvance(orchestrator, currentEntry, optionalRepeatPolicy);
   const priorAlternateProcessed = hasPriorProcessedAlternate(orchestrator, currentEntry, optionalRepeatPolicy);
+  const hasAnyAdvanceSignal = branchAdvanced || branchAdvancedObserved || priorAlternateProcessed;
+  const hasBufferedMatch = orchestrator?.bufferManager?.hasMatchingBufferedRequest?.(currentEntry) || false;
+
+  if (hasBufferedMatch) {
+    logger.info('Optional repeated entry has a live buffered match; deferring skip', {
+      entry: currentEntry.toString(),
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      optionalAfterSeconds: optionalRepeatPolicy.optionalAfterSeconds
+    });
+    return false;
+  }
 
   if (optionalRepeatPolicy.requirePriorProcessedOccurrence && priorReplayOccurrences.length < 1) {
+    return false;
+  }
+
+  if (optionalRepeatPolicy.requireBranchAdvance && !hasAnyAdvanceSignal) {
     return false;
   }
 
   if (
     optionalRepeatPolicy.requirePriorProcessedOccurrence &&
     processedSameTagCount < 1 &&
-    !branchAdvanced &&
-    !branchAdvancedObserved &&
-    !priorAlternateProcessed
+    !hasAnyAdvanceSignal
   ) {
     return false;
   }
 
   if (
     !optionalRepeatPolicy.requirePriorProcessedOccurrence &&
-    !branchAdvanced &&
-    !branchAdvancedObserved &&
-    !priorAlternateProcessed
+    !optionalRepeatPolicy.allowSkipWithoutAdvance &&
+    !hasAnyAdvanceSignal
   ) {
     return false;
   }
@@ -725,6 +1405,10 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
     }
   );
 
+  if (typeof orchestrator.bufferManager?.skipWaiter === 'function') {
+    orchestrator.bufferManager.skipWaiter(currentEntry);
+  }
+
   orchestrator.validator.markProcessed(currentEntry);
   if (responseEntry) {
     orchestrator.validator.markProcessed(responseEntry);
@@ -733,18 +1417,232 @@ function maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, ord
   return true;
 }
 
+async function maybeConsumeBufferedCurrentEntryFromOuterRunner(
+  orchestrator,
+  currentEntry,
+  orderId,
+  orderIndex,
+  totalOrders
+) {
+  if (!currentEntry?.isRequest) {
+    return false;
+  }
+
+  if (orchestrator?.validator?.processedIndices?.has?.(currentEntry.index)) {
+    return false;
+  }
+
+  if (typeof orchestrator?.maybeConsumeBufferedCurrentExpectedRequest !== 'function') {
+    return false;
+  }
+
+  const hasBufferedMatch = orchestrator?.bufferManager?.hasMatchingBufferedRequest?.(currentEntry) || false;
+  if (!hasBufferedMatch) {
+    return false;
+  }
+
+  logger.info(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Outer runner consuming already-buffered current request - Current: ${currentEntry.logTag || 'unknown'}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      source: currentEntry.source,
+      destination: currentEntry.destination,
+      phase: 'OUTER_BUFFERED_CURRENT_REQUEST_CONSUME'
+    }
+  );
+
+  try {
+    const consumed = await orchestrator.maybeConsumeBufferedCurrentExpectedRequest(currentEntry);
+    if (consumed && typeof orchestrator?.markStuckEntryResolved === 'function') {
+      orchestrator.markStuckEntryResolved(currentEntry, 'outer_runner_buffered_current_request_consume');
+    }
+    return consumed;
+  } catch (error) {
+    logger.warn('Outer runner failed while consuming already-buffered current request', {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      error: error?.message || String(error),
+      phase: 'OUTER_BUFFERED_CURRENT_REQUEST_CONSUME_FAILED'
+    });
+    return false;
+  }
+}
+
+export async function maybeRecoverStalledExternalReplayEntry(
+  orchestrator,
+  currentEntry,
+  stuckDurationMs,
+  retryIntervalMs,
+  orderId,
+  orderIndex,
+  totalOrders,
+  runnerRecoveryState
+) {
+  if (!currentEntry?.isRequest) {
+    return false;
+  }
+
+  if (orchestrator?.validator?.processedIndices?.has?.(currentEntry.index)) {
+    return false;
+  }
+
+  const isExternalSourceRequest = ['APP', 'LENDER', 'EULER', 'THEMIS'].includes(currentEntry.source);
+  if (!isExternalSourceRequest) {
+    return false;
+  }
+
+  if (typeof orchestrator?.triggerExternalRequestAsync !== 'function') {
+    return false;
+  }
+
+  const recoveryThresholdMs = Math.max(retryIntervalMs * 2, 2_000);
+  if (stuckDurationMs < recoveryThresholdMs) {
+    return false;
+  }
+
+  if (runnerRecoveryState.lastRecoveredEntryIndex === currentEntry.index) {
+    return false;
+  }
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Outer runner recovering stalled external replay entry - Current: ${currentEntry.logTag || 'unknown'}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      stuckDurationMs,
+      retryIntervalMs,
+      recoveryThresholdMs,
+      source: currentEntry.source,
+      destination: currentEntry.destination,
+      phase: 'OUTER_STALLED_EXTERNAL_ENTRY_RECOVERY'
+    }
+  );
+
+  try {
+    await orchestrator.triggerExternalRequestAsync(currentEntry);
+    if (typeof orchestrator?.markStuckEntryResolved === 'function') {
+      orchestrator.markStuckEntryResolved(currentEntry, 'outer_runner_external_recovery');
+    }
+    runnerRecoveryState.lastRecoveredEntryIndex = currentEntry.index;
+    return true;
+  } catch (error) {
+    logger.warn('Outer runner failed while recovering stalled external replay entry', {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      error: error?.message || String(error),
+      phase: 'OUTER_STALLED_EXTERNAL_ENTRY_RECOVERY_FAILED'
+    });
+    runnerRecoveryState.lastRecoveredEntryIndex = currentEntry.index;
+    return false;
+  }
+}
+
+export async function maybeForceEarlySelfTriggerFallbackEntry(
+  orchestrator,
+  currentEntry,
+  stuckDurationMs,
+  orderId,
+  orderIndex,
+  totalOrders,
+  runnerRecoveryState
+) {
+  if (!currentEntry?.isRequest || !isSelfTriggerFallbackApiLogTag(currentEntry?.logTag)) {
+    return false;
+  }
+
+  if (orchestrator?.validator?.processedIndices?.has?.(currentEntry.index)) {
+    return false;
+  }
+
+  if (typeof orchestrator?.triggerMissingExpectedRequestFallback !== 'function') {
+    return false;
+  }
+
+  const hasBufferedMatch = orchestrator?.bufferManager?.hasMatchingBufferedRequest?.(currentEntry) || false;
+  if (hasBufferedMatch) {
+    return false;
+  }
+
+  const recoveryThresholdMs = currentEntry?.logTag === 'Lsp-LoanStatusRequest_REQUEST' ? 750 : 2_000;
+  if (stuckDurationMs < recoveryThresholdMs) {
+    return false;
+  }
+
+  const recoveryKey = `${currentEntry.index}:self-trigger`;
+  if (runnerRecoveryState.lastRecoveredEntryIndex === recoveryKey) {
+    return false;
+  }
+
+  logger.warn(
+    `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Outer runner forcing early self-trigger fallback - Current: ${currentEntry.logTag || 'unknown'}`,
+    {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      stuckDurationMs,
+      recoveryThresholdMs,
+      source: currentEntry.source,
+      destination: currentEntry.destination,
+      phase: 'OUTER_EARLY_SELF_TRIGGER_FALLBACK'
+    }
+  );
+
+  try {
+    await orchestrator.triggerMissingExpectedRequestFallback(currentEntry, recoveryThresholdMs);
+    if (typeof orchestrator?.markStuckEntryResolved === 'function') {
+      orchestrator.markStuckEntryResolved(currentEntry, 'outer_runner_early_self_trigger_fallback');
+    }
+    runnerRecoveryState.lastRecoveredEntryIndex = recoveryKey;
+    return true;
+  } catch (error) {
+    logger.warn('Outer runner failed while forcing early self-trigger fallback', {
+      orderId,
+      orderIndex,
+      totalOrders,
+      currentLogTag: currentEntry.logTag,
+      currentLogIndex: currentEntry.index,
+      error: error?.message || String(error),
+      phase: 'OUTER_EARLY_SELF_TRIGGER_FALLBACK_FAILED'
+    });
+    runnerRecoveryState.lastRecoveredEntryIndex = recoveryKey;
+    return false;
+  }
+}
+
 async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, orderIndex, totalOrders, reportGenerator, stopSignal) {
   const startTime = Date.now();
+  let timeoutDeadline = startTime + timeoutMs;
   let lastLoggedMinute = 0;
   const { retryIntervalMs, maxRetrySeconds } = RETRY_CONFIG;
+  const loanSettlementPtJourneyExtensionMs = 4 * 60 * 1000;
 
   const getMaxRetrySeconds = (logTag) =>
     RETRY_TIMEOUT_OVERRIDES[logTag] || maxRetrySeconds;
 
   let stuckEntryIndex = null;
   let stuckSince = null;
+  let lastGlobalTimeoutDeferralEntryIndex = null;
+  let hasExtendedJourneyTimeoutForLoanSettlementPt = false;
+  const runnerRecoveryState = {
+    lastRecoveredEntryIndex: null
+  };
 
-  while (Date.now() - startTime < timeoutMs) {
+  while (Date.now() < timeoutDeadline) {
     if (stopSignal?.requested) {
       const currentEntry = orchestrator.validator?.getCurrentEntry();
       logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Stop requested by user - Current: ${currentEntry?.logTag || 'N/A'}`, {
@@ -776,16 +1674,130 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
 
     const currentEntry = orchestrator.validator?.getCurrentEntry();
     const currentIndex = currentEntry?.index ?? null;
+    const replayWaitMs = typeof orchestrator?.getRequestWaitTimeoutMs === 'function' && currentEntry?.isRequest
+      ? orchestrator.getRequestWaitTimeoutMs(currentEntry)
+      : 0;
+
+    if (
+      !hasExtendedJourneyTimeoutForLoanSettlementPt &&
+      currentEntry?.logTag === 'LOAN_SETTLEMENT_PT_REQUEST'
+    ) {
+      timeoutDeadline += loanSettlementPtJourneyExtensionMs;
+      hasExtendedJourneyTimeoutForLoanSettlementPt = true;
+      logger.info(
+        `ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Extending global replay timeout for loan settlement PT handling`,
+        {
+          orderId,
+          orderIndex,
+          totalOrders,
+          currentLogTag: currentEntry?.logTag,
+          currentLogIndex: currentIndex,
+          extendedByMs: loanSettlementPtJourneyExtensionMs,
+          newRemainingMs: timeoutDeadline - Date.now(),
+          phase: 'GLOBAL_TIMEOUT_EXTENDED_FOR_LOAN_SETTLEMENT_PT'
+        }
+      );
+    }
+
+    if (stuckEntryIndex !== null && typeof orchestrator?.consumeResolvedStuckEntrySignal === 'function') {
+      if (orchestrator.consumeResolvedStuckEntrySignal(stuckEntryIndex)) {
+        logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Clearing stale stuck marker after orchestrator-side recovery`, {
+          orderId,
+          orderIndex,
+          totalOrders,
+          clearedStuckIndex: stuckEntryIndex,
+          currentLogTag: currentEntry?.logTag,
+          currentLogIndex: currentIndex,
+          phase: 'STUCK_MARKER_CLEARED'
+        });
+        stuckEntryIndex = null;
+        stuckSince = null;
+        continue;
+      }
+    }
+
+    if (currentIndex !== lastGlobalTimeoutDeferralEntryIndex && currentIndex !== null) {
+      lastGlobalTimeoutDeferralEntryIndex = null;
+    }
+
+    if (currentIndex !== runnerRecoveryState.lastRecoveredEntryIndex) {
+      runnerRecoveryState.lastRecoveredEntryIndex = null;
+    }
 
     // Track how long we've been stuck on the same entry
     if (currentIndex !== null && currentIndex === stuckEntryIndex) {
       const currentMaxRetrySeconds = getMaxRetrySeconds(currentEntry?.logTag);
-      const currentMaxRetryMs = currentMaxRetrySeconds * 1000;
-      const stuckDurationMs = Date.now() - stuckSince;
+      const configuredRetryMs = currentMaxRetrySeconds * 1000;
+    const currentMaxRetryMs = getEffectiveEntryRetryMs(orchestrator, currentEntry, configuredRetryMs);
+    const stuckDurationMs = Date.now() - stuckSince;
+
+    if (await maybeConsumeBufferedCurrentEntryFromOuterRunner(
+      orchestrator,
+      currentEntry,
+      orderId,
+      orderIndex,
+      totalOrders
+    )) {
+      stuckSince = Date.now();
+      await sleep(retryIntervalMs);
+      continue;
+    }
+
+      if (await maybeForceEarlySelfTriggerFallbackEntry(
+        orchestrator,
+        currentEntry,
+        stuckDurationMs,
+        orderId,
+        orderIndex,
+        totalOrders,
+        runnerRecoveryState
+      )) {
+        stuckSince = Date.now();
+        await sleep(retryIntervalMs);
+        continue;
+      }
+
+      if (await maybeRecoverStalledExternalReplayEntry(
+        orchestrator,
+        currentEntry,
+        stuckDurationMs,
+        retryIntervalMs,
+        orderId,
+        orderIndex,
+        totalOrders,
+        runnerRecoveryState
+      )) {
+        stuckSince = Date.now();
+        await sleep(retryIntervalMs);
+        continue;
+      }
+
+      if (maybeSkipGatewayLenderAuthFallback(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
+        stuckEntryIndex = null;
+        stuckSince = null;
+        continue;
+      }
 
       if (maybeSkipOptionalRepeatedEntry(orchestrator, currentEntry, orderId, orderIndex, totalOrders, stuckDurationMs)) {
         stuckEntryIndex = null;
         stuckSince = null;
+        continue;
+      }
+
+      if (stuckDurationMs >= currentMaxRetryMs && isSelfTriggerFallbackApiLogTag(currentEntry?.logTag)) {
+        logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Deferring outer timeout because current entry uses self-trigger fallback - Current: ${currentEntry?.logTag || 'unknown'}`, {
+          orderId,
+          orderIndex,
+          totalOrders,
+          currentLogTag: currentEntry?.logTag,
+          currentLogIndex: currentIndex,
+          maxRetrySeconds: currentMaxRetrySeconds,
+          effectiveRetryMs: currentMaxRetryMs,
+          retryIntervalMs,
+          phase: 'SELF_TRIGGER_FALLBACK_TIMEOUT_DEFERRED'
+        });
+        stuckSince = Date.now();
+        await sleep(retryIntervalMs);
         continue;
       }
 
@@ -797,6 +1809,7 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
           currentLogTag: currentEntry?.logTag,
           currentLogIndex: currentIndex,
           maxRetrySeconds: currentMaxRetrySeconds,
+          effectiveRetryMs: currentMaxRetryMs,
           retryIntervalMs,
           phase: 'ENTRY_TIMEOUT'
         });
@@ -808,11 +1821,35 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
     }
 
     const elapsedMs = Date.now() - startTime;
+    const remainingMs = timeoutDeadline - Date.now();
     const elapsedMinutes = Math.floor(elapsedMs / 60000);
+
+    if (
+      isSelfTriggerFallbackApiLogTag(currentEntry?.logTag) &&
+      replayWaitMs > 0 &&
+      currentIndex !== null &&
+      currentIndex !== lastGlobalTimeoutDeferralEntryIndex &&
+      remainingMs <= replayWaitMs + retryIntervalMs
+    ) {
+      const extensionMs = replayWaitMs + 5_000;
+      timeoutDeadline = Date.now() + extensionMs;
+      lastGlobalTimeoutDeferralEntryIndex = currentIndex;
+      logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Deferring global replay timeout because current entry uses self-trigger fallback - Current: ${currentEntry?.logTag || 'unknown'}`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        currentLogTag: currentEntry?.logTag,
+        currentLogIndex: currentIndex,
+        replayWaitMs,
+        extendedByMs: extensionMs,
+        newRemainingMs: timeoutDeadline - Date.now(),
+        phase: 'GLOBAL_TIMEOUT_DEFERRED_FOR_SELF_TRIGGER'
+      });
+    }
 
     if (elapsedMinutes > lastLoggedMinute) {
       lastLoggedMinute = elapsedMinutes;
-      const remainingMinutes = Math.ceil((timeoutMs - elapsedMs) / 60000);
+      const remainingMinutes = Math.ceil(Math.max(0, timeoutDeadline - Date.now()) / 60000);
 
       logger.info(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - Running for ${elapsedMinutes} minute(s), ${remainingMinutes} minute(s) remaining - Current: ${currentEntry?.logTag || 'N/A'}`, {
         orderId,
@@ -830,7 +1867,7 @@ async function waitForCompletionWithTimeout(orchestrator, timeoutMs, orderId, or
   }
 
   const currentEntry = orchestrator.validator?.getCurrentEntry();
-  logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - TIMEOUT after ${Math.round(timeoutMs / 1000 / 60)} minutes - Stuck at: ${currentEntry?.logTag || 'unknown'}`, {
+  logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - TIMEOUT after ${Math.round((Date.now() - startTime) / 1000 / 60)} minutes - Stuck at: ${currentEntry?.logTag || 'unknown'}`, {
     orderId,
     orderIndex,
     totalOrders,
