@@ -248,6 +248,18 @@ async function fetchAndFilterOrderLogs(merchantId, orderId, config, logsFilePath
 
     fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
 
+    if (fetchResult.results?.[0]?.skipped) {
+      return {
+        skipped: true,
+        skipReason: fetchResult.results[0].skipReason || 'Skipped during log fetch',
+        finalFilteredLogs: [],
+        logsFilePath,
+        filteredLogsPath,
+        finalFilteredLogsPath,
+        fetchResult: fetchResult.results[0]
+      };
+    }
+
     if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
       break;
     }
@@ -401,7 +413,21 @@ function startPrefetchPromises(orderList, config) {
         merchantId, orderId, config,
         logsFilePath, filteredLogsPath, finalFilteredLogsPath
       ).then(
-        finalFilteredLogs => {
+        result => {
+          if (result?.skipped) {
+            console.log(`[PREFETCH] ↷ ${orderId}: ${result.skipReason}`);
+            return {
+              skipped: true,
+              skipReason: result.skipReason,
+              finalFilteredLogs: [],
+              logsFilePath,
+              filteredLogsPath,
+              finalFilteredLogsPath,
+              fetchResult: result.fetchResult || null
+            };
+          }
+
+          const finalFilteredLogs = result;
           console.log(`[PREFETCH] ✓ ${orderId}: ${finalFilteredLogs.length} logs ready`);
           return { finalFilteredLogs, logsFilePath, filteredLogsPath, finalFilteredLogsPath };
         },
@@ -445,6 +471,39 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
 
   try {
     let finalFilteredLogs;
+
+    if (prefetchedData?.skipped) {
+      const skipReason = prefetchedData.skipReason || 'Skipped before replay due to invalid fetched logs';
+      logger.warn(`ART_PROGRESS: Order ${orderIndex}/${totalOrders} - ${skipReason}`, {
+        orderId,
+        orderIndex,
+        totalOrders,
+        phase: 'ORDER_SKIPPED'
+      });
+      reportGenerator.recordReplayWarning(orderId, {
+        type: 'ORDER_SKIPPED_INVALID_LOGS',
+        reason: skipReason
+      });
+      reportGenerator.finalizeOrder(orderId, {
+        success: true,
+        skipped: true,
+        stopReason: skipReason,
+        logsProcessed: 0,
+        orderProfile: getOrderProfile(),
+        artResults: {
+          passed: 0,
+          failed: 0,
+          processedLogs: [],
+          payloadComparisons: []
+        }
+      });
+
+      return {
+        success: true,
+        skipped: true,
+        logCount: 0
+      };
+    }
 
     if (prefetchedData?.finalFilteredLogs) {
       const usePrefetchStart = orderProfiler?.enabled ? orderProfiler.now() : 0;

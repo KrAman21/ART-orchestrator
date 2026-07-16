@@ -52,6 +52,76 @@ export class SeedDataManager {
     return transformRequest(traceRequest, SeedDataManager.normalizeLogTag(log));
   }
 
+  static remapLineDetailLenderIds(lineSeedData, lenderOrgIdToIdMap = {}, preferredLenderOrgId = null) {
+    if (!Array.isArray(lineSeedData) || !lineSeedData.length) {
+      return [];
+    }
+
+    const lenderOrgIds = Object.keys(lenderOrgIdToIdMap || {});
+
+    return lineSeedData.map(item => {
+      const lineDetail = item?.lineDetail;
+      if (!lineDetail || typeof lineDetail !== 'object') {
+        return item;
+      }
+
+      const lenderOrgId =
+        lineDetail?.lenderOrgId ||
+        lineDetail?.lender_org_id ||
+        lineDetail?.lenderCode ||
+        lineDetail?.lender_code ||
+        SeedDataManager.inferLenderOrgIdFromLineDetail(lineDetail);
+      const replayLenderId = lineDetail?.lenderId || lineDetail?.lender_id || null;
+      const fallbackLenderOrgId = !lenderOrgId
+        ? (preferredLenderOrgId || (lenderOrgIds.length === 1 ? lenderOrgIds[0] : null))
+        : null;
+      const resolvedLenderOrgId = lenderOrgId || fallbackLenderOrgId;
+
+      const remappedLenderId =
+        resolvedLenderOrgId && lenderOrgIdToIdMap && lenderOrgIdToIdMap[resolvedLenderOrgId]
+          ? lenderOrgIdToIdMap[resolvedLenderOrgId]
+          : null;
+
+      if (!remappedLenderId || remappedLenderId === replayLenderId) {
+        return item;
+      }
+
+      logger.info('Remapped line seed lenderId for local onboarding', {
+        lineDetailId: lineDetail?.lineDetailId || lineDetail?.line_detail_id || null,
+        lenderOrgId: resolvedLenderOrgId,
+        usedFallbackLenderOrgId: Boolean(fallbackLenderOrgId),
+        replayLenderId,
+        localLenderId: remappedLenderId
+      });
+
+      return {
+        ...item,
+        lineDetail: {
+          ...lineDetail,
+          lender_org_id: resolvedLenderOrgId,
+          lenderOrgId: resolvedLenderOrgId,
+          lender_id: remappedLenderId,
+          lenderId: remappedLenderId
+        }
+      };
+    });
+  }
+
+  static inferLenderOrgIdFromLineDetail(lineDetail) {
+    const lenderExtensibleData =
+      lineDetail?.lineDetailExtensibleData?.lenderExtensibleData ||
+      lineDetail?.line_detail_extensible_data?.lender_extensible_data ||
+      null;
+
+    return (
+      lenderExtensibleData?.lenderOrgId ||
+      lenderExtensibleData?.lender_org_id ||
+      lenderExtensibleData?.orgId ||
+      lenderExtensibleData?.org_id ||
+      null
+    );
+  }
+
   static buildCustomerSeedData({
     customerId,
     phone,
@@ -230,6 +300,14 @@ export class SeedDataManager {
           }
         }
       }
+
+      if (['FlipKart-RealTimeEligibility_REQUEST', 'FlipKart-Eligibility_REQUEST'].includes(logTag)) {
+        const traceRequest = SeedDataManager.getRequestPayload(log);
+        const directLenderOrgId = SeedDataManager.inferLenderOrgId(log, traceRequest);
+        if (directLenderOrgId) {
+          orgIds.add(directLenderOrgId);
+        }
+      }
     }
     if (orgIds.size === 0) {
       logger.warn('No lender org IDs found in LSP-Eligibility_REQUEST logs');
@@ -248,6 +326,33 @@ export class SeedDataManager {
       orgIds: [...orgIds] 
     });
     return lenderMap;
+  }
+
+  static extractPreferredLenderOrgId(logs) {
+    const preferredTags = [
+      'FlipKart-RealTimeEligibility_REQUEST',
+      'FlipKart-Eligibility_REQUEST',
+      'LSP-Eligibility_REQUEST'
+    ];
+
+    for (const log of logs) {
+      const logTag = SeedDataManager.normalizeLogTag(log);
+      if (!preferredTags.includes(logTag)) {
+        continue;
+      }
+
+      const traceRequest = SeedDataManager.getRequestPayload(log);
+      const lenderOrgId = SeedDataManager.inferLenderOrgId(log, traceRequest);
+      if (lenderOrgId) {
+        logger.info('Extracted preferred lender org ID from replay logs', {
+          logTag,
+          lenderOrgId
+        });
+        return lenderOrgId;
+      }
+    }
+
+    return null;
   }
   /**
    * Extract lineDetails from LSP-Eligibility_REQUEST logs
@@ -467,10 +572,10 @@ export class SeedDataManager {
         }
 
         lineSeedData.push({
-          // Preserve the replay lenderId as-is while seeding line data.
-          // ART's static orgId->lenderId map can drift from the current LSP DB,
-          // which causes seeded line_detail rows to point at the wrong lender.
-          lineDetail,
+          lineDetail: {
+            ...lineDetail,
+            lenderOrgId
+          },
           referenceId
         });
       }
@@ -490,7 +595,7 @@ export class SeedDataManager {
   /**
    * Onboard seed data to LSP
    */
-  async onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData) {
+  async onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData, preferredLenderOrgId = null) {
     logger.info('Onboarding seed data to LSP: ', { 
       baseUrl: SERVICE_MAP.LSP.baseUrl + '/art/configs/set', 
       merchantId, 
@@ -510,7 +615,11 @@ export class SeedDataManager {
       }
 
       if (Array.isArray(lineSeedData) && lineSeedData.length > 0) {
-        seedPayload.lineSeedData = lineSeedData;
+        seedPayload.lineSeedData = SeedDataManager.remapLineDetailLenderIds(
+          lineSeedData,
+          lenderOrgIdToIdMap,
+          preferredLenderOrgId
+        );
       }
 
       const response = await makeRequest(

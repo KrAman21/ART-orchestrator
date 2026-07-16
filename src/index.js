@@ -37,6 +37,7 @@ const CONFIG = {
   USE_ART_FINAL_STORE_LOGS: process.env.USE_ART_FINAL_STORE_LOGS === 'true',
   ART_FINAL_STORE_DIR: process.env.ART_FINAL_STORE_DIR || 'data/art-final-store',
   ART_FINAL_STORE_ORDER_LIST_PATH: process.env.ART_FINAL_STORE_ORDER_LIST_PATH || null,
+  ART_SEED_SETTLE_DELAY_MS: parseOptionalInt(process.env.ART_SEED_SETTLE_DELAY_MS, 'ART_SEED_SETTLE_DELAY_MS') ?? 1000,
   AUTO_FETCH_ORDER_IDS: process.env.AUTO_FETCH_ORDER_IDS === 'true',
   QAPI_LOOKBACK_MINUTES: parseInt(process.env.QAPI_LOOKBACK_MINUTES, 10) || null,
   QAPI_ORDER_LIMIT: parseInt(process.env.QAPI_ORDER_LIMIT, 10) || null,

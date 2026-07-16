@@ -221,7 +221,7 @@ async function syncUpdateKycActionRequiredMapping(entry, stateManager) {
 
   const sql = `
     SELECT app_response_enc
-    FROM public.first_stage_request_data
+    FROM lsp_v1.first_stage_request_data
     WHERE loan_app_id = '${sqlEscape(mappedLoanApplicationId)}'
       AND api_name = 'TriggerKYC'
     ORDER BY created_at DESC
@@ -286,7 +286,7 @@ async function seedLoanStatusSession(sessionToken, userId, deviceTokenId, entry)
   const sessionId = deviceTokenId || buildLspStyleId();
 
   const sql = `
-    INSERT INTO public.session (
+    INSERT INTO lsp_v1.session (
       id,
       request_id,
       merchant_user_id,
@@ -351,7 +351,7 @@ async function seedLoanStatusMerchantUser(userId, entry) {
     userId;
   const appRefId = buildLspStyleId();
   const sql = `
-    INSERT INTO public.merchant_user (
+    INSERT INTO lsp_v1.merchant_user (
       id,
       merchant_id,
       status,
@@ -428,7 +428,7 @@ async function seedClientAuthTokenForGetLenderFlows(entry) {
   const now = new Date();
   const expiry = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   const sql = `
-    INSERT INTO public.cat (
+    INSERT INTO lsp_v1.cat (
       id,
       merchant_id,
       customer_id,

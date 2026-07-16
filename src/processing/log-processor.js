@@ -39,10 +39,6 @@ import {
   matchesRequestContext
 } from '../services/response-matcher.js';
 
-export function shouldPreserveReplayLenderId(logTag, keyHint) {
-  return logTag === 'GetLenderFlows_REQUEST' && keyHint === 'lenderId';
-}
-
 function normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId = null) {
   if (!remapped || typeof remapped !== 'object') {
     return remapped;
@@ -93,9 +89,7 @@ export function remapReplayIds(value, stateManager, logTag, keyHint = null, forc
   const mappedLenderId = getLenderId(value.lender_org_id || value.lenderOrgId);
 
   for (const [key, nestedValue] of Object.entries(value)) {
-    if (shouldPreserveReplayLenderId(logTag, key)) {
-      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key);
-    } else if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
+    if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
       remapped[key] = mappedLenderId;
     } else {
       remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key, forcedLoanApplicationId);

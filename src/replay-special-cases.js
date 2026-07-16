@@ -200,9 +200,19 @@ export const REPLAY_SPECIAL_CASES = [
   {
     logTag: 'OFFER API_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
-    description: 'Allow repeated lender offer requests to be skipped after one successful occurrence if later repeats never arrive.',
+    description: 'Allow missing lender offer requests in the realtime-eligibility branch to be skipped once replay has visibly advanced into later fetch-offer or eligibility steps.',
     optionalAfterSeconds: 3,
-    requirePriorProcessedOccurrence: true
+    requirePriorProcessedOccurrence: false,
+    requireBranchAdvance: false,
+    allowSkipWithoutAdvance: false,
+    advanceWhenSeenLogTags: [
+      'CHECK ELIGIBILITY API_REQUEST',
+      'CHECK ELIGIBILITY API_RESPONSE',
+      'LSP-FetchOfferSync_REQUEST',
+      'LSP-FetchOfferSync_RESPONSE',
+      'FlipKart-RealTimeEligibility_RESPONSE',
+      'LOAN OFFER API_REQUEST'
+    ]
   },
   {
     logTag: 'LOAN STATUS API_REQUEST',
@@ -262,6 +272,7 @@ export const IMMEDIATE_DIRECT_REPLAY_LOG_TAGS = new Set([
   'PROFILE_INGESTION_REQUEST',
   'CALCULATE_EMI_REQUEST',
   'OFFER API_REQUEST',
+  'LOAN STATUS API_REQUEST',
   'GENERATE PARTNER AUTH TOKEN_REQUEST',
   'OTP GENERATION API_REQUEST',
   'OTP AUTHENTICATION API_REQUEST',
@@ -274,7 +285,9 @@ export const IMMEDIATE_DIRECT_REPLAY_LOG_TAGS = new Set([
   'GET_CHECKOUT_STATUS_FO_ENCRYPTED_REQUEST',
   'ORDER_INGESTION_SO_REQUEST',
   'POLLING API :: LINE_STATUS_REQUEST',
-  'E-MANDATE SERVICE API_REQUEST'
+  'E-MANDATE SERVICE API_REQUEST',
+  'NEW TRANSACTION CREATION API_REQUEST',
+  'OFFER API_REQUEST'
 ]);
 
 export const IMMEDIATE_FUTURE_CORE_GATEWAY_REQUEST_LOG_TAGS = new Set([

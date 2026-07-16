@@ -62,10 +62,6 @@ function extractOpportunityId(value) {
   return null;
 }
 
-function shouldPreserveReplayLenderId(logTag, keyHint) {
-  return logTag === 'GetLenderFlows_REQUEST' && keyHint === 'lenderId';
-}
-
 function normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId = null) {
   if (!remapped || typeof remapped !== 'object') {
     return remapped;
@@ -116,9 +112,7 @@ function remapReplayIds(value, stateManager, logTag, keyHint = null, forcedLoanA
   const mappedLenderId = getLenderId(value.lender_org_id || value.lenderOrgId);
 
   for (const [key, nestedValue] of Object.entries(value)) {
-    if (shouldPreserveReplayLenderId(logTag, key)) {
-      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key);
-    } else if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
+    if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
       remapped[key] = mappedLenderId;
     } else {
       remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key, forcedLoanApplicationId);
@@ -1038,6 +1032,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     const { merchantId, orderId } = AsyncReplayOrchestrator.extractMerchantId(this.logs);
     this.replayMerchantId = merchantId || this.replayMerchantId || this.config.merchantId || null;
     const lenderOrgIdToIdMap = AsyncReplayOrchestrator.extractLenderOrgIds(this.logs);
+    const preferredLenderOrgId = AsyncReplayOrchestrator.extractPreferredLenderOrgId(this.logs);
     const lineDetails = AsyncReplayOrchestrator.extractLineDetails(this.logs);
     const customerSeedData = AsyncReplayOrchestrator.extractCustomerSeedData(this.logs);
     const lineSeedData = AsyncReplayOrchestrator.extractLineSeedData(this.logs);
@@ -1048,8 +1043,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       lenderOrgIdToIdMap,
       lineDetails,
       customerSeedData,
-      lineSeedData
+      lineSeedData,
+      preferredLenderOrgId
     );
+
+    await this.waitForSeedSettle(merchantId, orderId);
     
     logger.info('Async replay orchestrator started', {
       totalLogs: this.logs.length,
@@ -1964,6 +1962,18 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return timeoutMs;
     }
 
+    const optionalRepeatPolicy = getOptionalRepeatPolicy(entry.logTag);
+    if (optionalRepeatPolicy?.optionalAfterSeconds) {
+      const timeoutMs = optionalRepeatPolicy.optionalAfterSeconds * 1000;
+      logger.info('Using optional-repeat wait timeout override', {
+        entry: entry?.toString?.(),
+        logTag: entry?.logTag,
+        timeoutMs,
+        optionalRepeatPolicy
+      });
+      return timeoutMs;
+    }
+
     const baseTimeoutMs = this.config.timeoutMs;
     const perLogTagOverrideMs = RETRY_TIMEOUT_OVERRIDES[entry.logTag]
       ? RETRY_TIMEOUT_OVERRIDES[entry.logTag] * 1000
@@ -2468,7 +2478,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     }
 
     const hasLaterReplayAttempt = this.hasLaterMatchingReplayRequest(requestEntry);
-    const postBatchConfirmationRequired = !hasLaterReplayAttempt;
+    const postBatchConfirmationRequired = this.shouldRequirePostBatchConfirmation(
+      requestEntry,
+      hasLaterReplayAttempt
+    );
 
     if (postBatchConfirmationRequired) {
       this.pendingPostBatchConfirmations.set(expectedResponse.index, {
@@ -2551,6 +2564,21 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
       return true;
     });
+  }
+
+  shouldRequirePostBatchConfirmation(requestEntry, hasLaterReplayAttempt) {
+    if (!requestEntry || hasLaterReplayAttempt) {
+      return false;
+    }
+
+    // Real-time eligibility already has a matched replay response in the
+    // tolerated-batch fallback path, so issuing another blocking confirmation
+    // call just adds avoidable wait and makes the batch appear stuck.
+    if (requestEntry.logTag === 'FlipKart-RealTimeEligibility_REQUEST') {
+      return false;
+    }
+
+    return true;
   }
 
   async runPostBatchConfirmationIfNeeded(responseEntry, requestEntry = null, bufferedMetadata = {}) {
@@ -3040,9 +3068,24 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return fallbackResponse;
     }
 
+    const replayResponse = {
+      success: true,
+      payload: transformRequest(responseEntry.payload, responseEntry.logTag)
+    };
+    const preSatisfiedMarker = this.preSatisfiedReplayEntries?.get(currentEntry.index) || null;
+    if (preSatisfiedMarker?.bufferedRequestKey && this.bufferManager?.completeIncomingRequest) {
+      this.bufferManager.completeIncomingRequest(
+        preSatisfiedMarker.bufferedRequestKey,
+        replayResponse
+      );
+    }
+    if (preSatisfiedMarker) {
+      this.preSatisfiedReplayEntries.delete(currentEntry.index);
+    }
+
     this.recordObservedProcessedResponse(
       responseEntry,
-      transformRequest(responseEntry.payload, responseEntry.logTag)
+      replayResponse.payload
     );
 
     if (!this.validator.processedIndices.has(currentEntry.index)) {
@@ -3085,7 +3128,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     return {
       success: true,
-      payload: transformRequest(responseEntry.payload, responseEntry.logTag)
+      payload: replayResponse.payload
     };
   }
 
@@ -3199,6 +3242,34 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       ) || null;
     }
 
+    if (!futureEntry && isImmediateDirectReplayLogTag(incoming.logTag)) {
+      futureEntry = this.validator.entries.find(entry =>
+        entry.index > this.validator.currentIndex &&
+        !this.validator.processedIndices.has(entry.index) &&
+        entry.isRequest &&
+        this.validator.matchesExpected(entry, normalizedIncoming)
+      ) || null;
+
+      if (futureEntry) {
+        logger.info('Resolved future GATEWAY->LENDER immediate replay entry outside lookahead window', {
+          currentEntry: currentEntry.toString(),
+          futureEntry: futureEntry.toString(),
+          requestId: incoming.requestId || null,
+          logTag: incoming.logTag
+        });
+      }
+    }
+
+    if (futureEntry && this.preSatisfiedReplayEntries?.has(futureEntry.index)) {
+      futureEntry = this.validator.entries.find(entry =>
+        entry.index > futureEntry.index &&
+        !this.validator.processedIndices.has(entry.index) &&
+        entry.isRequest &&
+        this.validator.matchesExpected(entry, normalizedIncoming) &&
+        !this.preSatisfiedReplayEntries.has(entry.index)
+      ) || futureEntry;
+    }
+
     if (!futureEntry) {
       return null;
     }
@@ -3211,12 +3282,12 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       lenderOrgId: incoming.lenderOrgId
     });
 
+    const buffered = await this.bufferManager.addIncomingRequest(normalizedIncoming);
     this.registerPreSatisfiedReplayEntry(futureEntry, {
       requestId: incoming.requestId || null,
-      reason: 'immediate_future_gateway_lender'
+      reason: 'immediate_future_gateway_lender',
+      bufferedRequestKey: buffered.key
     });
-
-    const buffered = await this.bufferManager.addIncomingRequest(normalizedIncoming);
 
     logger.info('Buffered future GATEWAY->LENDER request until replay reaches its recorded position', {
       currentEntry: currentEntry.toString(),
@@ -3464,7 +3535,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       responseIndex: responseEntry?.index ?? null,
       satisfiedAt: Date.now(),
       requestId: options.requestId || null,
-      reason: options.reason || 'pre_satisfied_registration'
+      reason: options.reason || 'pre_satisfied_registration',
+      bufferedRequestKey: options.bufferedRequestKey || null
     });
 
     logger.info('Registered pre-satisfied replay entry after immediate handling', {
@@ -3475,6 +3547,21 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       currentIndex: this.validator?.currentIndex ?? null
     });
 
+    return true;
+  }
+
+  attachBufferedRequestKeyToPreSatisfiedEntry(entry, bufferedRequestKey) {
+    if (!entry || !bufferedRequestKey || !this.preSatisfiedReplayEntries) {
+      return false;
+    }
+
+    const marker = this.preSatisfiedReplayEntries.get(entry.index);
+    if (!marker) {
+      return false;
+    }
+
+    marker.bufferedRequestKey = bufferedRequestKey;
+    this.preSatisfiedReplayEntries.set(entry.index, marker);
     return true;
   }
 
@@ -3554,7 +3641,15 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
           responseEntry.source === 'LENDER' &&
           responseEntry.destination === 'GATEWAY'
         ) {
-          const buffered = this.bufferManager?.findMatchingRequest?.(entry, { claim: true });
+          let buffered = null;
+          if (marker.bufferedRequestKey && this.bufferManager?.claimIncomingRequestByKey) {
+            buffered = this.bufferManager.claimIncomingRequestByKey(marker.bufferedRequestKey, entry);
+          }
+
+          if (!buffered) {
+            buffered = this.bufferManager?.findMatchingRequest?.(entry, { claim: true });
+          }
+
           if (buffered) {
             const replayResponse = {
               success: true,

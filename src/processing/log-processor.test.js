@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { remapReplayIds } from './log-processor.js';
 import { StateManager } from '../services/state-manager.js';
 
-test('remapReplayIds preserves replay lenderId for GetLenderFlows requests', () => {
+test('remapReplayIds remaps lenderId for GetLenderFlows requests to local lender id', () => {
   const payload = {
     lenderId: 'LSPb8b2b57fe858454d89519d67f51451f1',
     lender_org_id: 'DMI'
@@ -12,7 +12,7 @@ test('remapReplayIds preserves replay lenderId for GetLenderFlows requests', () 
 
   const remapped = remapReplayIds(payload, null, 'GetLenderFlows_REQUEST');
 
-  assert.equal(remapped.lenderId, 'LSPb8b2b57fe858454d89519d67f51451f1');
+  assert.equal(remapped.lenderId, 'LSP134d7524174646adae514b0c0a9659cf');
   assert.equal(remapped.lender_org_id, 'DMI');
 });
 

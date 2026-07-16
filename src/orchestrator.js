@@ -86,6 +86,16 @@ function isSuspiciousReplayLoanApplicationIdCandidate(stateManager, loanApplicat
   return false;
 }
 
+function normalizeFetchLoanApplicationDataRequestId(request = {}) {
+  return (
+    request?.requestId ||
+    request?.request_id ||
+    request?.payload?.requestId ||
+    request?.payload?.request_id ||
+    null
+  );
+}
+
 export class ReplayOrchestrator {
   constructor(logs, config = {}) {
     this.config = {
@@ -298,6 +308,10 @@ export class ReplayOrchestrator {
     return SeedDataManager.extractLenderOrgIds(logs);
   }
 
+  static extractPreferredLenderOrgId(logs) {
+    return SeedDataManager.extractPreferredLenderOrgId(logs);
+  }
+
   static extractLineDetails(logs) {
     return SeedDataManager.extractLineDetails(logs);
   }
@@ -324,12 +338,51 @@ export class ReplayOrchestrator {
     return parts.join(':') || entry.requestId || `${entry.index}`;
   }
 
-  async onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData) {
-    return this.seedDataManager.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData);
+  async onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData, preferredLenderOrgId) {
+    return this.seedDataManager.onboardSeedData(
+      merchantId,
+      lenderOrgIdToIdMap,
+      lineDetails,
+      customerSeedData,
+      lineSeedData,
+      preferredLenderOrgId
+    );
   }
 
   async clearLspData(merchantId, orderId) {
     return this.seedDataManager.clearLspData(merchantId, orderId);
+  }
+
+  getSeedSettleDelayMs() {
+    const configuredDelay = this.config.ART_SEED_SETTLE_DELAY_MS ?? process.env.ART_SEED_SETTLE_DELAY_MS ?? 1000;
+    const parsedDelay = typeof configuredDelay === 'number'
+      ? configuredDelay
+      : parseInt(configuredDelay, 10);
+
+    if (!Number.isInteger(parsedDelay) || parsedDelay < 0) {
+      throw new Error('ART_SEED_SETTLE_DELAY_MS must be a non-negative integer');
+    }
+
+    return parsedDelay;
+  }
+
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  async waitForSeedSettle(merchantId, orderId) {
+    const delayMs = this.getSeedSettleDelayMs();
+    if (delayMs <= 0) {
+      return;
+    }
+
+    logger.info('Waiting after seed data onboarding before replay', {
+      delayMs,
+      merchantId,
+      orderId
+    });
+
+    await this.sleep(delayMs);
   }
 
   async start() {
@@ -346,6 +399,7 @@ export class ReplayOrchestrator {
     this.isRunning = true;
     const { merchantId, orderId } = ReplayOrchestrator.extractMerchantId(this.logs);
     const lenderOrgIdToIdMap = ReplayOrchestrator.extractLenderOrgIds(this.logs);
+    const preferredLenderOrgId = ReplayOrchestrator.extractPreferredLenderOrgId(this.logs);
     const lineDetails = ReplayOrchestrator.extractLineDetails(this.logs);
     const customerSeedData = ReplayOrchestrator.extractCustomerSeedData(this.logs);
     const lineSeedData = ReplayOrchestrator.extractLineSeedData(this.logs);
@@ -360,13 +414,15 @@ export class ReplayOrchestrator {
     }
     // Set Onboarding data for the merchant to ensure LSP is ready for the replay session
     if (this.orderProfiler?.enabled) {
-      await this.orderProfiler.measure('onboard_seed_data', () => this.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData), {
+      await this.orderProfiler.measure('onboard_seed_data', () => this.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData, preferredLenderOrgId), {
         merchantId,
         lenderOrgCount: Object.keys(lenderOrgIdToIdMap || {}).length
       });
     } else {
-      await this.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData);
+      await this.onboardSeedData(merchantId, lenderOrgIdToIdMap, lineDetails, customerSeedData, lineSeedData, preferredLenderOrgId);
     }
+
+    await this.waitForSeedSettle(merchantId, orderId);
 
     logger.info('Replay orchestrator started', {
       totalLogs: this.logs.length,
@@ -1281,27 +1337,24 @@ export class ReplayOrchestrator {
       return null;
     }
 
+    const requiredData =
+      incoming.payload?.requiredData ||
+      incoming.payload?.required_data ||
+      null;
+    const incomingRequestId = normalizeFetchLoanApplicationDataRequestId(incoming);
+
     const processedEntry = this.validator?.entries?.find?.(entry =>
       this.validator.processedIndices.has(entry.index) &&
       entry.isRequest &&
       entry.source === incoming.source &&
       entry.destination === incoming.destination &&
       entry.logTag === incoming.logTag &&
+      this.matchesProcessedFetchLoanApplicationDataRequest(entry, incomingRequestId) &&
       (
         JSON.stringify(entry.payload?.requiredData || entry.payload?.required_data || []) ===
-        JSON.stringify(incoming.payload?.requiredData || incoming.payload?.required_data || [])
+        JSON.stringify(requiredData || [])
       )
     );
-    this.orderProfiler?.recordDownstreamCall({
-      destination: 'LSP',
-      endpoint: '/api/fetch/loanApplicationData',
-      logTag: incoming.logTag,
-      logIndex: null,
-      requestId: incoming.requestId,
-      status: serviceResponse?.status ?? null,
-      success: Boolean(serviceResponse && !serviceResponse.error && serviceResponse.status >= 200 && serviceResponse.status < 300),
-      durationMs: this.orderProfiler.now() - lspPassThroughStart
-    });
 
     if (processedEntry) {
       const responseEntry = this.findCorrespondingResponse(processedEntry, true);
@@ -1310,7 +1363,7 @@ export class ReplayOrchestrator {
           requestId: incoming.requestId,
           processedEntry: processedEntry.toString(),
           responseEntry: responseEntry.toString(),
-          requiredData: incoming.payload?.requiredData || incoming.payload?.required_data || null
+          requiredData
         });
 
         return {
@@ -1321,14 +1374,112 @@ export class ReplayOrchestrator {
       }
     }
 
-    logger.info('Allowing fetchLoanApplicationData request to be served through normal replay handling', {
+    const currentIndex = Number.isInteger(this.validator?.currentIndex)
+      ? this.validator.currentIndex
+      : 0;
+    const pendingReplayEntry = this.validator?.entries?.find?.(entry =>
+      entry.index >= currentIndex &&
+      !this.validator.processedIndices.has(entry.index) &&
+      entry.isRequest &&
+      entry.source === incoming.source &&
+      entry.destination === incoming.destination &&
+      entry.logTag === incoming.logTag &&
+      (
+        JSON.stringify(entry.payload?.requiredData || entry.payload?.required_data || []) ===
+        JSON.stringify(requiredData || [])
+      )
+    );
+
+    if (pendingReplayEntry) {
+      logger.info('Allowing fetchLoanApplicationData request to be served through normal replay handling', {
+        requestId: incoming.requestId,
+        incomingLogTag: incoming.logTag,
+        requiredData,
+        currentEntry: this.validator?.getCurrentEntry?.()?.toString?.() || null,
+        pendingReplayEntry: pendingReplayEntry.toString()
+      });
+      return null;
+    }
+
+    if (!this.config?.asyncReplayMode) {
+      logger.info('Deferring unmatched fetchLoanApplicationData request because async replay mode is disabled', {
+        requestId: incoming.requestId,
+        incomingLogTag: incoming.logTag,
+        requiredData,
+        currentEntry: this.validator?.getCurrentEntry?.()?.toString?.() || null
+      });
+      return null;
+    }
+
+    logger.info('Passing through unmatched live fetchLoanApplicationData request directly to LSP', {
       requestId: incoming.requestId,
       incomingLogTag: incoming.logTag,
-      requiredData: incoming.payload?.requiredData || incoming.payload?.required_data || null,
+      requiredData,
       currentEntry: this.validator?.getCurrentEntry?.()?.toString?.() || null
     });
 
-    return null;
+    const merchantId =
+      incoming?.headers?.['x-merchant-id'] ||
+      incoming?.headers?.['X-Merchant-Id'] ||
+      incoming?.payload?.merchantId ||
+      incoming?.payload?.merchant_id ||
+      this.config?.merchantId ||
+      null;
+
+    const liveResponse = await this.forwardLiveFetchLoanApplicationDataRequest(incoming, merchantId);
+
+    return {
+      success: Boolean(liveResponse && !liveResponse.error && liveResponse.status === 200),
+      payload: liveResponse?.data ?? null,
+      headers: liveResponse?.headers || {},
+      status: liveResponse?.status ?? null,
+      statusText: liveResponse?.statusText ?? null,
+      error: liveResponse?.error ? (liveResponse?.message || 'HTTP request failed') : null,
+      livePassThrough: true
+    };
+  }
+
+  async forwardLiveFetchLoanApplicationDataRequest(incoming, merchantId = null) {
+    return makeRequest(
+      this.getServiceBaseUrl('LSP'),
+      incoming.api,
+      'POST',
+      incoming.payload,
+      incoming.requestId,
+      'GATEWAY_LSP',
+      incoming.logTag,
+      merchantId,
+      incoming.headers || {},
+      null,
+      this.getServiceUnixSocket('LSP')
+    );
+  }
+
+  matchesProcessedFetchLoanApplicationDataRequest(entry, incomingRequestId = null) {
+    if (!incomingRequestId) {
+      return true;
+    }
+
+    const processedProdRequestId = normalizeFetchLoanApplicationDataRequestId(entry);
+    if (processedProdRequestId && processedProdRequestId === incomingRequestId) {
+      return true;
+    }
+
+    const preSatisfiedReplayRequestId =
+      this.preSatisfiedReplayEntries?.get?.(entry.index)?.requestId || null;
+
+    if (preSatisfiedReplayRequestId && preSatisfiedReplayRequestId === incomingRequestId) {
+      return true;
+    }
+
+    logger.info('Rejecting cached fetchLoanApplicationData replay reuse because requestId differs', {
+      entry: entry?.toString?.() || null,
+      incomingRequestId,
+      processedProdRequestId,
+      preSatisfiedReplayRequestId
+    });
+
+    return false;
   }
 
   async handleOutOfOrderRequest(incoming, validation) {

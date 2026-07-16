@@ -258,6 +258,7 @@ export class MultiSourceLogFetcher {
 
     const sourceResults = [orderLogsResult];
     const discardedLoanApplicationIds = [];
+    const discardedLoanApplicationReasons = [];
     const preservedLoanApplicationIds = [];
     for (const loanApplicationId of replayContext.loanApplicationIds) {
       const loanApplicationResult = await fetchS3TraceLogsByLoanApplicationId(loanApplicationId, this.sessionToken);
@@ -290,6 +291,11 @@ export class MultiSourceLogFetcher {
         }
 
         discardedLoanApplicationIds.push(loanApplicationId);
+        discardedLoanApplicationReasons.push({
+          loanApplicationId,
+          reason: loanApplicationDiscardDecision.reason,
+          topLevelOrderIds: loanApplicationDiscardDecision.topLevelOrderIds || []
+        });
       } else {
         sourceResults.push(loanApplicationResult);
         if (loanApplicationResult.success) {
@@ -308,6 +314,55 @@ export class MultiSourceLogFetcher {
 
     const sourceCounts = buildSourceCounts(sourceResults);
 
+    const hasMismatchedTopLevelOrderIdDiscard = discardedLoanApplicationReasons.some(
+      decision => decision.reason === 'mismatched_top_level_order_id'
+    );
+
+    if (hasMismatchedTopLevelOrderIdDiscard) {
+      const affectedLoanApplicationIds = discardedLoanApplicationReasons
+        .filter(decision => decision.reason === 'mismatched_top_level_order_id')
+        .map(decision => decision.loanApplicationId);
+      const topLevelOrderIds = [
+        ...new Set(
+          discardedLoanApplicationReasons
+            .filter(decision => decision.reason === 'mismatched_top_level_order_id')
+            .flatMap(decision => decision.topLevelOrderIds || [])
+            .filter(Boolean)
+        )
+      ];
+      const skipReason =
+        `Skipping order replay because LAID logs are contaminated with other order ids. ` +
+        `Affected loanApplicationIds: ${affectedLoanApplicationIds.join(', ')}. ` +
+        `Observed top-level order_ids: ${topLevelOrderIds.join(', ')}`;
+
+      logger.warn(skipReason, {
+        merchantId,
+        orderId,
+        affectedLoanApplicationIds,
+        topLevelOrderIds,
+        discardedLoanApplicationIds,
+        preservedLoanApplicationIds
+      });
+
+      return {
+        success: true,
+        skipped: true,
+        skipReason,
+        logs: [],
+        count: 0,
+        merchantId,
+        orderId,
+        context: {
+          ...replayContext,
+          loanApplicationIds: preservedLoanApplicationIds
+        },
+        sourceCounts,
+        sourceResults,
+        discardedLoanApplicationIds,
+        discardedLoanApplicationReasons
+      };
+    }
+
     logger.info(`Successfully fetched combined replay logs for order ${orderId}`, {
       merchantId,
       orderId,
@@ -316,6 +371,7 @@ export class MultiSourceLogFetcher {
       orderContextSource: this.useOrderContextLookup ? 'fetchOrderContext+order_s3_logs' : 'order_s3_logs',
       preservedLoanApplicationIds,
       discardedLoanApplicationIds,
+      discardedLoanApplicationReasons,
       sourceCounts,
       combinedLogCount: allLogs.length
     });
@@ -331,7 +387,9 @@ export class MultiSourceLogFetcher {
         loanApplicationIds: preservedLoanApplicationIds
       },
       sourceCounts,
-      sourceResults
+      sourceResults,
+      discardedLoanApplicationIds,
+      discardedLoanApplicationReasons
     };
   }
 

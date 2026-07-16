@@ -89,7 +89,7 @@ test('loan offer api request becomes skippable after 3 seconds once one prior oc
   assert.equal(policy.requirePriorProcessedOccurrence, true);
 });
 
-test('offer api request becomes skippable after 3 seconds once one prior occurrence was already processed', () => {
+test('offer api request becomes skippable after 3 seconds once realtime eligibility branch has advanced', () => {
   const policy = getOptionalRepeatPolicy({}, {
     logTag: 'OFFER API_REQUEST',
     isRequest: true
@@ -97,7 +97,16 @@ test('offer api request becomes skippable after 3 seconds once one prior occurre
 
   assert.ok(policy);
   assert.equal(policy.optionalAfterSeconds, 3);
-  assert.equal(policy.requirePriorProcessedOccurrence, true);
+  assert.equal(policy.requirePriorProcessedOccurrence, false);
+  assert.equal(policy.allowSkipWithoutAdvance, false);
+  assert.deepEqual(policy.advanceWhenSeenLogTags, [
+    'CHECK ELIGIBILITY API_REQUEST',
+    'CHECK ELIGIBILITY API_RESPONSE',
+    'LSP-FetchOfferSync_REQUEST',
+    'LSP-FetchOfferSync_RESPONSE',
+    'FlipKart-RealTimeEligibility_RESPONSE',
+    'LOAN OFFER API_REQUEST'
+  ]);
 });
 
 test('loan status api request becomes skippable after 3 seconds once one prior occurrence was already processed', () => {

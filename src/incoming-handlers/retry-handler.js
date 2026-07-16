@@ -95,6 +95,18 @@ function transformReplayPayloadForEntry(stateManager, payload, entry) {
   return transformRequest(remappedPayload, entry?.logTag);
 }
 
+function isFetchLoanApplicationDataRequest(incoming) {
+  return (
+    incoming?.source === 'GATEWAY' &&
+    incoming?.destination === 'LSP' &&
+    (
+      incoming?.api === '/api/fetch/loanApplicationData' ||
+      incoming?.logTag === 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST' ||
+      incoming?.logTag === 'FETCH_LOAN_APPLICATION_DATA_API_REQUEST'
+    )
+  );
+}
+
 /**
  * RetryHandler - Handles retry detection for incoming requests
  * Checks if an incoming request is a retry of a previously processed request
@@ -133,6 +145,15 @@ export class RetryHandler {
     });
 
     const currentEntry = this.validator.getCurrentEntry();
+
+    if (isFetchLoanApplicationDataRequest(incoming)) {
+      this.logger.info('Skipping generic retry short-circuit for fetchLoanApplicationData request', {
+        incomingRequestId: incoming.requestId,
+        incomingLogTag: incoming.logTag,
+        currentEntry: currentEntry?.toString?.() || null
+      });
+      return null;
+    }
 
     if (currentEntry && currentEntry.isRequest && this.validator.matchesExpected(currentEntry, incoming)) {
       this.logger.debug('Incoming request matches current replay entry, not treating as retry', {

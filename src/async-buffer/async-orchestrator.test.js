@@ -319,6 +319,43 @@ test('LOAN OFFER API_REQUEST becomes optional after timeout when one prior occur
   assert.equal(shouldSkip, true);
 });
 
+test('OFFER API_REQUEST becomes optional after timeout when realtime branch has already advanced', () => {
+  const logs = [
+    createRequestLog(0, {
+      logTag: 'OFFER API_REQUEST',
+      traceRoute: 'GATEWAY_LENDER',
+      loanApplicationId: 'loan-1'
+    }),
+    createRequestLog(1, {
+      logTag: 'CHECK ELIGIBILITY API_REQUEST',
+      traceRoute: 'GATEWAY_LENDER',
+      loanApplicationId: 'loan-1'
+    })
+  ];
+
+  const validator = new LogSequenceValidator(logs);
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.config = {
+    timeoutMs: 90000
+  };
+  orchestrator.validator = validator;
+  orchestrator.observedIncomingRequests = [
+    {
+      logTag: 'CHECK ELIGIBILITY API_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LENDER',
+      loanApplicationId: 'loan-1'
+    }
+  ];
+  orchestrator.observedProcessedResponses = [];
+  orchestrator.bufferManager = {
+    hasMatchingBufferedRequest: () => false
+  };
+
+  const shouldSkip = orchestrator.shouldSkipTimedOutOptionalRequest(validator.entries[0]);
+  assert.equal(shouldSkip, true);
+});
+
 test('LOAN STATUS API_REQUEST becomes optional after timeout when one prior occurrence was already processed', () => {
   const logs = [
     createRequestLog(0, {
@@ -1620,7 +1657,7 @@ test('buildFailureFallbackResponse uses matching replay response for tolerated F
   });
 });
 
-test('buildFailureFallbackResponse requires post-batch confirmation when no later FlipKart real-time eligibility request exists', () => {
+test('buildFailureFallbackResponse skips post-batch confirmation for FlipKart real-time eligibility when replay response is available', () => {
   const logs = [
     {
       messageNumber: 0,
@@ -1671,8 +1708,8 @@ test('buildFailureFallbackResponse requires post-batch confirmation when no late
   );
 
   assert.ok(fallback);
-  assert.equal(fallback.postBatchConfirmationRequired, true);
-  assert.equal(orchestrator.pendingPostBatchConfirmations.has(1), true);
+  assert.equal(fallback.postBatchConfirmationRequired, false);
+  assert.equal(orchestrator.pendingPostBatchConfirmations.has(1), false);
 });
 
 test('buildFailureFallbackResponse uses matching replay response for tolerated LSP fetchOfferSync timeout', () => {

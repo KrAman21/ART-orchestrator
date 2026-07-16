@@ -1,1 +1,0 @@
-{"timestamp":"2026-07-07T09:10:15.619Z","direction":"incoming","event":"received","source":"GATEWAY","destination":"LENDER","api":"/prod/polling","payload":{"applicationid":"live-line-detail"},"requestId":"unexpected-1","logTag":"POLLING API :: LINE_STATUS_REQUEST","sourceDestination":"GATEWAY_LENDER","_direction":"incoming","_timestamp":"2026-07-07T09:10:15.619Z"}

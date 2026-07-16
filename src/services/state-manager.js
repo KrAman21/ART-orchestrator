@@ -216,6 +216,26 @@ const PROD_REQUEST_ID_KEYS = new Set([
   'trace_request_id'
 ]);
 
+function tryParseStructuredString(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (
+    (!trimmed.startsWith('{') || !trimmed.endsWith('}')) &&
+    (!trimmed.startsWith('[') || !trimmed.endsWith(']'))
+  ) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+}
+
 function collectLineScopedIdentifierCandidates(payload) {
   const candidates = new Set();
   const push = value => {
@@ -1454,6 +1474,19 @@ export class StateManager {
           field: context?.field || null
         });
         return this.currentReplayLoanApplicationId;
+      }
+
+      const parsedStructuredValue = tryParseStructuredString(value);
+      if (parsedStructuredValue !== null) {
+        const rewrittenStructuredValue = this.rewriteOutgoingLoanApplicationIds(parsedStructuredValue, context);
+        const serializedStructuredValue = JSON.stringify(rewrittenStructuredValue);
+        if (serializedStructuredValue !== value) {
+          logger.debug('Rewriting structured string payload for replay identifiers', {
+            logTag: context?.logTag || null,
+            field: context?.field || null
+          });
+        }
+        return serializedStructuredValue;
       }
 
       return value;

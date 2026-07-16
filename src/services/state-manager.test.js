@@ -166,6 +166,60 @@ test('seedProdOfferIdsFromLogs and rewriteOutgoingLoanApplicationIds remap stale
   assert.equal(rewritten.payload.plan.id, 'live-offer-1');
 });
 
+test('rewriteOutgoingLoanApplicationIds remaps identifiers inside stringified JSON payloads', () => {
+  const stateManager = new StateManager();
+  stateManager.seedProdLoanApplicationIdsFromLogs([{ payload: { loanApplicationId: 'prod-la-1' } }]);
+  stateManager.seedProdAgreementIdsFromLogs([{ payload: { agreementId: 'prod-agreement-1' } }]);
+  stateManager.seedProdOfferIdsFromLogs([
+    {
+      logTag: 'LSP-SelectOffer_REQUEST',
+      payload: { offerSerializer: { id: 'prod-offer-1' } }
+    }
+  ]);
+  stateManager.seedProdSessionTokensFromLogs([{ payload: { sessionToken: 'prod-session-1' } }]);
+  stateManager.seedProdTxnRefIdsFromLogs([{ payload: { txnRefId: 'prod-txn-1' } }]);
+  stateManager.seedProdCustomerIdsFromLogs([{ payload: { customerId: 'prod-customer-1' } }]);
+  stateManager.seedProdRequestIdsFromLogs([
+    {
+      logTag: 'GetAgreementDataRequest_REQUEST',
+      payload: { requestId: 'prod-request-1' }
+    }
+  ]);
+
+  stateManager.setCurrentReplayLoanApplicationId('live-la-1', { logTag: 'LOAN_APPLICATION_LIVE' });
+  stateManager.setCurrentReplayAgreementId('live-agreement-1', { logTag: 'AGREEMENT_LIVE' });
+  stateManager.setCurrentReplayOfferId('live-offer-1', { logTag: 'OFFER_LIVE' });
+  stateManager.setCurrentReplaySessionToken('live-session-1', { logTag: 'SESSION_LIVE' });
+  stateManager.setCurrentReplayTxnRefId('live-txn-1', { logTag: 'TXN_LIVE' });
+  stateManager.setCurrentReplayCustomerId('live-customer-1', { logTag: 'CUSTOMER_LIVE' });
+  stateManager.setReplayRequestIdForLogTag('GetAgreementDataRequest_REQUEST', 'live-request-1');
+
+  const original = JSON.stringify({
+    loanApplicationId: 'prod-la-1',
+    agreementId: 'prod-agreement-1',
+    offer_id: 'prod-offer-1',
+    sessionToken: 'prod-session-1',
+    txnRefId: 'prod-txn-1',
+    customerId: 'prod-customer-1',
+    requestId: 'prod-request-1'
+  });
+
+  const rewritten = stateManager.rewriteOutgoingLoanApplicationIds(original, {
+    logTag: 'GetAgreementDataRequest_REQUEST',
+    field: 'payload'
+  });
+
+  assert.deepEqual(JSON.parse(rewritten), {
+    loanApplicationId: 'live-la-1',
+    agreementId: 'live-agreement-1',
+    offer_id: 'live-offer-1',
+    sessionToken: 'live-session-1',
+    txnRefId: 'live-txn-1',
+    customerId: 'live-customer-1',
+    requestId: 'live-request-1'
+  });
+});
+
 test('registerMappingsFromPayloadPair does not corrupt loanApplicationId from E-MANDATE applicationid line-scoped field', () => {
   const stateManager = new StateManager();
 
