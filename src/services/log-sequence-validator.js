@@ -1,6 +1,27 @@
 import { logger } from '../utils/logger.js';
 import { isAsyncParallelApi, normalizeSourceDestination } from '../config.js';
 import { canonicalRequestLogTag } from './log-tag-normalizer.js';
+import { extractTraceLogMethod, extractTraceLogUrl } from './replay-request-resolver.js';
+
+function extractOpportunityId(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (typeof value.opportunityid === 'string' && value.opportunityid) {
+    return value.opportunityid;
+  }
+
+  if (value.payload && typeof value.payload === 'object') {
+    return extractOpportunityId(value.payload);
+  }
+
+  if (value.body && typeof value.body === 'object') {
+    return extractOpportunityId(value.body);
+  }
+
+  return null;
+}
 
 /**
  * LogEntry represents a parsed log entry from the trace
@@ -50,9 +71,12 @@ class LogEntry {
 
     // Correlation info
     this.requestId = this.message.request_id || this.xRequestId;
+    this.clientRequestId = this.message.client_request_id || null;
     this.loanApplicationId = this.message.loan_application_id;
     this.lenderOrgId = this.message.lender_org_id;
     this.orderId = this.message.order_id;
+    this.url = extractTraceLogUrl(rawLog);
+    this.httpMethod = extractTraceLogMethod(rawLog);
   }
 
   /**
@@ -224,25 +248,19 @@ export class LogSequenceValidator {
    * Get the current log entry we're expecting to process next
    */
   getCurrentEntry() {
-    // Skip entries that should be skipped, are already processed, or are duplicates
+    while (this.currentIndex < this.entries.length && this.processedIndices.has(this.currentIndex)) {
+      this.currentIndex++;
+    }
+
     while (this.currentIndex < this.entries.length) {
       const entry = this.entries[this.currentIndex];
       const shouldSkipEntry = entry.shouldSkip();
-      const isProcessed = this.processedIndices.has(this.currentIndex);
       const isDuplicate = this.checkDuplicate(entry);
-      
-      logger.debug('Checking entry', {
-        position: this.currentIndex,
-        logTag: entry.logTag,
-        isDuplicate: isDuplicate
-      });
-      
-      if (!shouldSkipEntry && !isProcessed && !isDuplicate) {
-        // Return entry without marking as seen
-        // Will be marked in advance() when actually processed
+
+      if (!shouldSkipEntry && !isDuplicate) {
         return entry;
       }
-      
+
       if (shouldSkipEntry) {
         logger.info('Skipping WRAPPER entry', {
           position: this.currentIndex,
@@ -257,13 +275,8 @@ export class LogSequenceValidator {
           logTag: entry.logTag,
           duplicatesSkipped: this.duplicatesSkipped
         });
-      } else {
-        logger.info('Skipping already processed entry', {
-          position: this.currentIndex,
-          originalIndex: entry.index
-        });
       }
-      
+
       this.processedIndices.add(this.currentIndex);
       this.currentIndex++;
     }
@@ -516,6 +529,14 @@ export class LogSequenceValidator {
       }
     }
 
+    if (expected.api === '/prod/MOCK_DATA' && incoming.api === '/prod/MOCK_DATA') {
+      const expectedOpportunityId = extractOpportunityId(expected);
+      const incomingOpportunityId = extractOpportunityId(incoming);
+      if (expectedOpportunityId && incomingOpportunityId && expectedOpportunityId !== incomingOpportunityId) {
+        return false;
+      }
+    }
+
     // Compare requestId if present in both
     // Note: Some services (like Gateway) propagate parent request IDs, causing mismatches.
     // We log the mismatch but don't fail validation if source/destination/logTag match.
@@ -662,6 +683,56 @@ export class LogSequenceValidator {
       });
     }
     return entry;
+  }
+
+  getEntryPosition(indexOrEntry) {
+    if (typeof indexOrEntry === 'number') {
+      return this.entries.findIndex(entry => entry.index === indexOrEntry);
+    }
+
+    if (!indexOrEntry) {
+      return -1;
+    }
+
+    return this.entries.findIndex(entry => entry.index === indexOrEntry.index);
+  }
+
+  rebuildSeenRequestKeys() {
+    this.seenRequestKeys.clear();
+
+    for (const position of this.processedIndices) {
+      const entry = this.entries[position];
+      if (!entry) {
+        continue;
+      }
+
+      this.markEntrySeen(entry);
+    }
+  }
+
+  rewindToIndex(targetIndex) {
+    const targetPosition = this.getEntryPosition(targetIndex);
+    if (targetPosition === -1) {
+      logger.warn('Cannot rewind validator - target index not found', { targetIndex });
+      return false;
+    }
+
+    for (const position of Array.from(this.processedIndices)) {
+      if (position >= targetPosition) {
+        this.processedIndices.delete(position);
+      }
+    }
+
+    this.currentIndex = targetPosition;
+    this.rebuildSeenRequestKeys();
+
+    logger.info('Validator rewound to replay index', {
+      targetIndex,
+      targetPosition,
+      processedCount: this.processedIndices.size
+    });
+
+    return true;
   }
 
   /**

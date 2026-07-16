@@ -4,27 +4,23 @@ import { logger } from '../utils/logger.js';
  * AsyncTracker - Handles async call tracking for the orchestrator
  *
  * Manages count-based async tracking for out-of-order processing,
- * including tracking of pending external requests and webhook triggers.
+ * including tracking of pending external requests.
  */
 export class AsyncTracker {
   /**
    * @param {Object} options - Dependencies and configuration
    * @param {Map} options.asyncCallTracker - Map for tracking async calls
    * @param {Map} options.pendingExternalRequests - Map for pending external requests
-   * @param {Set} options.triggeredWebhooks - Set of triggered webhooks
    * @param {Object} options.logger - Logger instance
    * @param {Object} options.validator - LogSequenceValidator instance
    * @param {Object} options.config - Configuration object
    * @param {Object} options.callbacks - Callback functions
    * @param {Function} options.callbacks.getContextKey - Function to get context key from entry
-   * @param {Function} options.callbacks.triggerWebhooks - Function to trigger webhooks
-   * @param {Function} options.callbacks.triggerAppWebhooksAfterResponse - Function to trigger APP->GW webhooks after response
    * @param {Function} options.callbacks.sleep - Function to sleep/delay
    */
   constructor({
     asyncCallTracker,
     pendingExternalRequests,
-    triggeredWebhooks,
     logger: loggerInstance,
     validator,
     config,
@@ -32,7 +28,6 @@ export class AsyncTracker {
   }) {
     this.asyncCallTracker = asyncCallTracker || new Map();
     this.pendingExternalRequests = pendingExternalRequests || new Map();
-    this.triggeredWebhooks = triggeredWebhooks || new Set();
     this.logger = loggerInstance || logger;
     this.validator = validator;
     this.config = {
@@ -309,30 +304,6 @@ export class AsyncTracker {
       }
     }
 
-    // After all external calls complete, trigger any post-response webhooks (CASE 7)
-    // Note: This requires pendingPostResponseWebhooks to be passed in or available
-    if (this.pendingPostResponseWebhooks && this.pendingPostResponseWebhooks.size > 0) {
-      for (const [contextKey, webhooks] of this.pendingPostResponseWebhooks.entries()) {
-        this.logger.info(`Triggering ${webhooks.length} post-response webhook(s) for ${contextKey}`);
-        if (this.callbacks.triggerWebhooks) {
-          await this.callbacks.triggerWebhooks(webhooks);
-        }
-      }
-      this.pendingPostResponseWebhooks.clear();
-    }
-
-    // Also find and trigger APP->GW webhooks that should fire after GW->APP response
-    if (this.callbacks.triggerAppWebhooksAfterResponse) {
-      await this.callbacks.triggerAppWebhooksAfterResponse();
-    }
-  }
-
-  /**
-   * Set pending post-response webhooks (used by waitForAllExternalCalls)
-   * @param {Map} pendingPostResponseWebhooks - Map of pending post-response webhooks
-   */
-  setPendingPostResponseWebhooks(pendingPostResponseWebhooks) {
-    this.pendingPostResponseWebhooks = pendingPostResponseWebhooks;
   }
 }
 

@@ -3,10 +3,12 @@ import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { logger } from '../utils/logger.js';
+import { SERVICE_MAP } from '../config.js';
 
 const execFileAsync = promisify(execFile);
 const SEEDED_SESSION_TOKENS = new Set();
 const SEEDED_MERCHANT_USERS = new Set();
+const SEEDED_CLIENT_AUTH_TOKENS = new Set();
 const UNENCRYPTED_SESSION_METADATA_BASE64 = 'eyJlbmNyeXB0aW9uRmxvdyI6Ik5PTkUifQ==';
 const EMPTY_MERCHANT_SHARED_DATA_BASE64 = Buffer.from(
   JSON.stringify({
@@ -23,6 +25,56 @@ function sqlEscape(value) {
 
 function buildLspStyleId() {
   return `LSP${crypto.randomUUID().replaceAll('-', '')}`;
+}
+
+function isDedicatedBackingServicesEnabled() {
+  const rawValue = process.env.EULER_ART_DEDICATED_BACKING_SERVICES;
+  if (typeof rawValue !== 'string') {
+    return false;
+  }
+
+  return ['1', 'true', 'yes', 'on'].includes(rawValue.trim().toLowerCase());
+}
+
+function getLspDbSocketDir() {
+  if (process.env.ART_LSP_DB_SOCKET_DIR) {
+    return process.env.ART_LSP_DB_SOCKET_DIR;
+  }
+
+  const lspUnixSocket = SERVICE_MAP?.LSP?.unixSocket;
+  if (lspUnixSocket) {
+    if (lspUnixSocket.endsWith('/data/el/el.sock')) {
+      return lspUnixSocket.replace(/\/data\/el\/el\.sock$/, '/data/lsp-db');
+    }
+
+    const podSocketMatch = lspUnixSocket.match(/^(.*)\/data\/lsp-pods\/pod-(\d+)\/lsp\.sock$/);
+    if (podSocketMatch) {
+      const [, repoRoot, podNumber] = podSocketMatch;
+
+      if (isDedicatedBackingServicesEnabled()) {
+        const dedicatedDbDir = `${repoRoot}/data/lsp-db-pod-${podNumber}`;
+        if (fs.existsSync(dedicatedDbDir)) {
+          return dedicatedDbDir;
+        }
+      }
+
+      return `${repoRoot}/data/lsp-db`;
+    }
+
+    return lspUnixSocket.replace(/\/euler-lsp\/euler-lsp\.sock$/, '/lsp-db');
+  }
+
+  return '/home/kumar-aman/Desktop/repos/euler-lsp/data/lsp-db';
+}
+
+function buildPsqlEnv() {
+  return {
+    ...process.env,
+    PGHOST: getLspDbSocketDir(),
+    PGUSER: process.env.ART_LSP_DB_USER || 'testUser',
+    PGPASSWORD: process.env.ART_LSP_DB_PASSWORD || 'testPassword',
+    PGDATABASE: process.env.ART_LSP_DB_NAME || 'testLsp'
+  };
 }
 
 function getPsqlBinary() {
@@ -45,7 +97,178 @@ function getPsqlBinary() {
   }
 }
 
-async function seedLoanStatusSession(sessionToken, userId, entry) {
+function extractJsonFromRealmString(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const marker = '::';
+  const markerIndex = value.indexOf(marker);
+  const candidate = markerIndex >= 0 ? value.slice(markerIndex + marker.length).trim() : value.trim();
+  if (!candidate) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    return null;
+  }
+}
+
+function collectActionRequiredCandidates(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+
+  const candidates = [];
+  const individualActionId = payload?.kyc?.individualKYC?.actionId;
+  if (individualActionId) {
+    candidates.push({
+      id: individualActionId,
+      action: payload?.kyc?.individualKYC?.actionsRequired?.[0]?.action || null,
+      actionType: payload?.kyc?.individualKYC?.actionsRequired?.[0]?.actionType || null,
+      parentAction: payload?.kyc?.individualKYC?.actionsRequired?.[0]?.parentAction || null
+    });
+  }
+
+  for (const item of payload?.kyc?.individualKYC?.actionsRequired || []) {
+    candidates.push({
+      id: item?.id || null,
+      action: item?.action || null,
+      actionType: item?.actionType || null,
+      parentAction: item?.parentAction || null
+    });
+  }
+
+  for (const item of payload?.kyc?.actionsRequired || []) {
+    candidates.push({
+      id: item?.id || null,
+      action: item?.action || null,
+      actionType: item?.actionType || null,
+      parentAction: item?.parentAction || null
+    });
+  }
+
+  return candidates.filter(candidate => candidate.id);
+}
+
+function findMappedActionRequiredId(appResponse, replayCandidates) {
+  const liveActions = [
+    ...(appResponse?.kyc?.individualKYC?.actionsRequired || []),
+    ...(appResponse?.kyc?.actionsRequired || [])
+  ].filter(action => action?.id);
+
+  if (liveActions.length === 0 || replayCandidates.length === 0) {
+    return null;
+  }
+
+  for (const replayCandidate of replayCandidates) {
+    const exactMatch = liveActions.find(liveAction =>
+      liveAction.action === replayCandidate.action &&
+      liveAction.actionType === replayCandidate.actionType &&
+      liveAction.parentAction === replayCandidate.parentAction
+    );
+    if (exactMatch?.id) {
+      return {
+        originalActionId: replayCandidate.id,
+        liveActionId: exactMatch.id
+      };
+    }
+  }
+
+  if (liveActions[0]?.id && replayCandidates[0]?.id) {
+    return {
+      originalActionId: replayCandidates[0].id,
+      liveActionId: liveActions[0].id
+    };
+  }
+
+  return null;
+}
+
+async function syncUpdateKycActionRequiredMapping(entry, stateManager) {
+  if (!stateManager || entry?.logTag !== 'UpdateKYCRequest_REQUEST') {
+    return;
+  }
+
+  const replayCandidates = collectActionRequiredCandidates(entry?.payload);
+  if (replayCandidates.length === 0) {
+    logger.info('Skipping UpdateKYC actionRequired mapping sync: no replay action ids found', {
+      logTag: entry?.logTag
+    });
+    return;
+  }
+
+  const mappedLoanApplicationId = stateManager.getMappedIdentifier(
+    'loanApplicationId',
+    entry.loanApplicationId || entry?.payload?.loanApplicationId
+  );
+  if (!mappedLoanApplicationId) {
+    logger.info('Skipping UpdateKYC actionRequired mapping sync: no mapped loanApplicationId', {
+      logTag: entry?.logTag
+    });
+    return;
+  }
+
+  const psqlBinary = getPsqlBinary();
+  if (!psqlBinary) {
+    logger.warn('Unable to sync UpdateKYC actionRequired mapping: psql binary not found', {
+      logTag: entry?.logTag
+    });
+    return;
+  }
+
+  const sql = `
+    SELECT app_response_enc
+    FROM lsp_v1.first_stage_request_data
+    WHERE loan_app_id = '${sqlEscape(mappedLoanApplicationId)}'
+      AND api_name = 'TriggerKYC'
+    ORDER BY created_at DESC
+    LIMIT 1;
+  `;
+
+  try {
+    const { stdout } = await execFileAsync(
+      psqlBinary,
+      ['-v', 'ON_ERROR_STOP=1', '-t', '-A', '-c', sql],
+      { env: buildPsqlEnv() }
+    );
+
+    const appResponse = extractJsonFromRealmString(stdout.trim());
+    const mappedAction = findMappedActionRequiredId(appResponse, replayCandidates);
+
+    if (!mappedAction?.originalActionId || !mappedAction?.liveActionId) {
+      logger.warn('UpdateKYC actionRequired mapping sync could not find live action id', {
+        logTag: entry?.logTag,
+        mappedLoanApplicationId,
+        replayActionIds: replayCandidates.map(candidate => candidate.id)
+      });
+      return;
+    }
+
+    stateManager.registerIdentifierMapping(
+      'actionRequiredId',
+      mappedAction.originalActionId,
+      mappedAction.liveActionId
+    );
+
+    logger.info('Synced UpdateKYC actionRequired replay mapping', {
+      logTag: entry?.logTag,
+      mappedLoanApplicationId,
+      originalActionId: mappedAction.originalActionId,
+      liveActionId: mappedAction.liveActionId
+    });
+  } catch (error) {
+    logger.warn('Failed to sync UpdateKYC actionRequired mapping', {
+      logTag: entry?.logTag,
+      mappedLoanApplicationId,
+      error: error.message
+    });
+  }
+}
+
+async function seedLoanStatusSession(sessionToken, userId, deviceTokenId, entry) {
   const psqlBinary = getPsqlBinary();
   if (!psqlBinary) {
     logger.warn('Unable to seed LSP session: psql binary not found', {
@@ -60,9 +283,10 @@ async function seedLoanStatusSession(sessionToken, userId, entry) {
   const requestId = entry?.requestId || buildLspStyleId();
   const merchantId = entry?.message?.merchant_id || 'flipkart';
   const orderId = entry?.message?.order_id || entry?.orderId || '';
+  const sessionId = deviceTokenId || buildLspStyleId();
 
   const sql = `
-    INSERT INTO public.session (
+    INSERT INTO lsp_v1.session (
       id,
       request_id,
       merchant_user_id,
@@ -74,10 +298,11 @@ async function seedLoanStatusSession(sessionToken, userId, entry) {
       order_id,
       merchant_user_profile_id,
       txn_intent_id,
+      device_token_id,
       merchant_id,
       metadata
     ) VALUES (
-      '${sqlEscape(buildLspStyleId())}',
+      '${sqlEscape(sessionId)}',
       '${sqlEscape(requestId)}',
       '${sqlEscape(userId)}',
       '${sqlEscape(sessionToken)}',
@@ -88,27 +313,22 @@ async function seedLoanStatusSession(sessionToken, userId, entry) {
       ${orderId ? `'${sqlEscape(orderId)}'` : 'NULL'},
       '',
       NULL,
+      ${deviceTokenId ? `'${sqlEscape(deviceTokenId)}'` : 'NULL'},
       '${sqlEscape(merchantId)}',
       '${UNENCRYPTED_SESSION_METADATA_BASE64}'
     )
     ON CONFLICT (session_token) DO NOTHING;
   `;
 
-  const env = {
-    ...process.env,
-    PGHOST: process.env.ART_LSP_DB_SOCKET_DIR || '/home/kumar-aman/Desktop/repos2/euler-lsp/data/lsp-db',
-    PGUSER: process.env.ART_LSP_DB_USER || 'testUser',
-    PGPASSWORD: process.env.ART_LSP_DB_PASSWORD || 'testPassword',
-    PGDATABASE: process.env.ART_LSP_DB_NAME || 'testLsp'
-  };
-
-  await execFileAsync(psqlBinary, ['-v', 'ON_ERROR_STOP=1', '-c', sql], { env });
+  await execFileAsync(psqlBinary, ['-v', 'ON_ERROR_STOP=1', '-c', sql], { env: buildPsqlEnv() });
 
   logger.info('Seeded LSP session for loan status replay', {
     logTag: entry?.logTag,
     sessionToken,
     userId,
-    orderId
+    orderId,
+    sessionId,
+    deviceTokenId
   });
 }
 
@@ -131,7 +351,7 @@ async function seedLoanStatusMerchantUser(userId, entry) {
     userId;
   const appRefId = buildLspStyleId();
   const sql = `
-    INSERT INTO public.merchant_user (
+    INSERT INTO lsp_v1.merchant_user (
       id,
       merchant_id,
       status,
@@ -168,15 +388,7 @@ async function seedLoanStatusMerchantUser(userId, entry) {
       metadata = EXCLUDED.metadata;
   `;
 
-  const env = {
-    ...process.env,
-    PGHOST: process.env.ART_LSP_DB_SOCKET_DIR || '/home/kumar-aman/Desktop/repos2/euler-lsp/data/lsp-db',
-    PGUSER: process.env.ART_LSP_DB_USER || 'testUser',
-    PGPASSWORD: process.env.ART_LSP_DB_PASSWORD || 'testPassword',
-    PGDATABASE: process.env.ART_LSP_DB_NAME || 'testLsp'
-  };
-
-  await execFileAsync(psqlBinary, ['-v', 'ON_ERROR_STOP=1', '-c', sql], { env });
+  await execFileAsync(psqlBinary, ['-v', 'ON_ERROR_STOP=1', '-c', sql], { env: buildPsqlEnv() });
 
   logger.info('Seeded LSP merchant_user for loan status replay', {
     logTag: entry?.logTag,
@@ -186,23 +398,103 @@ async function seedLoanStatusMerchantUser(userId, entry) {
   });
 }
 
-export async function ensureAppCorePreconditions(entry, customHeaders = {}) {
+async function seedClientAuthTokenForGetLenderFlows(entry) {
+  const psqlBinary = getPsqlBinary();
+  if (!psqlBinary) {
+    logger.warn('Unable to seed CAT for getLenderFlows: psql binary not found', {
+      logTag: entry?.logTag
+    });
+    return;
+  }
+
+  const payload = entry?.payload || {};
+  const clientAuthToken = payload.clientAuthToken;
+  const customerId = payload.customerId;
+  const merchantId = entry?.message?.merchant_id || payload.merchantId || payload.merchant_id || 'flipkart';
+
+  if (!clientAuthToken || !customerId) {
+    logger.warn('Skipping CAT seeding due to missing getLenderFlows token/customer', {
+      logTag: entry?.logTag,
+      hasClientAuthToken: Boolean(clientAuthToken),
+      hasCustomerId: Boolean(customerId)
+    });
+    return;
+  }
+
+  if (SEEDED_CLIENT_AUTH_TOKENS.has(clientAuthToken)) {
+    return;
+  }
+
+  const now = new Date();
+  const expiry = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  const sql = `
+    INSERT INTO lsp_v1.cat (
+      id,
+      merchant_id,
+      customer_id,
+      auth_token,
+      status,
+      expiry,
+      created_at,
+      updated_at
+    ) VALUES (
+      '${sqlEscape(buildLspStyleId())}',
+      '${sqlEscape(merchantId)}',
+      '${sqlEscape(customerId)}',
+      '${sqlEscape(clientAuthToken)}',
+      'ACTIVE',
+      '${expiry.toISOString()}',
+      '${now.toISOString()}',
+      '${now.toISOString()}'
+    )
+    ON CONFLICT (auth_token) DO UPDATE SET
+      merchant_id = EXCLUDED.merchant_id,
+      customer_id = EXCLUDED.customer_id,
+      status = 'ACTIVE',
+      expiry = EXCLUDED.expiry,
+      updated_at = EXCLUDED.updated_at;
+  `;
+
+  await execFileAsync(psqlBinary, ['-v', 'ON_ERROR_STOP=1', '-c', sql], { env: buildPsqlEnv() });
+  SEEDED_CLIENT_AUTH_TOKENS.add(clientAuthToken);
+
+  logger.info('Seeded CAT for getLenderFlows replay', {
+    logTag: entry?.logTag,
+    merchantId,
+    customerId,
+    dbSocketDir: getLspDbSocketDir()
+  });
+}
+
+export async function ensureAppCorePreconditions(entry, customHeaders = {}, stateManager = null) {
   if (!entry || entry.sourceDestination !== 'APP_CORE') {
     return;
   }
 
-  if (entry.logTag !== 'LSP-LoanStatus_REQUEST') {
+  if (entry.logTag === 'GetLenderFlows_REQUEST') {
+    try {
+      await seedClientAuthTokenForGetLenderFlows(entry);
+    } catch (error) {
+      logger.warn('Failed to seed CAT for getLenderFlows replay', {
+        logTag: entry.logTag,
+        error: error.message
+      });
+    }
     return;
   }
 
   const sessionToken = customHeaders['x-session-token'];
   const userId = customHeaders['x-user-id'];
+  const deviceTokenId = customHeaders['x-device-token-id'];
+
+  await syncUpdateKycActionRequiredMapping(entry, stateManager);
 
   if (!sessionToken || !userId) {
-    logger.warn('Skipping LSP session seeding due to missing auth headers', {
+    logger.info('Skipping APP_CORE session seeding due to missing auth headers', {
       logTag: entry.logTag,
       hasSessionToken: Boolean(sessionToken),
-      hasUserId: Boolean(userId)
+      hasUserId: Boolean(userId),
+      hasDeviceTokenId: Boolean(deviceTokenId)
     });
     return;
   }
@@ -218,14 +510,15 @@ export async function ensureAppCorePreconditions(entry, customHeaders = {}) {
     }
 
     if (!SEEDED_SESSION_TOKENS.has(sessionToken)) {
-      await seedLoanStatusSession(sessionToken, userId, entry);
+      await seedLoanStatusSession(sessionToken, userId, deviceTokenId, entry);
       SEEDED_SESSION_TOKENS.add(sessionToken);
     }
   } catch (error) {
-    logger.warn('Failed to seed LSP auth preconditions for loan status replay', {
+    logger.warn('Failed to seed APP_CORE auth preconditions for replay', {
       logTag: entry.logTag,
       sessionToken,
       userId,
+      deviceTokenId,
       error: error.message
     });
   }

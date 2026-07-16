@@ -9,7 +9,7 @@ import { logger } from '../utils/logger.js';
  *   const mocks = createMockController({
  *     lspPort: 4232,
  *     gwPort: 2344,
- *     orchestratorUrl: 'http://localhost:3001'
+ *     orchestratorUrl: 'http://art-orchestrator'
  *   });
  *   await mocks.start(logs);
  *   ... run replay ...
@@ -20,7 +20,7 @@ export class MockServiceController {
     this.config = {
       lspPort: config.lspPort || 4232,
       gwPort: config.gwPort || 2344,
-      orchestratorUrl: config.orchestratorUrl || 'http://localhost:3001',
+      orchestratorUrl: config.orchestratorUrl || 'http://art-orchestrator',
       ...config
     };
 

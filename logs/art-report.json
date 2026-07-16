@@ -1,0 +1,71 @@
+{
+  "executionId": "art-1782837585322",
+  "executionStartTime": "2026-06-30T16:39:45.319Z",
+  "executionEndTime": "2026-06-30T16:39:45.321Z",
+  "totalDuration": 2,
+  "overallStatus": "SUCCESS",
+  "summary": {
+    "totalOrders": 1,
+    "completed": 0,
+    "skipped": 0,
+    "failed": 1,
+    "stuck": 0,
+    "timeout": 0,
+    "stopped": 0,
+    "replayDecisionFailures": 0,
+    "totalArtFailures": 1,
+    "ordersWithArtFailures": 1,
+    "totalFlowFailures": 0,
+    "ordersWithFlowFailures": 0,
+    "totalFailedLogs": 0,
+    "totalTimeoutLogs": 0,
+    "totalBufferFailures": 0,
+    "ordersWithBufferFailures": 0,
+    "totalFallbackRecoveries": 0,
+    "totalPayloadComparisons": 0,
+    "totalPayloadMismatches": 0
+  },
+  "orderOutcomes": [
+    {
+      "orderId": "AM202606221841156435BB46D31CB",
+      "status": "ERROR",
+      "processingTimeMs": 0,
+      "failureCategory": "ART_FAILURE",
+      "countsTowardReplayDecision": false,
+      "failureReason": "Cannot access 'lspContext' before initialization",
+      "logIndex": 0,
+      "logTag": null,
+      "stopReason": "Cannot access 'lspContext' before initialization"
+    }
+  ],
+  "requestDetails": [],
+  "bufferFailureDetails": [],
+  "artFailureDetails": [
+    {
+      "orderId": "AM202606221841156435BB46D31CB",
+      "status": "ERROR",
+      "processingTimeMs": 0,
+      "failedAt": {
+        "logIndex": 0,
+        "logTag": null,
+        "reason": "Cannot access 'lspContext' before initialization"
+      },
+      "requests": [
+        {
+          "requestId": null,
+          "logTag": null,
+          "sourceDestination": null,
+          "endpoint": null,
+          "baseUrl": null,
+          "httpStatus": null,
+          "errorMessage": "Cannot access 'lspContext' before initialization",
+          "requestPayload": null,
+          "responseData": null,
+          "step": "orchestrator_execution"
+        }
+      ]
+    }
+  ],
+  "payloadComparisons": [],
+  "htmlReportPath": "/home/prajwalbtegur/Desktop/Repos/art-new/logs/art-report.html"
+}
