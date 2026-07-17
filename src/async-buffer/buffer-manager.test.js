@@ -180,6 +180,80 @@ test('keeps distinct CORE->GATEWAY fetchOfferSync calls when outer requestId is 
   }
 });
 
+test('distinguishes repeated CORE->GATEWAY fetchOfferSync calls by plansFilteringType and claims the correct sibling', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    const ncemiCall = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'LSP-FetchOfferSync_REQUEST',
+      source: 'CORE',
+      destination: 'GATEWAY',
+      requestId: 'shared-http-request-id',
+      payload: {
+        requestId: 'payload-ncemi-request-id',
+        offerType: 'REAL_TIME',
+        plansFilteringType: 'TENURE_AND_ROI_NCEMI',
+        loanApplicationId: 'loan-1'
+      }
+    }));
+
+    const regularCall = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'LSP-FetchOfferSync_REQUEST',
+      source: 'CORE',
+      destination: 'GATEWAY',
+      requestId: 'shared-http-request-id',
+      payload: {
+        requestId: 'payload-regular-request-id',
+        offerType: 'REAL_TIME',
+        plansFilteringType: 'TENURE_AND_ROI',
+        loanApplicationId: 'loan-1'
+      }
+    }));
+
+    assert.notEqual(ncemiCall.key, regularCall.key);
+    assert.equal(manager.incomingRequests.size, 2);
+
+    const firstClaim = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'LSP-FetchOfferSync_REQUEST',
+      source: 'CORE',
+      destination: 'GATEWAY',
+      requestId: 'shared-http-request-id',
+      loanApplicationId: 'loan-1',
+      payload: {
+        requestId: 'expected-ncemi-log-request-id',
+        offerType: 'REAL_TIME',
+        plansFilteringType: 'TENURE_AND_ROI_NCEMI',
+        loanApplicationId: 'loan-1'
+      }
+    }), 50);
+
+    assert.equal(firstClaim?.request.payload.plansFilteringType, 'TENURE_AND_ROI_NCEMI');
+    assert.equal(firstClaim?.request.payload.requestId, 'payload-ncemi-request-id');
+
+    const secondClaim = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'LSP-FetchOfferSync_REQUEST',
+      source: 'CORE',
+      destination: 'GATEWAY',
+      requestId: 'shared-http-request-id',
+      loanApplicationId: 'loan-1',
+      payload: {
+        requestId: 'expected-regular-log-request-id',
+        offerType: 'REAL_TIME',
+        plansFilteringType: 'TENURE_AND_ROI',
+        loanApplicationId: 'loan-1'
+      }
+    }), 50);
+
+    assert.equal(secondClaim?.request.payload.plansFilteringType, 'TENURE_AND_ROI');
+    assert.equal(secondClaim?.request.payload.requestId, 'payload-regular-request-id');
+  } finally {
+    manager.stop();
+  }
+});
+
 test('preserves gateway lender request as rewind fallback and uses it after short rewind wait', async () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,

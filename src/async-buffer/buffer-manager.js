@@ -7,6 +7,7 @@ const PAYLOAD_SIGNAL_WEIGHTS = [
   ['loanApplicationStatus', 250],
   ['status', 120],
   ['offerType', 80],
+  ['plansFilteringType', 180],
   ['errorCode', 70],
   ['message', 40],
   ['loanMetadata.isLenderApproved', 120],

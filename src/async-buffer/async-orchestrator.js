@@ -2179,6 +2179,22 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
           });
         }
       }
+
+      if (entry.logTag === 'FlipKart-GetRedirectionURL_REQUEST') {
+        logger.info('Applying pre-send delay before FlipKart getRedirectionUrl replay', {
+          requestEntry: entry.toString(),
+          requestId: forwardingRequest.requestId,
+          delayMs: 1000,
+          api
+        });
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        logger.info('Completed pre-send delay before FlipKart getRedirectionUrl replay', {
+          requestEntry: entry.toString(),
+          requestId: forwardingRequest.requestId,
+          delayMs: 1000,
+          api
+        });
+      }
       
       this.httpClient.send(
         this.getServiceBaseUrl(service),
