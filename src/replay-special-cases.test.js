@@ -35,6 +35,10 @@ test('trigger lender otp lsp request is treated as an immediate future CORE_GATE
   assert.equal(isImmediateFutureCoreGatewayRequestLogTag('TriggerLenderOTPRequest-LSP_REQUEST'), true);
 });
 
+test('update kyc request lsp request is treated as an immediate future CORE_GATEWAY replay API', () => {
+  assert.equal(isImmediateFutureCoreGatewayRequestLogTag('UpdateKYCRequest-LSP_REQUEST'), true);
+});
+
 test('fetch loan application data request is treated as a self-trigger fallback API', () => {
   assert.equal(isSelfTriggerFallbackApiLogTag('FECTH_LOAN_APPLICATION_DATA_API_REQUEST'), true);
 });
@@ -118,4 +122,16 @@ test('loan status api request becomes skippable after 3 seconds once one prior o
   assert.ok(policy);
   assert.equal(policy.optionalAfterSeconds, 3);
   assert.equal(policy.requirePriorProcessedOccurrence, true);
+});
+
+test('hdb application status api loan status request becomes skippable after 3 seconds once one prior occurrence was already processed', () => {
+  const policy = getOptionalRepeatPolicy({}, {
+    logTag: 'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_REQUEST',
+    isRequest: true
+  });
+
+  assert.ok(policy);
+  assert.equal(policy.optionalAfterSeconds, 3);
+  assert.equal(policy.requirePriorProcessedOccurrence, false);
+  assert.equal(policy.allowSkipWithoutAdvance, true);
 });

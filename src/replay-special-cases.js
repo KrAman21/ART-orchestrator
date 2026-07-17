@@ -222,6 +222,14 @@ export const REPLAY_SPECIAL_CASES = [
     requirePriorProcessedOccurrence: true
   },
   {
+    logTag: 'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_REQUEST',
+    handler: 'maybeSkipOptionalRepeatedEntry',
+    description: 'Allow HDB loan-status lender requests to be skipped after 3 seconds when they do not arrive, without requiring any prior occurrence or branch advance.',
+    optionalAfterSeconds: 3,
+    requirePriorProcessedOccurrence: false,
+    allowSkipWithoutAdvance: true
+  },
+  {
     logTag: 'LOAN ACTIVATE API_REQUEST',
     handler: 'maybeSkipOptionalRepeatedEntry',
     description: 'Allow repeated loan-activate lender requests to be skipped after one successful occurrence if later repeats never arrive.',
@@ -287,11 +295,13 @@ export const IMMEDIATE_DIRECT_REPLAY_LOG_TAGS = new Set([
   'POLLING API :: LINE_STATUS_REQUEST',
   'E-MANDATE SERVICE API_REQUEST',
   'NEW TRANSACTION CREATION API_REQUEST',
-  'OFFER API_REQUEST'
+  'OFFER API_REQUEST',
+  'HDB_INITIATE_JOURNEY_API :: KYC_REQUEST'
 ]);
 
 export const IMMEDIATE_FUTURE_CORE_GATEWAY_REQUEST_LOG_TAGS = new Set([
-  'TriggerLenderOTPRequest-LSP_REQUEST'
+  'TriggerLenderOTPRequest-LSP_REQUEST',
+  'UpdateKYCRequest-LSP_REQUEST'
 ]);
 
 export const SELF_TRIGGER_FALLBACK_WAIT_TIMEOUT_OVERRIDES_MS = {

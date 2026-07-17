@@ -47,3 +47,21 @@ test('normalizeCanonicalLoanApplicationReferences rewrites nested replay referen
     canonicalLoanApplicationId
   );
 });
+
+test('normalizeCanonicalLoanApplicationReferences rewrites HDB webhook partnerRefNo and applicationId together', () => {
+  const canonicalLoanApplicationId = 'LSP-live-loan-1';
+  const payload = {
+    data: {
+      loanApplicationId: canonicalLoanApplicationId,
+      applicationId: 'HF20251076901450623',
+      partnerRefNo: 'HF20251076901450623',
+      loan_status: 'KYC_INITIATED',
+      merchantName: 'FLIPKART'
+    }
+  };
+
+  const normalized = normalizeCanonicalLoanApplicationReferences(payload, canonicalLoanApplicationId);
+
+  assert.equal(normalized.data.applicationId, canonicalLoanApplicationId);
+  assert.equal(normalized.data.partnerRefNo, canonicalLoanApplicationId);
+});

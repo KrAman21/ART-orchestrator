@@ -407,6 +407,44 @@ test('recordObservedIncomingRequest trusts live customerId only from LSP or GATE
   );
 });
 
+test('recordObservedIncomingRequest does not overwrite replay customerId with merchant-user-shaped identifier during trusted rewind traffic', () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.stateManager = new StateManager();
+  orchestrator.observedIncomingRequests = [];
+
+  orchestrator.stateManager.seedProdCustomerIdsFromLogs([
+    {
+      payload: {
+        customerId: 'prod-customer'
+      }
+    }
+  ]);
+
+  orchestrator.stateManager.setCurrentReplayCustomerId('trusted-live-customer', {
+    logTag: 'LSP-Eligibility_REQUEST',
+    source: 'CORE',
+    destination: 'GATEWAY',
+    sourceDestination: 'CORE_GATEWAY'
+  });
+  orchestrator.stateManager.registerIdentifierMapping('merchantUserId', 'prod-mu', 'LSP-live-merchant-user');
+
+  orchestrator.recordObservedIncomingRequest({
+    source: 'CORE',
+    destination: 'GATEWAY',
+    logTag: 'GetLenderFlows_REQUEST',
+    payload: {
+      customerId: 'LSP-live-merchant-user',
+      merchantUserId: 'LSP-live-merchant-user'
+    }
+  });
+
+  assert.equal(orchestrator.stateManager.getCurrentReplayCustomerId(), 'trusted-live-customer');
+  assert.equal(
+    orchestrator.stateManager.rewriteOutgoingLoanApplicationIds({ customerId: 'prod-customer' }).customerId,
+    'trusted-live-customer'
+  );
+});
+
 test('recordObservedIncomingRequest trusts live txnRefId only from GATEWAY_LENDER traffic', () => {
   const orchestrator = Object.create(ReplayOrchestrator.prototype);
   orchestrator.stateManager = new StateManager();

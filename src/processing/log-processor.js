@@ -39,7 +39,7 @@ import {
   matchesRequestContext
 } from '../services/response-matcher.js';
 
-function normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId = null) {
+export function normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId = null) {
   if (!remapped || typeof remapped !== 'object') {
     return remapped;
   }
@@ -51,9 +51,11 @@ function normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanAppli
 
   const resolvedLoanApplicationId =
     forcedLoanApplicationId ||
+    remapped.loanApplicationId ||
+    remapped.loan_application_id ||
+    payloadData.loanApplicationId ||
     payloadData.partnerRefNo ||
     payloadData.applicationId ||
-    payloadData.loanApplicationId ||
     null;
 
   if (!resolvedLoanApplicationId) {
@@ -303,6 +305,18 @@ export class LogProcessor {
         this.stateManager?.getMappedLoanApplicationId?.(entry.loanApplicationId) || entry.loanApplicationId || null
       );
       const transformedPayload = transformRequest(remappedPayload, entry.logTag);
+      const finalPayload = entry.logTag === 'HDB_WEBHOOK_REQUEST'
+        ? normalizeHdbWebhookLoanApplicationIdentifiers(
+            transformedPayload,
+            this.stateManager?.getMappedLoanApplicationId?.(entry.loanApplicationId) ||
+            this.stateManager?.getCurrentReplayLoanApplicationId?.() ||
+            entry.loanApplicationId ||
+            transformedPayload?.loanApplicationId ||
+            transformedPayload?.loan_application_id ||
+            transformedPayload?.data?.loanApplicationId ||
+            null
+          )
+        : transformedPayload;
       this.stateManager?.setReplayRequestIdForLogTag?.(entry.logTag, outboundRequestId, {
         sourceDestination: entry.sourceDestination,
         source: entry.source,
@@ -326,7 +340,7 @@ export class LogProcessor {
         requestIdNormalizedForAppCore: normalized,
         requestIdReusedFromLogTag: reusedFromLogTag,
         headers: customHeaders,
-        payload: transformedPayload,
+        payload: finalPayload,
         timestamp: new Date().toISOString()
       });
 
@@ -353,7 +367,7 @@ export class LogProcessor {
             this.callbacks.getServiceBaseUrl(service),
             api,
             method,
-            transformedPayload,
+            finalPayload,
             outboundRequestId,
             sourceDestinationForRequest,
             entry.logTag,
@@ -446,7 +460,7 @@ export class LogProcessor {
           this.callbacks.getServiceBaseUrl(service),
           api,
           method,
-          transformedPayload,
+          finalPayload,
           outboundRequestId,
           sourceDestinationForRequest,
           entry.logTag,
