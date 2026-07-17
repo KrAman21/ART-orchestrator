@@ -109,6 +109,23 @@ test('uses 3 second wait timeout for optional repeated LOAN STATUS API_REQUEST b
   assert.equal(timeoutMs, 3000);
 });
 
+test('uses 3 second wait timeout for optional repeated HDB application loan-status branch', () => {
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.config = {
+    timeoutMs: 90000
+  };
+
+  const entry = {
+    logTag: 'HDB_APPLICATION_STATUS_API :: LOAN_STATUS_REQUEST',
+    source: 'GATEWAY',
+    destination: 'LENDER',
+    isRequest: true
+  };
+
+  const timeoutMs = orchestrator.getRequestWaitTimeoutMs(entry);
+  assert.equal(timeoutMs, 3000);
+});
+
 test('registerNearbyImmediateReplaySatisfaction marks a matching nearby replay entry as pre-satisfied', () => {
   const logs = [
     createRequestLog(0, {
@@ -1421,6 +1438,54 @@ test('prepareAsyncReplayForwarding rewrites all maintained replay ids for APP_WR
   assert.equal(prepared.payload.nested.agreement_id, 'live-agreement-1');
   assert.equal(prepared.payload.nested.txn_ref_id, 'live-txn-1');
   assert.equal(prepared.payload.nested.merchant_customer_id, 'live-customer-1');
+});
+
+test('prepareAsyncReplayForwarding normalizes final HDB webhook payload identifiers before send', () => {
+  const stateManager = new StateManager();
+  stateManager.seedProdLoanApplicationIdsFromLogs([
+    {
+      payload: {
+        loan_application_id: 'prod-la-1'
+      }
+    }
+  ]);
+  stateManager.setCurrentReplayLoanApplicationId('live-la-1', {
+    logTag: 'LSP-FetchOfferSync_RESPONSE'
+  });
+
+  const entry = {
+    headers: {
+      'x-merchant-id': 'flipkart'
+    },
+    logTag: 'HDB_WEBHOOK_REQUEST',
+    sourceDestination: 'LENDER_GATEWAY',
+    loanApplicationId: 'prod-la-1',
+    message: {
+      merchant_id: 'flipkart'
+    }
+  };
+
+  const prepared = prepareAsyncReplayForwarding(
+    entry,
+    {
+      data: {
+        loanApplicationId: 'live-la-1',
+        applicationId: 'HF20251076901450623',
+        partnerRefNo: 'HF20251076901450623',
+        loan_status: 'KYC_INITIATED',
+        reAttempt: true
+      }
+    },
+    'replay-request-id',
+    {},
+    'flipkart',
+    [],
+    stateManager
+  );
+
+  assert.equal(prepared.payload.data.loanApplicationId, 'live-la-1');
+  assert.equal(prepared.payload.data.applicationId, 'live-la-1');
+  assert.equal(prepared.payload.data.partnerRefNo, 'live-la-1');
 });
 
 test('processNextLogEntry waits for incoming CORE->GATEWAY fetchOfferSync request instead of proactively sending it', async () => {

@@ -95,11 +95,15 @@ function shouldSendAppCoreAsTextEnvelope(sourceDestination, logTag, method) {
 
 function buildAppCoreTextEnvelope(payload, requestId, merchantId, customHeaders = {}) {
   const canonicalHeaders = canonicalizeAppCoreEnvelopeHeaders(customHeaders);
+  const hasOriginHeader = Object.prototype.hasOwnProperty.call(canonicalHeaders, 'X-Origin');
+  const hasVersionHeader = Object.prototype.hasOwnProperty.call(canonicalHeaders, 'X-Version');
 
   return {
     payload: payload ?? {},
     header: {
       'X-Merchant-Id': merchantId || payload?.merchantId || payload?.merchant_id || 'flipkart',
+      ...(hasOriginHeader ? {} : { 'X-Origin': 'SDK' }),
+      ...(hasVersionHeader ? {} : { 'X-Version': 'V1' }),
       ...(payload?.clientAuthToken ? { 'X-Client-Auth-Token': payload.clientAuthToken } : {}),
       ...canonicalHeaders
     },
@@ -132,6 +136,36 @@ function buildWrapperJsonEnvelope(payload, requestId, merchantId, customHeaders 
     },
     timeStamp: new Date().toISOString(),
     requestId: requestId || payload?.requestId || crypto.randomUUID()
+  };
+}
+
+export function normalizeHdbWebhookPayloadBeforeSend(payload, logTag) {
+  if (logTag !== 'HDB_WEBHOOK_REQUEST' || !payload || typeof payload !== 'object') {
+    return payload;
+  }
+
+  const data = payload.data;
+  if (!data || typeof data !== 'object') {
+    return payload;
+  }
+
+  const canonicalLoanApplicationId =
+    payload.loanApplicationId ||
+    payload.loan_application_id ||
+    data.loanApplicationId ||
+    null;
+
+  if (!canonicalLoanApplicationId) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    data: {
+      ...data,
+      applicationId: canonicalLoanApplicationId,
+      partnerRefNo: canonicalLoanApplicationId
+    }
   };
 }
 
@@ -189,12 +223,13 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
   }
 
   try {
-    let body = method !== 'GET' ? JSON.stringify(payload ?? {}) : undefined;
+    const normalizedPayload = normalizeHdbWebhookPayloadBeforeSend(payload, logTag);
+    let body = method !== 'GET' ? JSON.stringify(normalizedPayload ?? {}) : undefined;
     const usesSdkWrapperTextEnvelope =
       shouldSendSdkWrapperAsTextEnvelope(sourceDestination, logTag, endpoint, method);
 
     if (shouldSendAppCoreAsTextEnvelope(sourceDestination, logTag, method)) {
-      const requestPayload = buildAppCoreTextEnvelope(payload, requestId, merchantId, customHeaders);
+      const requestPayload = buildAppCoreTextEnvelope(normalizedPayload, requestId, merchantId, customHeaders);
       body = JSON.stringify(JSON.stringify(requestPayload));
       logger.info('Prepared APP_CORE request as unencrypted JwtPayload text envelope on first attempt', {
         requestId,
@@ -205,7 +240,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
     }
 
     if (usesSdkWrapperTextEnvelope) {
-      const requestPayload = buildWrapperJsonEnvelope(payload, requestId, merchantId, customHeaders);
+      const requestPayload = buildWrapperJsonEnvelope(normalizedPayload, requestId, merchantId, customHeaders);
       body = JSON.stringify(JSON.stringify(requestPayload));
       logger.info('Prepared SDK wrapper request as stringified JSON envelope on first attempt', {
         requestId,
@@ -325,7 +360,7 @@ export async function makeRequest(baseUrl, endpoint, method, payload, requestId,
       data?.actualValue === 'Object' &&
       body
     ) {
-      const requestPayload = buildAppCoreTextEnvelope(payload, requestId, merchantId, customHeaders);
+      const requestPayload = buildAppCoreTextEnvelope(normalizedPayload, requestId, merchantId, customHeaders);
       const retryBody = JSON.stringify(JSON.stringify(requestPayload));
       logger.warn('Retrying APP_CORE request as unencrypted JwtPayload text after LSP type mismatch', {
         requestId,

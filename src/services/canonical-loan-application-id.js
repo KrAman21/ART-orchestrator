@@ -2,6 +2,17 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isHdbWebhookLikePayload(payload) {
+  if (!isPlainObject(payload)) {
+    return false;
+  }
+
+  return (
+    typeof payload.partnerRefNo === 'string' ||
+    typeof payload.applicationId === 'string'
+  );
+}
+
 function normalizeJourneySteps(steps, canonicalLoanApplicationId) {
   if (!Array.isArray(steps)) {
     return steps;
@@ -43,6 +54,20 @@ export function normalizeCanonicalLoanApplicationReferences(payload, canonicalLo
 
   for (const [key, value] of Object.entries(payload)) {
     if (key === 'referenceId' && typeof value === 'string') {
+      normalized[key] = canonicalLoanApplicationId;
+      continue;
+    }
+
+    if (key === 'partnerRefNo' && typeof value === 'string') {
+      normalized[key] = canonicalLoanApplicationId;
+      continue;
+    }
+
+    if (
+      key === 'applicationId' &&
+      typeof value === 'string' &&
+      isHdbWebhookLikePayload(payload)
+    ) {
       normalized[key] = canonicalLoanApplicationId;
       continue;
     }

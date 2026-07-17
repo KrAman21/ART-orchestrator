@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { remapReplayIds } from './log-processor.js';
+import { normalizeHdbWebhookLoanApplicationIdentifiers, remapReplayIds } from './log-processor.js';
 import { StateManager } from '../services/state-manager.js';
 
 test('remapReplayIds remaps lenderId for GetLenderFlows requests to local lender id', () => {
@@ -36,7 +36,7 @@ test('remapReplayIds normalizes HDB webhook application identifiers to mapped lo
     data: {
       applicationId: 'HF20251028211676863',
       partnerRefNo: 'HF20251028211676863',
-      loanApplicationId: '4230d22f-f6b-44fd-a3c2-3eacd758e502'
+      loanApplicationId: 'local-la'
     }
   };
 
@@ -50,5 +50,32 @@ test('remapReplayIds normalizes HDB webhook application identifiers to mapped lo
 
   assert.equal(remapped.data.applicationId, 'local-la');
   assert.equal(remapped.data.partnerRefNo, 'local-la');
-  assert.equal(remapped.data.loanApplicationId, '4230d22f-f6b-44fd-a3c2-3eacd758e502');
+  assert.equal(remapped.data.loanApplicationId, 'local-la');
+});
+
+test('normalizeHdbWebhookLoanApplicationIdentifiers rewrites KYC_INITIATED stale HF ids to the replay loan application id', () => {
+  const normalized = normalizeHdbWebhookLoanApplicationIdentifiers(
+    {
+      data: {
+        loanApplicationId: 'LSP21409f53b4d14efc847a51daa6f5f50b',
+        merchantName: 'XXXXKART',
+        applicationId: 'HF20251076901450623',
+        loan_status: 'KYC_INITIATED',
+        reAttempt: true,
+        partnerRefNo: 'HF20251076901450623'
+      }
+    },
+    'LSP21409f53b4d14efc847a51daa6f5f50b'
+  );
+
+  assert.deepEqual(normalized, {
+    data: {
+      loanApplicationId: 'LSP21409f53b4d14efc847a51daa6f5f50b',
+      merchantName: 'XXXXKART',
+      applicationId: 'LSP21409f53b4d14efc847a51daa6f5f50b',
+      loan_status: 'KYC_INITIATED',
+      reAttempt: true,
+      partnerRefNo: 'LSP21409f53b4d14efc847a51daa6f5f50b'
+    }
+  });
 });

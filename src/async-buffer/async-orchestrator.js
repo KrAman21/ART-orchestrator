@@ -4,7 +4,7 @@ import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES, SERVICE_MAP } from '../config.js';
-import { getOptionalRepeatPolicy, isImmediateDirectReplayLogTag, isSelfTriggerFallbackApiLogTag, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, isToleratedBatchTimeoutApiLogTag, SELF_TRIGGER_FALLBACK_API_LOG_TAGS, SELF_TRIGGER_FALLBACK_WAIT_TIMEOUT_OVERRIDES_MS, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
+import { getOptionalRepeatPolicy, isImmediateDirectReplayLogTag, isImmediateFutureCoreGatewayRequestLogTag, isSelfTriggerFallbackApiLogTag, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, isToleratedBatchTimeoutApiLogTag, SELF_TRIGGER_FALLBACK_API_LOG_TAGS, SELF_TRIGGER_FALLBACK_WAIT_TIMEOUT_OVERRIDES_MS, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders, buildReplaySessionHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
 import { getAppCoreRequestId } from '../services/app-core-request-id.js';
@@ -74,9 +74,11 @@ function normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanAppli
 
   const resolvedLoanApplicationId =
     forcedLoanApplicationId ||
+    remapped.loanApplicationId ||
+    remapped.loan_application_id ||
+    payloadData.loanApplicationId ||
     payloadData.partnerRefNo ||
     payloadData.applicationId ||
-    payloadData.loanApplicationId ||
     null;
 
   if (!resolvedLoanApplicationId) {
@@ -352,11 +354,16 @@ export function prepareAsyncReplayForwarding(entry, payload, outboundRequestId, 
     entry?.loanApplicationId ||
     payload?.loanApplicationId ||
     payload?.loan_application_id ||
+    payload?.data?.loanApplicationId ||
+    stateManager?.getCurrentReplayLoanApplicationId?.() ||
     null;
   const canonicalPayload = normalizeCanonicalLoanApplicationReferences(payload, replayCanonicalLoanApplicationId);
-  const normalizedPayload = stateManager?.rewriteOutgoingLoanApplicationIds
+  const rewrittenPayload = stateManager?.rewriteOutgoingLoanApplicationIds
     ? stateManager.rewriteOutgoingLoanApplicationIds(canonicalPayload, { logTag: entry?.logTag, field: 'payload' })
     : canonicalPayload;
+  const normalizedPayload = entry?.logTag === 'HDB_WEBHOOK_REQUEST'
+    ? normalizeHdbWebhookLoanApplicationIdentifiers(rewrittenPayload, replayCanonicalLoanApplicationId)
+    : rewrittenPayload;
 
   return {
     headers,
@@ -1962,7 +1969,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return timeoutMs;
     }
 
-    const optionalRepeatPolicy = getOptionalRepeatPolicy(entry.logTag);
+    const optionalRepeatPolicy = getOptionalRepeatPolicy(this.config, entry);
     if (optionalRepeatPolicy?.optionalAfterSeconds) {
       const timeoutMs = optionalRepeatPolicy.optionalAfterSeconds * 1000;
       logger.info('Using optional-repeat wait timeout override', {
@@ -2904,6 +2911,12 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return directGatewayLenderLookaheadResponse;
     }
 
+    const directFutureCoreGatewayResponse =
+      await this.maybeHandleFutureCoreGatewayRequest(effectiveIncoming, normalizedIncoming, validation);
+    if (directFutureCoreGatewayResponse) {
+      return directFutureCoreGatewayResponse;
+    }
+
     const directToleratedBatchLookaheadResponse =
       await this.maybeHandleFutureToleratedBatchRequest(effectiveIncoming, normalizedIncoming, validation);
     if (directToleratedBatchLookaheadResponse) {
@@ -3487,6 +3500,176 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     }
 
     return await this.forwardToDestination(normalizedIncoming, futureEntry);
+  }
+
+  async maybeHandleFutureCoreGatewayRequest(incoming, normalizedIncoming, validation = null) {
+    const sourceDestination = normalizeSourceDestination(
+      `${incoming.source}_${incoming.destination}`,
+      incoming.logTag
+    );
+    const [source, destination] = sourceDestination.split('_');
+
+    if (source !== 'CORE' || destination !== 'GATEWAY') {
+      return null;
+    }
+
+    if (!isImmediateFutureCoreGatewayRequestLogTag(incoming.logTag)) {
+      return null;
+    }
+
+    const currentEntry = this.validator.getCurrentEntry();
+    if (!currentEntry) {
+      return null;
+    }
+
+    let effectiveValidation = validation;
+    if (!effectiveValidation) {
+      effectiveValidation = this.validator.validateIncomingRequest({
+        source: normalizedIncoming.source,
+        destination: normalizedIncoming.destination,
+        logTag: normalizedIncoming.logTag,
+        isRequest: true,
+        requestId: normalizedIncoming.requestId,
+        lenderOrgId: normalizedIncoming.lenderOrgId,
+        loanApplicationId: normalizedIncoming.loanApplicationId
+      });
+    }
+
+    let futureEntry = effectiveValidation?.foundInLookahead || null;
+
+    if (!futureEntry && effectiveValidation?.isEarly) {
+      futureEntry = this.validator.entries.find(entry =>
+        entry.index > this.validator.currentIndex &&
+        !this.validator.processedIndices.has(entry.index) &&
+        entry.isRequest &&
+        this.validator.matchesExpected(entry, normalizedIncoming)
+      ) || null;
+    }
+
+    const sameCoreGatewayLogTag = (entry) =>
+      entry &&
+      entry.isRequest &&
+      entry.source === source &&
+      entry.destination === destination &&
+      entry.logTag === normalizedIncoming.logTag;
+
+    const nearestUnprocessedSameLogTagEntry = this.validator.entries.find(entry =>
+      entry.index >= this.validator.currentIndex - 2 &&
+      !this.validator.processedIndices.has(entry.index) &&
+      sameCoreGatewayLogTag(entry)
+    ) || null;
+
+    if (!futureEntry) {
+      futureEntry = this.validator.entries.find(entry =>
+        entry.index > this.validator.currentIndex &&
+        !this.validator.processedIndices.has(entry.index) &&
+        sameCoreGatewayLogTag(entry) &&
+        this.validator.matchesExpected(entry, normalizedIncoming)
+      ) || null;
+
+      if (futureEntry) {
+        logger.info('Resolved future CORE->GATEWAY immediate replay entry outside validator lookahead classification', {
+          currentEntry: currentEntry.toString(),
+          futureEntry: futureEntry.toString(),
+          requestId: incoming.requestId || null,
+          logTag: incoming.logTag
+        });
+      }
+    }
+
+    if (!futureEntry && nearestUnprocessedSameLogTagEntry) {
+      futureEntry = nearestUnprocessedSameLogTagEntry;
+      logger.warn('Falling back to nearest unprocessed CORE->GATEWAY replay entry despite strict payload mismatch', {
+        currentEntry: currentEntry.toString(),
+        futureEntry: futureEntry.toString(),
+        requestId: incoming.requestId || null,
+        logTag: incoming.logTag,
+        currentIndex: this.validator.currentIndex
+      });
+    }
+
+    if (!futureEntry) {
+      logger.info('Immediate CORE->GATEWAY request was received but no replay entry could be claimed', {
+        currentEntry: currentEntry.toString(),
+        requestId: incoming.requestId || null,
+        logTag: incoming.logTag,
+        currentIndex: this.validator.currentIndex,
+        foundInLookahead: !!effectiveValidation?.foundInLookahead,
+        isEarly: !!effectiveValidation?.isEarly
+      });
+      return null;
+    }
+
+    if (
+      futureEntry.source !== source ||
+      futureEntry.destination !== destination ||
+      futureEntry.logTag !== normalizedIncoming.logTag
+    ) {
+      return null;
+    }
+
+    logger.info('Processing future CORE->GATEWAY request immediately to unblock downstream lender chain', {
+      currentEntry: currentEntry.toString(),
+      futureEntry: futureEntry.toString(),
+      requestId: incoming.requestId || null,
+      logTag: incoming.logTag
+    });
+
+    const pairedResponseEntry = this.findCorrespondingResponse(futureEntry, true);
+    this.registerPreSatisfiedReplayEntry(futureEntry, {
+      requestId: incoming.requestId || null,
+      reason: 'immediate_future_core_gateway_request'
+    });
+
+    this.registerReplayIdentifierMappings(futureEntry, normalizedIncoming);
+
+    logger.logApiCall(normalizedIncoming.source, normalizedIncoming.destination, normalizedIncoming.api, 'REQUEST', futureEntry.index);
+
+    const comparison = this.comparePayloads(futureEntry.payload, normalizedIncoming.payload, normalizedIncoming.logTag);
+    if (!comparison.match) {
+      logger.warn('Payload mismatch tolerated for immediate future CORE->GATEWAY request', {
+        entry: futureEntry.toString(),
+        logTag: normalizedIncoming.logTag,
+        differences: comparison.differences
+      });
+    }
+
+    const forwardResult = await this.forwardToDestination(normalizedIncoming, futureEntry);
+
+    if (forwardResult?.success) {
+      if (!this.validator.processedIndices.has(futureEntry.index)) {
+        this.validator.markProcessed(futureEntry);
+      }
+      this.recordSuccess('immediate_future_core_gateway_request', futureEntry);
+
+      if (pairedResponseEntry && !this.validator.processedIndices.has(pairedResponseEntry.index)) {
+        this.validator.markProcessed(pairedResponseEntry);
+      }
+      if (pairedResponseEntry) {
+        this.recordSuccess('immediate_future_core_gateway_response', pairedResponseEntry);
+      }
+
+      if (this.preSatisfiedReplayEntries?.has(futureEntry.index)) {
+        this.preSatisfiedReplayEntries.delete(futureEntry.index);
+      }
+
+      logger.info('Marked immediate future CORE->GATEWAY replay pair as processed after successful early forwarding', {
+        requestEntry: futureEntry.toString(),
+        responseEntry: pairedResponseEntry?.toString?.() || null,
+        requestId: incoming.requestId || null,
+        logTag: incoming.logTag
+      });
+    } else if (this.preSatisfiedReplayEntries?.has(futureEntry.index)) {
+      this.preSatisfiedReplayEntries.delete(futureEntry.index);
+      logger.warn('Cleared pre-satisfied marker for immediate future CORE->GATEWAY request because early forwarding did not complete successfully', {
+        requestEntry: futureEntry.toString(),
+        responseEntry: pairedResponseEntry?.toString?.() || null,
+        requestId: incoming.requestId || null,
+        logTag: incoming.logTag
+      });
+    }
+
+    return forwardResult;
   }
 
   registerNearbyImmediateReplaySatisfaction(incoming, options = {}) {

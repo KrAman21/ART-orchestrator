@@ -17,6 +17,62 @@ test('getApiMapping resolves gateway updateKYC request path', () => {
   });
 });
 
+test('getApiMapping resolves statusKYC app-core trigger path', () => {
+  const mapping = getApiMapping('/api/v3.3/kyc/statusKYC/trigger', {
+    payload: {},
+    headers: {}
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'StatusKYCRequest_REQUEST',
+    api: '/api/v3.3/kyc/statusKYC/trigger',
+    sourceDestination: 'APP_CORE',
+    headers: {}
+  });
+});
+
+test('getApiMapping resolves loan agreement status app-core trigger path', () => {
+  const mapping = getApiMapping('/api/v1.0/loan/offers/agreementStatus/trigger', {
+    payload: {},
+    headers: {}
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'LOAN_AGREEMENT_STATUS_REQUEST_REQUEST',
+    api: '/api/v1.0/loan/offers/agreementStatus/trigger',
+    sourceDestination: 'APP_CORE',
+    headers: {}
+  });
+});
+
+test('getApiMapping resolves loan agreement status gateway request path', () => {
+  const mapping = getApiMapping('/gateway/v3.3/loan/loanAgreementStatusRequest', {
+    payload: {},
+    headers: {}
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'LoanAgreementStatusTrigger_REQUEST',
+    api: '/gateway/v3.3/loan/loanAgreementStatusRequest',
+    sourceDestination: 'CORE_GATEWAY',
+    headers: {}
+  });
+});
+
+test('getApiMapping resolves check loan agreement status app-core path', () => {
+  const mapping = getApiMapping('/api/v1.0/loan/offers/agreementStatus/status', {
+    payload: {},
+    headers: {}
+  });
+
+  assert.deepEqual(mapping, {
+    logTag: 'CHECK_LOAN_AGREEMENT_STATUS_REQUEST',
+    api: '/api/v1.0/loan/offers/agreementStatus/status',
+    sourceDestination: 'APP_CORE',
+    headers: {}
+  });
+});
+
 test('getApiMapping resolves HDB status-check as loan-status when next expected replay tag requires it', () => {
   const mapping = getApiMapping('/MOCK_DATA/status-check', {
     payload: {},

@@ -541,6 +541,21 @@ async function fetchAndPrepareReplayLogs(merchantId, orderId, options) {
 
     fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
 
+    const orderFetchResult = Array.isArray(fetchResult?.results) ? fetchResult.results[0] : null;
+    if (orderFetchResult?.skipped) {
+      await deleteIntermediateArtifacts([rawLogsPath, filteredLogsPath, finalFilteredLogsPath]);
+      return {
+        skipped: true,
+        skipReason: orderFetchResult.skipReason || 'Skipped during log fetch',
+        fetchResult,
+        orderFetchResult,
+        rawLogs: [],
+        filteredLogs: [],
+        finalFilteredLogs: [],
+        finalFilteredLogsAbsolutePath: null
+      };
+    }
+
     if (fetchResult.success && fetchResult.stats.totalLogs > 0) {
       break;
     }
@@ -595,6 +610,56 @@ async function runWorker(workerId, queue, options, stats) {
       const prepared = await fetchAndPrepareReplayLogs(order.merchantId, order.orderId, options);
       const result = prepared.orderFetchResult || {};
       const orderFile = buildOrderStorePath(options.storeRoot, order.merchantId, order.orderId);
+
+      if (prepared.skipped) {
+        const artifact = {
+          schemaVersion: 2,
+          merchantId: order.merchantId,
+          orderId: order.orderId,
+          success: true,
+          fetchedAt: new Date().toISOString(),
+          interval: options.interval,
+          readyForReplay: false,
+          skipped: true,
+          skipReason: prepared.skipReason,
+          context: result.context || { customerId: null, loanApplicationIds: [] },
+          sourceCounts: result.sourceCounts || {},
+          rawLogCount: 0,
+          filteredLogCount: 0,
+          finalLogCount: 0,
+          count: 0,
+          discardedLoanApplicationIds: result.discardedLoanApplicationIds || [],
+          discardedLoanApplicationReasons: result.discardedLoanApplicationReasons || [],
+          logs: []
+        };
+
+        const absolutePath = await writeJsonAtomic(orderFile, artifact);
+        const resultSummary = {
+          merchantId: order.merchantId,
+          orderId: order.orderId,
+          success: true,
+          skipped: true,
+          count: 0,
+          path: absolutePath,
+          skipReason: prepared.skipReason
+        };
+
+        if (options.debugLogsEnabled) {
+          stats.results.push(resultSummary);
+        }
+        stats.skipped += 1;
+        stats.skippedOrders.push({
+          merchantId: order.merchantId,
+          orderId: order.orderId,
+          skipReason: prepared.skipReason
+        });
+
+        if ((stats.successful + stats.skipped) % options.progressEvery === 0) {
+          console.log(`[progress] ready ${stats.successful}/${stats.total}, skipped ${stats.skipped}`);
+        }
+        continue;
+      }
+
       const artifact = {
         schemaVersion: 2,
         merchantId: order.merchantId,
@@ -763,11 +828,13 @@ async function main() {
     runId,
     startedAt: new Date().toISOString(),
     successful: 0,
+    skipped: 0,
     failed: 0,
     totalLogs: 0,
     total: 0,
     results: [],
     readyOrders: [],
+    skippedOrders: [],
     processedBatches: [],
     interval,
     flowType,

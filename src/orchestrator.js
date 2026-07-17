@@ -86,6 +86,67 @@ function isSuspiciousReplayLoanApplicationIdCandidate(stateManager, loanApplicat
   return false;
 }
 
+function isSuspiciousReplayCustomerIdCandidate(stateManager, customerId, payload) {
+  if (!customerId || typeof customerId !== 'string') {
+    return false;
+  }
+
+  const knownIdentifierTypes = [
+    'loanApplicationId',
+    'agreementId',
+    'offerId',
+    'sessionToken',
+    'txnRefId',
+    'lineDetailId',
+    'merchantUserId',
+    'lineDetailExtensibleDataId',
+    'referenceId',
+    'actionRequiredId'
+  ];
+
+  for (const identifierType of knownIdentifierTypes) {
+    const mappedValue = stateManager?.getMappedIdentifier?.(identifierType, customerId);
+    if (mappedValue && mappedValue !== customerId) {
+      return true;
+    }
+
+    const mappings = stateManager?.identifierMappings?.get?.(identifierType);
+    if (mappings) {
+      for (const localValue of mappings.values()) {
+        if (localValue === customerId) {
+          return true;
+        }
+      }
+    }
+  }
+
+  const explicitNonCustomerCandidates = new Set([
+    payload?.merchantUserId,
+    payload?.userId,
+    payload?.lineDetailId,
+    payload?.lineId,
+    payload?.referenceId,
+    payload?.agreementId,
+    payload?.offerId,
+    payload?.sessionToken,
+    payload?.txnRefId,
+    payload?.actionId,
+    payload?.lineDetail?.merchantUserId,
+    payload?.lineDetail?.lineDetailId,
+    payload?.lineDetail?.lineId,
+    payload?.lineDetail?.referenceId,
+    payload?.lineDetail?.lineDetailExtensibleData?.lineDetailExtensibleDataId,
+    payload?.lineDetail?.lineDetailExtensibleData?.referenceId,
+    payload?.data?.merchantUserId,
+    payload?.data?.userId,
+    payload?.data?.lineDetailId,
+    payload?.data?.lineId,
+    payload?.data?.referenceId
+  ].filter(value => typeof value === 'string' && value.trim()));
+
+  return explicitNonCustomerCandidates.has(customerId);
+}
+
 function normalizeFetchLoanApplicationDataRequestId(request = {}) {
   return (
     request?.requestId ||
@@ -988,13 +1049,29 @@ export class ReplayOrchestrator {
       });
     }
 
-    if (observedCustomerId && shouldTrustLiveLoanApplicationIdSource(incoming)) {
+    if (
+      observedCustomerId &&
+      shouldTrustLiveLoanApplicationIdSource(incoming) &&
+      !isSuspiciousReplayCustomerIdCandidate(this.stateManager, observedCustomerId, incoming.payload)
+    ) {
       this.stateManager.setCurrentReplayCustomerId(observedCustomerId, {
         logTag: incoming.logTag,
         source: incoming.source,
         destination: incoming.destination,
         sourceDestination,
         requestId: incoming.requestId || null
+      });
+    } else if (
+      observedCustomerId &&
+      shouldTrustLiveLoanApplicationIdSource(incoming) &&
+      isSuspiciousReplayCustomerIdCandidate(this.stateManager, observedCustomerId, incoming.payload)
+    ) {
+      logger.info('Ignoring observed customerId for replay remap because it matches known replay-only identifiers', {
+        observedCustomerId,
+        logTag: incoming.logTag,
+        source: incoming.source || null,
+        destination: incoming.destination || null,
+        sourceDestination
       });
     } else if (observedCustomerId) {
       logger.info('Ignoring observed customerId for replay remap because source is not trusted', {

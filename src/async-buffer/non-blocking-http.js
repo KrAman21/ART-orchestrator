@@ -1,4 +1,7 @@
-import { makeRequest as blockingMakeRequest } from '../services/http-client.js';
+import {
+  makeRequest as blockingMakeRequest,
+  normalizeHdbWebhookPayloadBeforeSend
+} from '../services/http-client.js';
 import { logger } from '../utils/logger.js';
 
 export class NonBlockingHttpClient {
@@ -36,6 +39,8 @@ export class NonBlockingHttpClient {
       unixSocket
     );
     
+    const normalizedPayloadForTracking = normalizeHdbWebhookPayloadBeforeSend(payload, logTag);
+
     this.activeRequests.set(requestId, {
       promise: requestPromise,
       timestamp: Date.now(),
@@ -44,7 +49,7 @@ export class NonBlockingHttpClient {
       sourceDestination,
       endpoint,
       baseUrl,
-      payload,
+      payload: normalizedPayloadForTracking,
       logIndex,
       loanApplicationId,
       lenderOrgId,

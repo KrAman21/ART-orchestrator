@@ -14,6 +14,8 @@ function maskValue(value) {
 
 const DEFAULT_X_FORWARDED_FOR = '127.0.0.1';
 const DEFAULT_X_LOGGING_FLAG = 'True';
+const DEFAULT_X_ORIGIN = 'SDK';
+const DEFAULT_X_VERSION = 'V1';
 
 function findReplayAppCoreAuth(candidate) {
   if (!candidate || typeof candidate !== 'object') {
@@ -100,6 +102,28 @@ function resolveLoggingFlag(entry) {
   );
 }
 
+function resolveOrigin(entry) {
+  return (
+    entry?.headers?.['x-origin'] ||
+    entry?.headers?.['X-Origin'] ||
+    entry?.message?.origin ||
+    entry?.payload?.origin ||
+    entry?.payload?._origin ||
+    DEFAULT_X_ORIGIN
+  );
+}
+
+function resolveVersion(entry) {
+  return (
+    entry?.headers?.['x-version'] ||
+    entry?.headers?.['X-Version'] ||
+    entry?.message?.version ||
+    entry?.payload?.version ||
+    entry?.payload?._version ||
+    DEFAULT_X_VERSION
+  );
+}
+
 export function buildReplaySessionHeaders(entry, entries = [], stateManager = null) {
   const loanApplicationId =
     entry?.loanApplicationId ||
@@ -153,7 +177,9 @@ export function buildAppCoreAuthHeaders(entry, entries = [], stateManager = null
     entry.payload?.loan_application_id;
   const baseHeaders = {
     ...(merchantId ? { 'x-merchant-id': merchantId } : {}),
-    ...(orderId ? { 'x-order-id': orderId } : {})
+    ...(orderId ? { 'x-order-id': orderId } : {}),
+    'x-origin': resolveOrigin(entry),
+    'x-version': resolveVersion(entry)
   };
   const loanRequestInfoId = resolveLoanRequestInfoId(entry, merchantId, orderId);
   const loggingFlag = resolveLoggingFlag(entry);
