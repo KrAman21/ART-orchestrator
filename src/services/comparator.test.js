@@ -46,3 +46,53 @@ test('compareLog ignores timestamp-like, sessionToken, and ip fields', () => {
   assert.equal(result.match, true);
   assert.deepEqual(result.differenceList, []);
 });
+
+test('compareLog unwraps actual payload envelope before comparing', () => {
+  const result = compareLog(
+    {
+      loanStatus: null,
+      status: 'SUCCESS',
+      interestAmount: null,
+      numberOfInstallments: null,
+      error: null,
+      lendersLoanId: null,
+      lspLoanId: null,
+      amount: null,
+      lender: {
+        id: 'LSPb8b2b57fe858454d89519d67f51451f1',
+        name: 'XXI',
+        orgId: 'DMI'
+      },
+      txnUuid: 'PZT2607171150DI46301',
+      statusSource: 'LENDER',
+      lastCompletedState: 'REPAYMENT_SETUP_COMPLETED'
+    },
+    {
+      payload: {
+        loanStatus: null,
+        status: 'SUCCESS',
+        interestAmount: null,
+        numberOfInstallments: null,
+        error: null,
+        lendersLoanId: null,
+        lspLoanId: null,
+        amount: null,
+        lender: {
+          id: 'LSPb8b2b57fe858454d89519d67f51451f1',
+          name: 'XXI',
+          orgId: 'DMI'
+        },
+        txnUuid: 'PZT2607171150DI46301',
+        statusSource: 'LENDER',
+        lastCompletedState: 'REPAYMENT_SETUP_COMPLETED'
+      },
+      ack: {
+        error: '0'
+      }
+    },
+    'JuspaySDK-FetchStatus_RESPONSE'
+  );
+
+  assert.equal(result.match, true);
+  assert.deepEqual(result.differenceList, []);
+});

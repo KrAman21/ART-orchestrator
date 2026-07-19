@@ -610,6 +610,41 @@ test('repeated same-context fetch-offer async requests prefer the better payload
   }
 });
 
+test('LSP-FetchOfferSync waiter does not claim REAL_TIME request for STATIC expected entry', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'LSP-FetchOfferSync_REQUEST',
+      source: 'CORE',
+      destination: 'GATEWAY',
+      requestId: 'realtime-fetch-offer-sync',
+      payload: {
+        offerType: 'REAL_TIME',
+        plansFilteringType: 'TENURE_AND_ROI_NCEMI'
+      }
+    }));
+
+    const claimed = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'LSP-FetchOfferSync_REQUEST',
+      source: 'CORE',
+      destination: 'GATEWAY',
+      requestId: 'static-fetch-offer-sync',
+      payload: {
+        offerType: 'STATIC',
+        plansFilteringType: 'TENURE_AND_ROI_NCEMI'
+      }
+    }), 30);
+
+    assert.equal(claimed, null);
+  } finally {
+    manager.stop();
+  }
+});
+
 test('preserved gateway lender fallback is used after short rewind wait instead of long timeout', async () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,

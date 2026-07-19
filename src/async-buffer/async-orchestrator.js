@@ -3,7 +3,7 @@ import { BufferManager } from './buffer-manager.js';
 import { NonBlockingHttpClient } from './non-blocking-http.js';
 import { logger } from '../utils/logger.js';
 import { transformRequest } from '../services/request-transformer.js';
-import { getEndpointConfig, getLenderId, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES, SERVICE_MAP } from '../config.js';
+import { getEndpointConfig, normalizeSourceDestination, RETRY_TIMEOUT_OVERRIDES, SERVICE_MAP } from '../config.js';
 import { getOptionalRepeatPolicy, isImmediateDirectReplayLogTag, isImmediateFutureCoreGatewayRequestLogTag, isSelfTriggerFallbackApiLogTag, isSkippableAsyncApiLogTag, isThemisEligibilitySpecialCase, isThemisKfsSpecialCase, isToleratedBatchTimeoutApiLogTag, SELF_TRIGGER_FALLBACK_API_LOG_TAGS, SELF_TRIGGER_FALLBACK_WAIT_TIMEOUT_OVERRIDES_MS, SKIPPABLE_ASYNC_API_LOG_TAGS } from '../replay-special-cases.js';
 import { buildAppCoreAuthHeaders, buildReplaySessionHeaders } from '../services/app-core-auth-headers.js';
 import { ensureAppCorePreconditions } from '../services/app-core-preconditions.js';
@@ -111,14 +111,9 @@ function remapReplayIds(value, stateManager, logTag, keyHint = null, forcedLoanA
   }
 
   const remapped = {};
-  const mappedLenderId = getLenderId(value.lender_org_id || value.lenderOrgId);
 
   for (const [key, nestedValue] of Object.entries(value)) {
-    if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
-      remapped[key] = mappedLenderId;
-    } else {
-      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key, forcedLoanApplicationId);
-    }
+    remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key, forcedLoanApplicationId);
   }
 
   if (logTag === 'HDB_WEBHOOK_REQUEST') {
@@ -1638,7 +1633,8 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     const comparison = this.comparePayloads(
       currentEntry.payload,
       replayBufferedResponseData,
-      currentEntry.logTag
+      currentEntry.logTag,
+      currentEntry
     );
     
     if (!comparison.match) {
@@ -3506,7 +3502,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     logger.logApiCall(normalizedIncoming.source, normalizedIncoming.destination, normalizedIncoming.api, 'REQUEST', futureEntry.index);
 
-    const comparison = this.comparePayloads(futureEntry.payload, normalizedIncoming.payload, normalizedIncoming.logTag);
+    const comparison = this.comparePayloads(futureEntry.payload, normalizedIncoming.payload, normalizedIncoming.logTag, futureEntry);
     if (!comparison.match) {
       logger.warn('Payload mismatch tolerated for immediate future fetchLoanApplicationData request', {
         entry: futureEntry.toString(),
@@ -3954,7 +3950,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     }
     
     // Compare request payload
-    const comparison = this.comparePayloads(requestEntry.payload, incoming.payload, incoming.logTag);
+    const comparison = this.comparePayloads(requestEntry.payload, incoming.payload, incoming.logTag, requestEntry);
     if (!comparison.match) {
       logger.warn('Themis-Eligibility payload mismatch tolerated', {
         lenderOrgId: incoming.lenderOrgId,
@@ -4056,7 +4052,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     // Compare request payload. If replay transformed or duplicate KFS entries differ
     // cosmetically, prefer serving the lender-matched response instead of failing hard.
-    const comparison = this.comparePayloads(requestEntry.payload, incoming.payload, incoming.logTag);
+    const comparison = this.comparePayloads(requestEntry.payload, incoming.payload, incoming.logTag, requestEntry);
     if (!comparison.match) {
       logger.warn('Themis-KFS payload mismatch tolerated', {
         lenderOrgId: incoming.lenderOrgId,

@@ -127,7 +127,7 @@ export class OutOfOrderHandler {
       matchedEntry: expectedEntry.toString()
     });
 
-    const comparison = this.callbacks.comparePayloads(expectedEntry.payload, incoming.payload, incoming.logTag);
+    const comparison = this.callbacks.comparePayloads(expectedEntry.payload, incoming.payload, incoming.logTag, expectedEntry);
     if (!comparison.match) {
       this.logger.warn('Payload mismatch tolerated for future external request', {
         entry: expectedEntry.toString(),
@@ -172,7 +172,7 @@ export class OutOfOrderHandler {
 
     // Compare payloads
     const expectedPayload = expectedEntry.payload;
-    const comparison = this.callbacks.comparePayloads(expectedPayload, incoming.payload, incoming.logTag);
+    const comparison = this.callbacks.comparePayloads(expectedPayload, incoming.payload, incoming.logTag, expectedEntry);
 
     if (!comparison.match) {
       this.logger.warn('Payload mismatch tolerated for async/parallel call', {

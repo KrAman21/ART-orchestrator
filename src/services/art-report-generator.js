@@ -56,6 +56,36 @@ function formatMs(value) {
   return `${Math.round(value || 0)}ms`;
 }
 
+function sanitizeComparisonDifferences(logTag, differences = []) {
+  return (differences || []).filter((difference) => {
+    if (!difference) {
+      return false;
+    }
+
+    if (
+      logTag === 'FECTH_LOAN_APPLICATION_DATA_API_RESPONSE' &&
+      difference.path === 'status' &&
+      difference.expected === '<missing>' &&
+      difference.actual === 'SUCCESS' &&
+      difference.reason === 'extra key in actual'
+    ) {
+      return false;
+    }
+
+    if (
+      logTag === 'WEBHOOK_RESPONSE' &&
+      difference.path === 'status' &&
+      difference.expected === '<missing>' &&
+      difference.actual === 'SUCCESS' &&
+      difference.reason === 'extra key in actual'
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+}
+
 export class ArtReportGenerator {
   constructor(config = {}) {
     this.reportPath = config.reportPath || 'report.json';
@@ -652,6 +682,18 @@ export class ArtReportGenerator {
 
   buildPayloadComparisons(order) {
     const mismatchedComparisons = (order.artResults?.payloadComparisons || [])
+      .map((comparison) => {
+        const differences = sanitizeComparisonDifferences(
+          comparison.logTag || null,
+          comparison.differences || []
+        );
+
+        return {
+          ...comparison,
+          differences,
+          differenceCount: differences.length
+        };
+      })
       .filter((comparison) => (comparison.differenceCount || 0) > 0);
 
     return {

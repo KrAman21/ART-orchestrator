@@ -810,7 +810,7 @@ export class ReplayOrchestrator {
       actualSample: JSON.stringify(incoming.payload)?.substring(0, 500)
     });
 
-    const comparison = this.comparePayloads(expectedPayload, incoming.payload, incoming.logTag);
+    const comparison = this.comparePayloads(expectedPayload, incoming.payload, incoming.logTag, expectedEntry);
 
     if (!comparison.match) {
       logger.warn('ORCH_PAYLOAD_MISMATCH', {
@@ -1549,14 +1549,14 @@ export class ReplayOrchestrator {
       return true;
     }
 
-    logger.info('Rejecting cached fetchLoanApplicationData replay reuse because requestId differs', {
+    logger.info('Allowing cached fetchLoanApplicationData replay reuse despite requestId drift because requiredData/context already matched', {
       entry: entry?.toString?.() || null,
       incomingRequestId,
       processedProdRequestId,
       preSatisfiedReplayRequestId
     });
 
-    return false;
+    return true;
   }
 
   async handleOutOfOrderRequest(incoming, validation) {
@@ -1609,9 +1609,9 @@ export class ReplayOrchestrator {
     return this.asyncTracker.waitForPendingExternalRequests(currentEntry);
   }
 
-  comparePayloads(expected, actual, logTag) {
+  comparePayloads(expected, actual, logTag, entryOverride = null) {
     const comparison = compareLog(expected, actual, logTag);
-    const currentEntry = this.validator.getCurrentEntry();
+    const currentEntry = entryOverride || this.validator.getCurrentEntry();
 
     this.results.payloadComparisons.push({
       timestamp: new Date().toISOString(),
@@ -1869,7 +1869,7 @@ export class ReplayOrchestrator {
       lenderOrgId: requestEntry.lenderOrgId
     });
 
-    const comparison = this.comparePayloads(requestEntry.payload, incoming.payload, incoming.logTag);
+    const comparison = this.comparePayloads(requestEntry.payload, incoming.payload, incoming.logTag, requestEntry);
     if (!comparison.match) {
       logger.warn('Themis-KFS payload mismatch tolerated', {
         lenderOrgId: incoming.lenderOrgId,

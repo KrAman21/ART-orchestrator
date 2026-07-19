@@ -50,6 +50,25 @@ function isPlainObject(val) {
   return val !== null && typeof val === 'object' && !Array.isArray(val);
 }
 
+function unwrapComparableEnvelope(expected, actual) {
+  if (!isPlainObject(expected) || !isPlainObject(actual)) {
+    return { expected, actual };
+  }
+
+  const expectedHasPayload = Object.prototype.hasOwnProperty.call(expected, 'payload') && isPlainObject(expected.payload);
+  const actualHasPayload = Object.prototype.hasOwnProperty.call(actual, 'payload') && isPlainObject(actual.payload);
+
+  if (!expectedHasPayload && actualHasPayload) {
+    return { expected, actual: actual.payload };
+  }
+
+  if (expectedHasPayload && !actualHasPayload) {
+    return { expected: expected.payload, actual };
+  }
+
+  return { expected, actual };
+}
+
 function isMaskedValue(value) {
   if (typeof value !== 'string') return false;
   if (value === 'MASKED') return true;
@@ -381,6 +400,8 @@ export function compareLog(expectedLog, actualResponse, logTag = '') {
       // Not valid JSON, keep as string
     }
   }
+
+  ({ expected, actual } = unwrapComparableEnvelope(expected, actual));
 
   const diffArray = compareObjects(expected, actual, logTag);
 

@@ -1,4 +1,4 @@
-import { getEndpointConfig, getLenderId } from '../config.js';
+import { getEndpointConfig } from '../config.js';
 import { transformRequest } from '../services/request-transformer.js';
 import { makeRequest } from '../services/http-client.js';
 import { buildAppCoreAuthHeaders } from '../services/app-core-auth-headers.js';
@@ -88,14 +88,9 @@ export function remapReplayIds(value, stateManager, logTag, keyHint = null, forc
   }
 
   const remapped = {};
-  const mappedLenderId = getLenderId(value.lender_org_id || value.lenderOrgId);
 
   for (const [key, nestedValue] of Object.entries(value)) {
-    if (key === 'lenderId' && typeof nestedValue === 'string' && mappedLenderId) {
-      remapped[key] = mappedLenderId;
-    } else {
-      remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key, forcedLoanApplicationId);
-    }
+    remapped[key] = remapReplayIds(nestedValue, stateManager, logTag, key, forcedLoanApplicationId);
   }
 
   if (logTag === 'HDB_WEBHOOK_REQUEST') {
@@ -507,7 +502,8 @@ export class LogProcessor {
         const comparison = this.callbacks.comparePayloads(
           expectedResponse.payload,
           response.data,
-          expectedResponse.logTag
+          expectedResponse.logTag,
+          expectedResponse
         );
 
         if (!comparison.match) {

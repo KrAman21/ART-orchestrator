@@ -52,7 +52,7 @@ export class SeedDataManager {
     return transformRequest(traceRequest, SeedDataManager.normalizeLogTag(log));
   }
 
-  static remapLineDetailLenderIds(lineSeedData, lenderOrgIdToIdMap = {}, preferredLenderOrgId = null) {
+  static normalizeLineSeedDataForOnboarding(lineSeedData, lenderOrgIdToIdMap = {}, preferredLenderOrgId = null) {
     if (!Array.isArray(lineSeedData) || !lineSeedData.length) {
       return [];
     }
@@ -77,21 +77,14 @@ export class SeedDataManager {
         : null;
       const resolvedLenderOrgId = lenderOrgId || fallbackLenderOrgId;
 
-      const remappedLenderId =
-        resolvedLenderOrgId && lenderOrgIdToIdMap && lenderOrgIdToIdMap[resolvedLenderOrgId]
-          ? lenderOrgIdToIdMap[resolvedLenderOrgId]
-          : null;
-
-      if (!remappedLenderId || remappedLenderId === replayLenderId) {
-        return item;
-      }
-
-      logger.info('Remapped line seed lenderId for local onboarding', {
+      logger.info('Preserving line seed lenderId for onboarding so it stays consistent with config-seeded lender records', {
         lineDetailId: lineDetail?.lineDetailId || lineDetail?.line_detail_id || null,
         lenderOrgId: resolvedLenderOrgId,
         usedFallbackLenderOrgId: Boolean(fallbackLenderOrgId),
-        replayLenderId,
-        localLenderId: remappedLenderId
+        lenderId: replayLenderId || null,
+        configuredLenderIdForOrg: resolvedLenderOrgId && lenderOrgIdToIdMap
+          ? lenderOrgIdToIdMap[resolvedLenderOrgId] || null
+          : null
       });
 
       return {
@@ -100,8 +93,8 @@ export class SeedDataManager {
           ...lineDetail,
           lender_org_id: resolvedLenderOrgId,
           lenderOrgId: resolvedLenderOrgId,
-          lender_id: remappedLenderId,
-          lenderId: remappedLenderId
+          lender_id: replayLenderId,
+          lenderId: replayLenderId
         }
       };
     });
@@ -615,7 +608,7 @@ export class SeedDataManager {
       }
 
       if (Array.isArray(lineSeedData) && lineSeedData.length > 0) {
-        seedPayload.lineSeedData = SeedDataManager.remapLineDetailLenderIds(
+        seedPayload.lineSeedData = SeedDataManager.normalizeLineSeedDataForOnboarding(
           lineSeedData,
           lenderOrgIdToIdMap,
           preferredLenderOrgId

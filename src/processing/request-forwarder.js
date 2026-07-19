@@ -249,7 +249,8 @@ export class RequestForwarder {
       const comparison = this.callbacks.comparePayloads(
         expectedResponse.payload,
         replayFallbackPayload,
-        expectedResponse.logTag
+        expectedResponse.logTag,
+        expectedResponse
       );
 
       if (!comparison.match) {
@@ -337,7 +338,7 @@ export class RequestForwarder {
 
     // Compare payloads
     const expectedPayload = expectedEntry.payload;
-    const comparison = this.callbacks.comparePayloads(expectedPayload, incomingResponse.payload, incomingResponse.logTag);
+    const comparison = this.callbacks.comparePayloads(expectedPayload, incomingResponse.payload, incomingResponse.logTag, expectedEntry);
 
     if (!comparison.match) {
       this.logger.warn('Response comparison mismatch tolerated', {
@@ -799,7 +800,8 @@ export class RequestForwarder {
           const comparison = this.callbacks.comparePayloads(
             expectedResponse.payload,
             serviceResponse.data,
-            expectedResponse.logTag
+            expectedResponse.logTag,
+            expectedResponse
           );
 
           if (!comparison.match) {
@@ -963,7 +965,8 @@ export class RequestForwarder {
     const comparison = this.callbacks.comparePayloads(
       matchedResponse.payload,
       incoming.payload,
-      incoming.logTag || matchedResponse.logTag
+      incoming.logTag || matchedResponse.logTag,
+      matchedResponse
     );
 
     if (!comparison.match) {

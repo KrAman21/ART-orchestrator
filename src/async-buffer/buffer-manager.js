@@ -14,6 +14,22 @@ const PAYLOAD_SIGNAL_WEIGHTS = [
   ['result.status', 100]
 ];
 
+function getPayloadDisambiguator(value, key) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, key) && value[key] != null) {
+    return value[key];
+  }
+
+  if (value.payload && typeof value.payload === 'object') {
+    return getPayloadDisambiguator(value.payload, key);
+  }
+
+  return null;
+}
+
 export class BufferManager {
   constructor(config = {}) {
     this.incomingRequests = new Map();
@@ -1169,6 +1185,38 @@ export class BufferManager {
         exactMatchCount: 0,
         mismatchReason
       };
+    }
+
+    if (canonicalRequestLogTag(expectedEntry?.logTag) === 'LSP-FetchOfferSync_REQUEST') {
+      const expectedOfferType = getPayloadDisambiguator(expectedEntry, 'offerType');
+      const incomingOfferType = getPayloadDisambiguator(incoming, 'offerType');
+      if (expectedOfferType && incomingOfferType && expectedOfferType !== incomingOfferType) {
+        return {
+          matches: false,
+          score: Number.NEGATIVE_INFINITY,
+          differenceCount: Number.POSITIVE_INFINITY,
+          exactSignals: [],
+          exactMatchCount: 0,
+          mismatchReason: `offerType mismatch: ${incomingOfferType} !== ${expectedOfferType}`
+        };
+      }
+
+      const expectedPlansFilteringType = getPayloadDisambiguator(expectedEntry, 'plansFilteringType');
+      const incomingPlansFilteringType = getPayloadDisambiguator(incoming, 'plansFilteringType');
+      if (
+        expectedPlansFilteringType &&
+        incomingPlansFilteringType &&
+        expectedPlansFilteringType !== incomingPlansFilteringType
+      ) {
+        return {
+          matches: false,
+          score: Number.NEGATIVE_INFINITY,
+          differenceCount: Number.POSITIVE_INFINITY,
+          exactSignals: [],
+          exactMatchCount: 0,
+          mismatchReason: `plansFilteringType mismatch: ${incomingPlansFilteringType} !== ${expectedPlansFilteringType}`
+        };
+      }
     }
 
     const incomingIds = this.extractCorrelationIdentifiers(incoming);

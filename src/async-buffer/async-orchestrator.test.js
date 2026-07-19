@@ -819,7 +819,7 @@ test('processNextLogEntry self-triggers GENERATE_TOKEN_API_REQUEST after 2 secon
   assert.equal(validator.processedIndices.has(0), true);
 });
 
-test('processNextLogEntry self-triggers FECTH_LOAN_APPLICATION_DATA_API_REQUEST after 5 second buffer wait and advances replay', async () => {
+test('processNextLogEntry self-triggers FECTH_LOAN_APPLICATION_DATA_API_REQUEST after 2 second buffer wait and advances replay', async () => {
   const logs = [
     createRequestLog(0, {
       logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
@@ -876,9 +876,9 @@ test('processNextLogEntry self-triggers FECTH_LOAN_APPLICATION_DATA_API_REQUEST 
 
   assert.equal(result, true);
   assert.equal(waitedEntry, validator.entries[0]);
-  assert.equal(waitedTimeoutMs, 5000);
+  assert.equal(waitedTimeoutMs, 2000);
   assert.equal(fallbackEntry, validator.entries[0]);
-  assert.equal(fallbackTimeoutMs, 5000);
+  assert.equal(fallbackTimeoutMs, 2000);
   assert.equal(validator.processedIndices.has(0), true);
   assert.equal(validator.processedIndices.has(1), true);
 });

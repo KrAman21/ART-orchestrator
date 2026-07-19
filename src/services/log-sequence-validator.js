@@ -23,6 +23,22 @@ function extractOpportunityId(value) {
   return null;
 }
 
+function getPayloadDisambiguator(value, key) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, key) && value[key] != null) {
+    return value[key];
+  }
+
+  if (value.payload && typeof value.payload === 'object') {
+    return getPayloadDisambiguator(value.payload, key);
+  }
+
+  return null;
+}
+
 /**
  * LogEntry represents a parsed log entry from the trace
  */
@@ -533,6 +549,24 @@ export class LogSequenceValidator {
       const expectedOpportunityId = extractOpportunityId(expected);
       const incomingOpportunityId = extractOpportunityId(incoming);
       if (expectedOpportunityId && incomingOpportunityId && expectedOpportunityId !== incomingOpportunityId) {
+        return false;
+      }
+    }
+
+    if (expectedLogTag === 'LSP-FetchOfferSync_REQUEST') {
+      const expectedOfferType = getPayloadDisambiguator(expected, 'offerType');
+      const incomingOfferType = getPayloadDisambiguator(incoming, 'offerType');
+      if (expectedOfferType && incomingOfferType && expectedOfferType !== incomingOfferType) {
+        return false;
+      }
+
+      const expectedPlansFilteringType = getPayloadDisambiguator(expected, 'plansFilteringType');
+      const incomingPlansFilteringType = getPayloadDisambiguator(incoming, 'plansFilteringType');
+      if (
+        expectedPlansFilteringType &&
+        incomingPlansFilteringType &&
+        expectedPlansFilteringType !== incomingPlansFilteringType
+      ) {
         return false;
       }
     }

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { normalizeHdbWebhookLoanApplicationIdentifiers, remapReplayIds } from './log-processor.js';
 import { StateManager } from '../services/state-manager.js';
 
-test('remapReplayIds remaps lenderId for GetLenderFlows requests to local lender id', () => {
+test('remapReplayIds preserves lenderId for GetLenderFlows requests so it stays in the config-seeded replay namespace', () => {
   const payload = {
     lenderId: 'LSPb8b2b57fe858454d89519d67f51451f1',
     lender_org_id: 'DMI'
@@ -12,11 +12,11 @@ test('remapReplayIds remaps lenderId for GetLenderFlows requests to local lender
 
   const remapped = remapReplayIds(payload, null, 'GetLenderFlows_REQUEST');
 
-  assert.equal(remapped.lenderId, 'LSP134d7524174646adae514b0c0a9659cf');
+  assert.equal(remapped.lenderId, 'LSPb8b2b57fe858454d89519d67f51451f1');
   assert.equal(remapped.lender_org_id, 'DMI');
 });
 
-test('remapReplayIds still remaps lenderId for other DMI requests', () => {
+test('remapReplayIds preserves lenderId for other requests as well', () => {
   const payload = {
     lenderId: 'LSPb8b2b57fe858454d89519d67f51451f1',
     lender_org_id: 'DMI'
@@ -24,7 +24,7 @@ test('remapReplayIds still remaps lenderId for other DMI requests', () => {
 
   const remapped = remapReplayIds(payload, null, 'SomeOther_REQUEST');
 
-  assert.equal(remapped.lenderId, 'LSP134d7524174646adae514b0c0a9659cf');
+  assert.equal(remapped.lenderId, 'LSPb8b2b57fe858454d89519d67f51451f1');
   assert.equal(remapped.lender_org_id, 'DMI');
 });
 

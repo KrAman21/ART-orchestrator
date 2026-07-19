@@ -6,6 +6,22 @@ function normalizeResponseTag(logTag) {
   return (logTag || '').replace(/_RESPONSE$/i, '');
 }
 
+function getPayloadValue(value, key) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, key) && value[key] != null) {
+    return value[key];
+  }
+
+  if (value.payload && typeof value.payload === 'object') {
+    return getPayloadValue(value.payload, key);
+  }
+
+  return null;
+}
+
 function buildAllowedResponseDirections(requestEntry) {
   if (!requestEntry) {
     return new Set();
@@ -48,6 +64,15 @@ export function matchesRequestContext(requestEntry, responseEntry) {
     requestEntry.lenderOrgId !== responseEntry.lenderOrgId
   ) {
     return false;
+  }
+
+  if (requestTag === 'LSP-FetchOfferSync' && responseTag === 'LSP-FetchOfferSync') {
+    const requestOfferType = getPayloadValue(requestEntry, 'offerType');
+    const responseOfferType = getPayloadValue(responseEntry, 'offerType');
+
+    if (requestOfferType && responseOfferType && requestOfferType !== responseOfferType) {
+      return false;
+    }
   }
 
   return true;

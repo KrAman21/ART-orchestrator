@@ -196,9 +196,8 @@ test('maybePassThroughFetchLoanApplicationData returns cached response when repl
   });
 });
 
-test('maybePassThroughFetchLoanApplicationData does not reuse cached response for a different live requestId', async () => {
+test('maybePassThroughFetchLoanApplicationData reuses cached response for a different live requestId when requiredData matches', async () => {
   const orchestrator = Object.create(ReplayOrchestrator.prototype);
-  orchestrator.config = { merchantId: 'flipkart', asyncReplayMode: true };
   const processedRequestEntry = {
     index: 63,
     isRequest: true,
@@ -231,16 +230,10 @@ test('maybePassThroughFetchLoanApplicationData does not reuse cached response fo
   };
   orchestrator.findCorrespondingResponse = () => ({
     logTag: 'FECTH_LOAN_APPLICATION_DATA_API_RESPONSE',
-    payload: { status: 'SUCCESS' },
+    payload: { status: 'SUCCESS', cached: true },
     toString() {
       return '[64] FECTH_LOAN_APPLICATION_DATA_API_RESPONSE LSP→GATEWAY';
     }
-  });
-  orchestrator.forwardLiveFetchLoanApplicationDataRequest = async () => ({
-    status: 200,
-    statusText: 'OK',
-    data: { status: 'SUCCESS', fresh: true },
-    headers: {}
   });
 
   const result = await orchestrator.maybePassThroughFetchLoanApplicationData({
@@ -262,12 +255,8 @@ test('maybePassThroughFetchLoanApplicationData does not reuse cached response fo
 
   assert.deepEqual(result, {
     success: true,
-    payload: { status: 'SUCCESS', fresh: true },
-    headers: {},
-    status: 200,
-    statusText: 'OK',
-    error: null,
-    livePassThrough: true
+    payload: { status: 'SUCCESS', cached: true },
+    cached: true
   });
 });
 
