@@ -187,6 +187,29 @@ function findMappedActionRequiredId(appResponse, replayCandidates) {
   return null;
 }
 
+function pickFirstNonEmptyString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function resolveMerchantCustomerId(entry, stateManager = null) {
+  return pickFirstNonEmptyString(
+    entry?.message?.merchantCustomerId,
+    entry?.message?.customerId,
+    entry?.message?.customer_id,
+    entry?.payload?.merchantCustomerId,
+    entry?.payload?.customerId,
+    entry?.payload?.customer_id,
+    entry?.payload?.loanApplication?.checkoutData?.metadata?.merchantCustomerId,
+    stateManager?.getCurrentReplayCustomerId?.() || null
+  );
+}
+
 async function syncUpdateKycActionRequiredMapping(entry, stateManager) {
   if (!stateManager || entry?.logTag !== 'UpdateKYCRequest_REQUEST') {
     return;
@@ -332,7 +355,7 @@ async function seedLoanStatusSession(sessionToken, userId, deviceTokenId, entry)
   });
 }
 
-async function seedLoanStatusMerchantUser(userId, entry) {
+async function seedLoanStatusMerchantUser(userId, entry, stateManager = null) {
   const psqlBinary = getPsqlBinary();
   if (!psqlBinary) {
     logger.warn('Unable to seed LSP merchant_user: psql binary not found', {
@@ -344,11 +367,17 @@ async function seedLoanStatusMerchantUser(userId, entry) {
 
   const now = new Date();
   const merchantId = entry?.message?.merchant_id || 'flipkart';
-  const merchantCustomerId =
-    entry?.message?.merchantCustomerId ||
-    entry?.message?.customerId ||
-    entry?.message?.customer_id ||
-    userId;
+  const merchantCustomerId = resolveMerchantCustomerId(entry, stateManager);
+  if (!merchantCustomerId) {
+    logger.warn('Skipping LSP merchant_user seed because merchantCustomerId could not be resolved safely', {
+      logTag: entry?.logTag,
+      userId,
+      merchantId,
+      hasReplayCustomerId: Boolean(stateManager?.getCurrentReplayCustomerId?.())
+    });
+    return;
+  }
+
   const appRefId = buildLspStyleId();
   const sql = `
     INSERT INTO lsp_v1.merchant_user (
@@ -505,7 +534,7 @@ export async function ensureAppCorePreconditions(entry, customHeaders = {}, stat
 
   try {
     if (!SEEDED_MERCHANT_USERS.has(userId)) {
-      await seedLoanStatusMerchantUser(userId, entry);
+      await seedLoanStatusMerchantUser(userId, entry, stateManager);
       SEEDED_MERCHANT_USERS.add(userId);
     }
 
@@ -523,3 +552,8 @@ export async function ensureAppCorePreconditions(entry, customHeaders = {}, stat
     });
   }
 }
+
+export const __testables = {
+  pickFirstNonEmptyString,
+  resolveMerchantCustomerId
+};

@@ -1717,6 +1717,9 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   }
 
   async _processNextLogEntryInternal(entry) {
+    this.maybeRegisterObservedImmediateGatewayLenderSatisfaction(entry);
+    this.maybeRegisterObservedImmediateCoreGatewaySatisfaction(entry);
+
     if (this.maybeResolvePreSatisfiedReplayEntry(entry)) {
       return true;
     }
@@ -3258,6 +3261,13 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     let futureEntry = effectiveValidation?.foundInLookahead || null;
 
+    const sameGatewayLenderLogTag = (entry) =>
+      entry &&
+      entry.isRequest &&
+      entry.source === source &&
+      entry.destination === destination &&
+      entry.logTag === normalizedIncoming.logTag;
+
     if (!futureEntry && effectiveValidation?.isEarly) {
       futureEntry = this.validator.entries.find(entry =>
         entry.index > this.validator.currentIndex &&
@@ -3285,6 +3295,12 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       }
     }
 
+    const nearestUnprocessedSameLogTagEntry = this.validator.entries.find(entry =>
+      entry.index >= this.validator.currentIndex - 2 &&
+      !this.validator.processedIndices.has(entry.index) &&
+      sameGatewayLenderLogTag(entry)
+    ) || null;
+
     if (futureEntry && this.preSatisfiedReplayEntries?.has(futureEntry.index)) {
       futureEntry = this.validator.entries.find(entry =>
         entry.index > futureEntry.index &&
@@ -3293,6 +3309,17 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         this.validator.matchesExpected(entry, normalizedIncoming) &&
         !this.preSatisfiedReplayEntries.has(entry.index)
       ) || futureEntry;
+    }
+
+    if (!futureEntry && nearestUnprocessedSameLogTagEntry) {
+      futureEntry = nearestUnprocessedSameLogTagEntry;
+      logger.warn('Falling back to nearest unprocessed GATEWAY->LENDER replay entry despite strict payload mismatch', {
+        currentEntry: currentEntry.toString(),
+        futureEntry: futureEntry.toString(),
+        requestId: incoming.requestId || null,
+        logTag: incoming.logTag,
+        currentIndex: this.validator.currentIndex
+      });
     }
 
     if (!futureEntry) {
@@ -3307,37 +3334,96 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       lenderOrgId: incoming.lenderOrgId
     });
 
-    const buffered = await this.bufferManager.addIncomingRequest(normalizedIncoming);
-    this.registerPreSatisfiedReplayEntry(futureEntry, {
-      requestId: incoming.requestId || null,
-      reason: 'immediate_future_gateway_lender',
-      bufferedRequestKey: buffered.key
-    });
+    const responseEntry = this.findCorrespondingResponse(futureEntry, true);
+    if (!responseEntry) {
+      logger.warn('Future GATEWAY->LENDER immediate replay entry had no corresponding response log; falling back to buffered wait handling', {
+        currentEntry: currentEntry.toString(),
+        futureEntry: futureEntry.toString(),
+        requestId: incoming.requestId || null,
+        logTag: incoming.logTag || null
+      });
 
-    logger.info('Buffered future GATEWAY->LENDER request until replay reaches its recorded position', {
-      currentEntry: currentEntry.toString(),
-      futureEntry: futureEntry.toString(),
-      requestId: incoming.requestId || null,
-      logTag: incoming.logTag || null,
-      bufferKey: buffered.key
-    });
+      const buffered = await this.bufferManager.addIncomingRequest(normalizedIncoming);
+      this.registerPreSatisfiedReplayEntry(futureEntry, {
+        requestId: incoming.requestId || null,
+        reason: 'immediate_future_gateway_lender',
+        bufferedRequestKey: buffered.key
+      });
 
-    try {
-      return await buffered.deferred.promise;
-    } catch (error) {
-      logger.error('Deferred future GATEWAY->LENDER request failed before replay consumed it', {
-        error: error.message,
+      logger.info('Buffered future GATEWAY->LENDER request until replay reaches its recorded position', {
         currentEntry: currentEntry.toString(),
         futureEntry: futureEntry.toString(),
         requestId: incoming.requestId || null,
         logTag: incoming.logTag || null,
         bufferKey: buffered.key
       });
-      return {
-        success: false,
-        error: error.message
-      };
+
+      try {
+        return await buffered.deferred.promise;
+      } catch (error) {
+        logger.error('Deferred future GATEWAY->LENDER request failed before replay consumed it', {
+          error: error.message,
+          currentEntry: currentEntry.toString(),
+          futureEntry: futureEntry.toString(),
+          requestId: incoming.requestId || null,
+          logTag: incoming.logTag || null,
+          bufferKey: buffered.key
+        });
+        return {
+          success: false,
+          error: error.message
+        };
+      }
     }
+
+    const replayResponse = {
+      success: true,
+      payload: transformRequest(responseEntry.payload, responseEntry.logTag)
+    };
+
+    this.recordObservedProcessedResponse(
+      responseEntry,
+      replayResponse.payload
+    );
+
+    if (!this.validator.processedIndices.has(futureEntry.index)) {
+      this.validator.markProcessed(futureEntry);
+      this.recordSuccess('immediate_future_gateway_lender_request', futureEntry);
+    }
+
+    if (!this.validator.processedIndices.has(responseEntry.index)) {
+      this.validator.markProcessed(responseEntry);
+      this.recordSuccess('immediate_future_gateway_lender_response', responseEntry);
+    }
+
+    if (this.preSatisfiedReplayEntries?.has(futureEntry.index)) {
+      this.preSatisfiedReplayEntries.delete(futureEntry.index);
+    }
+
+    this.markStuckEntryResolved(futureEntry, 'immediate_future_gateway_lender_request_replayed_from_logs');
+    this.bufferManager?.clearWaitDiagnostics?.(futureEntry, 'immediate_future_gateway_lender_request_replay');
+    this.bufferManager?.skipWaiter?.(futureEntry);
+
+    logger.logApiCall(
+      responseEntry.source,
+      responseEntry.destination,
+      getEndpointConfig(futureEntry.sourceDestination, futureEntry.logTag)?.endpoint || futureEntry.api || null,
+      'RESPONSE',
+      responseEntry.index
+    );
+
+    logger.info('Returned future GATEWAY->LENDER response immediately from replay logs', {
+      currentEntry: currentEntry.toString(),
+      futureEntry: futureEntry.toString(),
+      responseEntry: responseEntry.toString(),
+      requestId: incoming.requestId || null,
+      logTag: incoming.logTag || null
+    });
+
+    return {
+      success: true,
+      payload: replayResponse.payload
+    };
   }
 
   findActiveToleratedBatchAnchor(currentEntry = this.validator?.getCurrentEntry?.()) {
@@ -3665,6 +3751,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         this.preSatisfiedReplayEntries.delete(futureEntry.index);
       }
 
+      this.markStuckEntryResolved(futureEntry, 'immediate_future_core_gateway_request_forwarded');
+      this.bufferManager?.clearWaitDiagnostics?.(futureEntry, 'immediate_future_core_gateway_request_forwarded');
+      this.bufferManager?.skipWaiter?.(futureEntry);
+
       logger.info('Marked immediate future CORE->GATEWAY replay pair as processed after successful early forwarding', {
         requestEntry: futureEntry.toString(),
         responseEntry: pairedResponseEntry?.toString?.() || null,
@@ -3883,6 +3973,105 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       resolvedBufferedGatewayLenderRequest,
       currentIndex: this.validator.currentIndex
     });
+    return true;
+  }
+
+  maybeRegisterObservedImmediateGatewayLenderSatisfaction(entry) {
+    if (!entry?.isRequest) {
+      return false;
+    }
+
+    if (entry.source !== 'GATEWAY' || entry.destination !== 'LENDER') {
+      return false;
+    }
+
+    if (!isImmediateDirectReplayLogTag(entry.logTag)) {
+      return false;
+    }
+
+    if (this.validator.processedIndices.has(entry.index)) {
+      return false;
+    }
+
+    if (this.preSatisfiedReplayEntries?.has(entry.index)) {
+      return true;
+    }
+
+    const observedMatch = (this.observedIncomingRequests || []).find(observed =>
+      observed &&
+      observed.source === 'GATEWAY' &&
+      observed.destination === 'LENDER' &&
+      observed.logTag === entry.logTag &&
+      this.validator.matchesExpected(entry, observed)
+    );
+
+    if (!observedMatch) {
+      return false;
+    }
+
+    this.registerPreSatisfiedReplayEntry(entry, {
+      requestId: observedMatch.requestId || null,
+      reason: 'observed_immediate_gateway_lender_request'
+    });
+
+    logger.info('Registered observed immediate GATEWAY->LENDER replay satisfaction from prior live request', {
+      entry: entry.toString(),
+      observedRequestId: observedMatch.requestId || null,
+      observedAt: observedMatch.observedAt || null,
+      logTag: observedMatch.logTag || null
+    });
+
+    return true;
+  }
+
+  maybeRegisterObservedImmediateCoreGatewaySatisfaction(entry) {
+    if (!entry?.isRequest) {
+      return false;
+    }
+
+    if (entry.source !== 'CORE' || entry.destination !== 'GATEWAY') {
+      return false;
+    }
+
+    if (!isImmediateFutureCoreGatewayRequestLogTag(entry.logTag)) {
+      return false;
+    }
+
+    if (this.validator.processedIndices.has(entry.index)) {
+      return false;
+    }
+
+    if (this.preSatisfiedReplayEntries?.has(entry.index)) {
+      return true;
+    }
+
+    const observedMatch = (this.observedIncomingRequests || []).find(observed =>
+      observed &&
+      observed.source === 'CORE' &&
+      observed.destination === 'GATEWAY' &&
+      observed.logTag === entry.logTag &&
+      this.validator.matchesExpected(entry, observed)
+    );
+
+    if (!observedMatch) {
+      return false;
+    }
+
+    this.registerPreSatisfiedReplayEntry(entry, {
+      requestId: observedMatch.requestId || null,
+      reason: 'observed_immediate_core_gateway_request'
+    });
+
+    this.bufferManager?.clearWaitDiagnostics?.(entry, 'observed_immediate_core_gateway_request');
+    this.bufferManager?.skipWaiter?.(entry);
+
+    logger.info('Registered observed immediate CORE->GATEWAY replay satisfaction from prior live request', {
+      entry: entry.toString(),
+      observedRequestId: observedMatch.requestId || null,
+      observedAt: observedMatch.observedAt || null,
+      logTag: observedMatch.logTag || null
+    });
+
     return true;
   }
 

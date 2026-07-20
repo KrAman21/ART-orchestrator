@@ -183,6 +183,78 @@ test('registerNearbyImmediateReplaySatisfaction marks a matching nearby replay e
   assert.equal(marker.requestId, 'live-request-id');
 });
 
+test('maybeRegisterObservedImmediateCoreGatewaySatisfaction pre-satisfies repeated TriggerLenderOTPRequest-LSP replay entry from prior live request', () => {
+  const logs = [
+    createRequestLog(0, {
+      logTag: 'SOME_OTHER_REQUEST',
+      traceRoute: 'APP_CORE'
+    }),
+    {
+      messageNumber: 1,
+      message: {
+        log_tag: 'TriggerLenderOTPRequest-LSP_REQUEST',
+        trace_route: 'CORE_GATEWAY',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'DMI',
+        trace_request: {
+          loanApplicationId: 'loan-1',
+          requestId: 'prod-trigger-1'
+        }
+      }
+    },
+    {
+      messageNumber: 2,
+      message: {
+        log_tag: 'TriggerLenderOTPRequest-LSP_RESPONSE',
+        trace_route: 'GATEWAY_CORE',
+        order_id: 'order-1',
+        loan_application_id: 'loan-1',
+        lender_org_id: 'DMI'
+      }
+    }
+  ];
+
+  const validator = new LogSequenceValidator(logs);
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.validator = validator;
+  orchestrator.preSatisfiedReplayEntries = new Map();
+  orchestrator.observedIncomingRequests = [
+    {
+      source: 'CORE',
+      destination: 'GATEWAY',
+      logTag: 'TriggerLenderOTPRequest-LSP_REQUEST',
+      requestId: 'live-trigger-1',
+      loanApplicationId: 'loan-1',
+      payload: {
+        loanApplicationId: 'loan-1',
+        requestId: 'live-trigger-1'
+      },
+      observedAt: Date.now()
+    }
+  ];
+  orchestrator.findCorrespondingResponse =
+    AsyncReplayOrchestrator.prototype.findCorrespondingResponse.bind(orchestrator);
+  orchestrator.registerPreSatisfiedReplayEntry =
+    AsyncReplayOrchestrator.prototype.registerPreSatisfiedReplayEntry.bind(orchestrator);
+  orchestrator.bufferManager = {
+    clearWaitDiagnostics: () => {},
+    skipWaiter: () => {}
+  };
+
+  const registered = AsyncReplayOrchestrator.prototype.maybeRegisterObservedImmediateCoreGatewaySatisfaction.call(
+    orchestrator,
+    validator.entries[1]
+  );
+
+  assert.equal(registered, true);
+  const marker = orchestrator.preSatisfiedReplayEntries.get(1);
+  assert.ok(marker);
+  assert.equal(marker.reason, 'observed_immediate_core_gateway_request');
+  assert.equal(marker.requestId, 'live-trigger-1');
+  assert.equal(marker.responseIndex, 2);
+});
+
 test('maybeResolvePreSatisfiedReplayEntry marks request and response processed when replay reaches the entry', () => {
   const logs = [
     createRequestLog(0, {
