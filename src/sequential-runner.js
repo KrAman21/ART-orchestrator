@@ -467,6 +467,9 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
     orderIndex,
     totalOrders
   });
+  if (prefetchedData?.fetchDiagnostics) {
+    reportGenerator.recordFetchDiagnostics(orderId, prefetchedData.fetchDiagnostics);
+  }
   const getOrderProfile = () => orderProfiler?.snapshot?.() || null;
 
   try {
@@ -598,6 +601,10 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
         });
 
         fetchResult = await fetcher.fetchLogsForOrders([{ merchantId, orderId }]);
+        const fetchDiagnostics = fetchResult?.results?.[0]?.fetchDiagnostics;
+        if (fetchDiagnostics) {
+          reportGenerator.recordFetchDiagnostics(orderId, fetchDiagnostics);
+        }
 
         if (fetchResult.results?.[0]?.skipped) {
           const skipReason = fetchResult.results[0].skipReason || 'Skipped due to order-context multi-LAID guard';
@@ -655,7 +662,10 @@ async function processSingleOrder(merchantId, orderId, config, orderIndex, total
       });
 
       if (!fetchResult.success || fetchResult.stats.totalLogs === 0) {
-        const error = `No logs found after ${maxFetchAttempts} attempts`;
+        const fetchError = fetchResult?.results?.[0]?.error || fetchResult?.error || null;
+        const error = fetchError
+          ? `Fetch stage failed: ${fetchError}`
+          : `No logs found after ${maxFetchAttempts} attempts`;
         console.log(`  Failed to fetch logs for order ${orderId} after ${maxFetchAttempts} attempts, skipping.`);
         reportGenerator.recordArtFailure(orderId, {
           error: true,

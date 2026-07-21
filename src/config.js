@@ -1703,8 +1703,8 @@ export const MOCKS_ENABLED = MOCK_CONFIG.enabled;
 
 /**
  * Extract the payload from message based on log_tag type
- * - If log_tag ends with "Request" -> use message.trace_request
- * - If log_tag ends with "Response" -> use message.trace_response
+ * - If log_tag ends with "Request" -> use message.trace_request, falling back to trace_request_ack
+ * - If log_tag ends with "Response" -> use message.trace_response, falling back to ack/error payloads
  * @param {Object} message - The log message object
  * @param {string} logTag - The log tag
  * @returns {Object|null} - The extracted payload
@@ -1715,13 +1715,20 @@ export function extractPayload(message, logTag) {
   }
 
   const trimmedTag = logTag.trim();
+  const normalizedTag = trimmedTag.toLowerCase();
 
-  if (trimmedTag.endsWith('Request') || trimmedTag.endsWith('_INCOMING')) {
-    return message?.trace_request || null;
+  if (normalizedTag.endsWith('request') || normalizedTag.endsWith('_incoming')) {
+    return message?.trace_request ?? message?.trace_request_ack ?? null;
   }
 
-  if (trimmedTag.endsWith('Response') || trimmedTag.endsWith('_OUTGOING')) {
-    return message?.trace_response || null;
+  if (normalizedTag.endsWith('response') || normalizedTag.endsWith('_outgoing')) {
+    return (
+      message?.trace_response ??
+      message?.trace_response_ack ??
+      message?.trace_request_ack ??
+      message?.trace_error_msg ??
+      null
+    );
   }
 
   // Default: return null if neither Request nor Response

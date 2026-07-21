@@ -132,6 +132,9 @@ export function generatePdfReport(report, jsonReportPath) {
       doc.fillColor(C.sub).text(order.status, 240, y, { lineBreak: false, width: 70 });
       doc.fillColor(C.sub).text(order.logTag || '—', 316, y, { lineBreak: false, width: 120 });
       doc.fillColor(C.sub).text(order.processingTimeMs != null ? `${(order.processingTimeMs / 1000).toFixed(1)}s` : '—', 442, y, { lineBreak: false, width: 40 });
+      const orderFetchLabel = order.fetchDiagnostics?.orderFetch?.success === true ? 'order:OK' : order.fetchDiagnostics?.orderFetch?.success === false ? 'order:FAIL' : 'order:?';
+      const laFetchLabel = order.fetchDiagnostics?.summary?.allLoanApplicationFetchesSuccessful === true ? 'la:OK' : order.fetchDiagnostics?.summary?.allLoanApplicationFetchesSuccessful === false ? 'la:FAIL' : 'la:?';
+      doc.fillColor(C.sub).text(`${orderFetchLabel} ${laFetchLabel}`, 486, y, { lineBreak: false, width: 70 });
       if (!ok && order.failureReason) {
         y += 10;
         doc.fontSize(7).font('Helvetica').fillColor(C.red)

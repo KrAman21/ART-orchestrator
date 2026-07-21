@@ -373,6 +373,7 @@ function buildReplayLenderDetailsSeedPayload(entry, payload, replayMerchantId, o
   if (
     (
       entry?.logTag !== 'Lsp-LoanStatusRequest_REQUEST' &&
+      entry?.logTag !== 'LenderLineStatus_REQUEST' &&
       entry?.logTag !== 'LSP-GetStatus_REQUEST' &&
       entry?.logTag !== 'VerifyLenderOTPRequest-LSP_REQUEST'
     ) ||
@@ -460,7 +461,7 @@ function buildReplayLenderDetailsSeedPayload(entry, payload, replayMerchantId, o
     lenderOrgId,
     requestId: payload.requestId,
     lenderRedirectionUrl: lenderRedirectionUrl || '',
-    gatewayRefId: gatewayRefId || null
+    gatewayRefId: gatewayRefId || 'default_gateway_ref_id'
   };
 }
 
@@ -2059,6 +2060,7 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       if (
         (
           entry.logTag === 'Lsp-LoanStatusRequest_REQUEST' ||
+          entry.logTag === 'LenderLineStatus_REQUEST' ||
           entry.logTag === 'LSP-GetStatus_REQUEST' ||
           entry.logTag === 'VerifyLenderOTPRequest-LSP_REQUEST'
         ) &&
@@ -2179,18 +2181,25 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         }
       }
 
-      if (entry.logTag === 'FlipKart-GetRedirectionURL_REQUEST') {
-        logger.info('Applying pre-send delay before FlipKart getRedirectionUrl replay', {
+      if (
+        entry.logTag === 'FlipKart-GetRedirectionURL_REQUEST' ||
+        entry.logTag === 'FlipKart-HardEligibility_REQUEST'
+      ) {
+        const delayMs = entry.logTag === 'FlipKart-HardEligibility_REQUEST' ? 3000 : 1000;
+        const delayLabel = entry.logTag === 'FlipKart-HardEligibility_REQUEST'
+          ? 'FlipKart hardEligibility'
+          : 'FlipKart getRedirectionUrl';
+        logger.info(`Applying pre-send delay before ${delayLabel} replay`, {
           requestEntry: entry.toString(),
           requestId: forwardingRequest.requestId,
-          delayMs: 1000,
+          delayMs,
           api
         });
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        logger.info('Completed pre-send delay before FlipKart getRedirectionUrl replay', {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        logger.info(`Completed pre-send delay before ${delayLabel} replay`, {
           requestEntry: entry.toString(),
           requestId: forwardingRequest.requestId,
-          delayMs: 1000,
+          delayMs,
           api
         });
       }
@@ -2465,7 +2474,59 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
   }
 
   buildFailureFallbackResponse(activeReq, response, apiFailure = null, exception = null) {
-    if (!activeReq?.logTag || !isToleratedBatchTimeoutApiLogTag(activeReq.logTag)) {
+    if (!activeReq?.logTag) {
+      return null;
+    }
+
+    const idempotencyErrorMessage = [
+      apiFailure?.error_message,
+      apiFailure?.message,
+      apiFailure?.description
+    ]
+      .filter(Boolean)
+      .join(' | ')
+      .toLowerCase();
+    const idempotencyErrorCode = (apiFailure?.error_code || apiFailure?.code || '').toString().toUpperCase();
+
+    const isHardEligibilityAlreadyInitiatedIdempotency =
+      activeReq.logTag === 'FlipKart-HardEligibility_REQUEST' &&
+      idempotencyErrorCode === 'IDEMPOTENCY_ERROR' &&
+      idempotencyErrorMessage.includes('hard eligibility already initiated');
+
+    if (isHardEligibilityAlreadyInitiatedIdempotency) {
+      const requestEntry = this.validator.entries.find(entry => entry.index === activeReq.logIndex);
+      if (!requestEntry) {
+        return null;
+      }
+
+      const expectedResponse = this.findCorrespondingResponse(requestEntry, true);
+      if (!expectedResponse?.payload) {
+        return null;
+      }
+
+      logger.info('Using replay response fallback for tolerated hard-eligibility idempotency response', {
+        requestId: activeReq.requestId || null,
+        logTag: activeReq.logTag,
+        logIndex: activeReq.logIndex || null,
+        errorCode: idempotencyErrorCode,
+        errorMessage: idempotencyErrorMessage,
+        responseEntry: expectedResponse.toString()
+      });
+
+      return {
+        response: {
+          status: 200,
+          statusText: response?.statusText || 'OK',
+          headers: response?.headers || {},
+          data: transformRequest(expectedResponse.payload, expectedResponse.logTag)
+        },
+        reason: 'hard_eligibility_idempotency_replay_response_fallback',
+        postBatchConfirmationRequired: false,
+        postBatchConfirmationResponseIndex: null
+      };
+    }
+
+    if (!isToleratedBatchTimeoutApiLogTag(activeReq.logTag)) {
       return null;
     }
 
@@ -3723,7 +3784,12 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
     logger.logApiCall(normalizedIncoming.source, normalizedIncoming.destination, normalizedIncoming.api, 'REQUEST', futureEntry.index);
 
-    const comparison = this.comparePayloads(futureEntry.payload, normalizedIncoming.payload, normalizedIncoming.logTag);
+    const comparison = this.comparePayloads(
+      futureEntry.payload,
+      normalizedIncoming.payload,
+      normalizedIncoming.logTag,
+      futureEntry
+    );
     if (!comparison.match) {
       logger.warn('Payload mismatch tolerated for immediate future CORE->GATEWAY request', {
         entry: futureEntry.toString(),

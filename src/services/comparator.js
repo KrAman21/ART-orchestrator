@@ -7,6 +7,10 @@ function normalizeKey(key) {
   return key.toLowerCase().replace(/[_-]/g, '');
 }
 
+function normalizePathForRule(path) {
+  return normalizeKey(String(path || '').replace(/\[\d+\]/g, '').replace(/[^a-zA-Z0-9]/g, ''));
+}
+
 function loadIgnoreKeys(logTag) {
   const filePath = resolve(process.cwd(), IGNORE_KEYS_FILE);
   if (!existsSync(filePath)) return new Set();
@@ -97,6 +101,52 @@ function shouldSkipComparison(path, valA, valB, ignore) {
   }
 
   return false;
+}
+
+const REPLAY_ENRICHMENT_TOLERANCE_RULES = {
+  'LSP-Eligibility_REQUEST': new Set([
+    'applicantproductdata',
+    'applicantsproductdata',
+    'applicantbusinessdetailsmonthlyincome',
+    'applicantsbusinessdetailsmonthlyincome',
+    'borrowerbusinessdetailsmonthlyincome',
+    'borrowerbusinessdetailsentitycategory',
+    'borrowerprofiledetails',
+    'borrowerprofiledetailsaddresstype'
+  ]),
+  'Themis-Eligibility_REQUEST': new Set([
+    'applicantproductdata',
+    'borrowerbusinessdetailsentitycategory',
+    'borrowerprofiledetails',
+    'borrowerprofiledetailsaddresstype'
+  ]),
+  'LSP-FetchOfferRequest_REQUEST': new Set([
+    'loanapplicationapplicantsproductdata',
+    'loanapplicationapplicantsbusinessdetailsmonthlyincome',
+    'loanapplicationborrowerorganizationdetails',
+    'loanapplicationborrowerbusinessdetailsmonthlyincome',
+    'loanapplicationborrowerbusinessdetailsentitycategory',
+    'loanapplicationborrowerprofiledetails',
+    'loanapplicationborrowerprofiledetailsaddresstype'
+  ])
+};
+
+function shouldSkipReplayEnrichmentDifference(path, valA, valB, logTag) {
+  const toleratedPaths = REPLAY_ENRICHMENT_TOLERANCE_RULES[logTag];
+  if (!toleratedPaths) {
+    return false;
+  }
+
+  const normalizedPath = normalizePathForRule(path);
+
+  if (!toleratedPaths.has(normalizedPath)) {
+    return false;
+  }
+
+  const hasNullishSide = valA === null || valA === undefined || valB === null || valB === undefined;
+  const hasMissingMarker = valA === '<missing>' || valB === '<missing>';
+
+  return hasNullishSide || hasMissingMarker || valA !== valB;
 }
 
 function getNumericStringType(value) {
@@ -238,11 +288,15 @@ function compareValues(valA, valB, path, ignore, logTag) {
   }
 
   if ((valA === null || valA === undefined) && (valB !== null && valB !== undefined)) {
-    diffs.push(makeDiff(path, valA, valB, 'expected missing, actual present'));
+    if (!shouldSkipReplayEnrichmentDifference(path, valA, valB, logTag)) {
+      diffs.push(makeDiff(path, valA, valB, 'expected missing, actual present'));
+    }
     return diffs;
   }
   if ((valA !== null && valA !== undefined) && (valB === null || valB === undefined)) {
-    diffs.push(makeDiff(path, valA, valB, 'expected present, actual missing'));
+    if (!shouldSkipReplayEnrichmentDifference(path, valA, valB, logTag)) {
+      diffs.push(makeDiff(path, valA, valB, 'expected present, actual missing'));
+    }
     return diffs;
   }
 
@@ -322,9 +376,13 @@ function compareValues(valA, valB, path, ignore, logTag) {
       if (i < sortedA.length && i < sortedB.length) {
         diffs.push(...compareValues(sortedA[i], sortedB[i], childPath, ignore, logTag));
       } else if (i < sortedA.length) {
-        diffs.push(makeDiff(childPath, sortedA[i], '<missing>', 'element missing in actual'));
+        if (!shouldSkipReplayEnrichmentDifference(childPath, sortedA[i], '<missing>', logTag)) {
+          diffs.push(makeDiff(childPath, sortedA[i], '<missing>', 'element missing in actual'));
+        }
       } else {
-        diffs.push(makeDiff(childPath, '<missing>', sortedB[i], 'extra element in actual'));
+        if (!shouldSkipReplayEnrichmentDifference(childPath, '<missing>', sortedB[i], logTag)) {
+          diffs.push(makeDiff(childPath, '<missing>', sortedB[i], 'extra element in actual'));
+        }
       }
     }
     return diffs;
@@ -337,7 +395,10 @@ function compareValues(valA, valB, path, ignore, logTag) {
     for (const k of keysA) {
       const childPath = path ? `${path}.${k}` : k;
       if (!Object.prototype.hasOwnProperty.call(valB, k)) {
-        if (!shouldSkipComparison(childPath, valA[k], undefined, ignore)) {
+        if (
+          !shouldSkipComparison(childPath, valA[k], undefined, ignore) &&
+          !shouldSkipReplayEnrichmentDifference(childPath, valA[k], '<missing>', logTag)
+        ) {
           diffs.push(makeDiff(childPath, valA[k], '<missing>', 'key missing in actual'));
         }
       }
@@ -346,7 +407,10 @@ function compareValues(valA, valB, path, ignore, logTag) {
     for (const k of keysB) {
       const childPath = path ? `${path}.${k}` : k;
       if (!Object.prototype.hasOwnProperty.call(valA, k)) {
-        if (!shouldSkipComparison(childPath, undefined, valB[k], ignore)) {
+        if (
+          !shouldSkipComparison(childPath, undefined, valB[k], ignore) &&
+          !shouldSkipReplayEnrichmentDifference(childPath, '<missing>', valB[k], logTag)
+        ) {
           diffs.push(makeDiff(childPath, '<missing>', valB[k], 'extra key in actual'));
         }
       }
@@ -362,7 +426,9 @@ function compareValues(valA, valB, path, ignore, logTag) {
   }
 
   if (valA !== valB) {
-    diffs.push(makeDiff(path, valA, valB, 'value mismatch'));
+    if (!shouldSkipReplayEnrichmentDifference(path, valA, valB, logTag)) {
+      diffs.push(makeDiff(path, valA, valB, 'value mismatch'));
+    }
   }
 
   return diffs;

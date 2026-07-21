@@ -122,6 +122,12 @@ export class ArtReportGenerator {
       logsTotal: orderInfo.logsTotal || 0,
       currentLogTag: null,
       currentLogIndex: 0,
+      fetchDiagnostics: {
+        orderFetch: null,
+        orderContextFetch: null,
+        loanApplicationFetches: [],
+        summary: null
+      },
       errors: [],
       stuckAt: null,
       stopReason: null,
@@ -181,6 +187,20 @@ export class ArtReportGenerator {
         ...progress.timeline
       });
     }
+  }
+
+  recordFetchDiagnostics(orderId, fetchDiagnostics) {
+    const order = this.orders.find(o => o.orderId === orderId);
+    if (!order || !fetchDiagnostics || typeof fetchDiagnostics !== 'object') return;
+
+    order.fetchDiagnostics = {
+      orderFetch: fetchDiagnostics.orderFetch || order.fetchDiagnostics?.orderFetch || null,
+      orderContextFetch: fetchDiagnostics.orderContextFetch || order.fetchDiagnostics?.orderContextFetch || null,
+      loanApplicationFetches: Array.isArray(fetchDiagnostics.loanApplicationFetches)
+        ? fetchDiagnostics.loanApplicationFetches
+        : (order.fetchDiagnostics?.loanApplicationFetches || []),
+      summary: fetchDiagnostics.summary || order.fetchDiagnostics?.summary || null
+    };
   }
 
   recordOrderError(orderId, error) {
@@ -567,6 +587,7 @@ export class ArtReportGenerator {
         null,
       logIndex: failurePoint?.logIndex ?? order.currentLogIndex ?? null,
       logTag: failurePoint?.logTag ?? order.currentLogTag ?? null,
+      fetchDiagnostics: order.fetchDiagnostics || null,
       ...(order.stopReason ? { stopReason: order.stopReason } : {})
     };
   }

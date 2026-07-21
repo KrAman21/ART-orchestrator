@@ -23,6 +23,10 @@ test('verify lender otp request is treated as a self-trigger fallback API', () =
   assert.equal(isSelfTriggerFallbackApiLogTag('VerifyLenderOTPRequest-LSP_REQUEST'), true);
 });
 
+test('lender line status request is treated as a self-trigger fallback API', () => {
+  assert.equal(isSelfTriggerFallbackApiLogTag('LenderLineStatus_REQUEST'), true);
+});
+
 test('generate partner auth token request is treated as an immediate direct replay API', () => {
   assert.equal(isImmediateDirectReplayLogTag('GENERATE PARTNER AUTH TOKEN_REQUEST'), true);
 });

@@ -39,6 +39,28 @@ function getPayloadDisambiguator(value, key) {
   return null;
 }
 
+function extractEntryPayload(message, isRequest) {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+
+  if (isRequest) {
+    return (
+      message.trace_request ??
+      message.trace_request_ack ??
+      null
+    );
+  }
+
+  return (
+    message.trace_response ??
+    message.trace_response_ack ??
+    message.trace_request_ack ??
+    message.trace_error_msg ??
+    null
+  );
+}
+
 /**
  * LogEntry represents a parsed log entry from the trace
  */
@@ -81,9 +103,7 @@ class LogEntry {
     }
 
     // Extract payload based on type
-    this.payload = this.isRequest
-      ? this.message.trace_request
-      : (this.message.trace_response || this.message.trace_error_msg);
+    this.payload = extractEntryPayload(this.message, this.isRequest);
 
     // Correlation info
     this.requestId = this.message.request_id || this.xRequestId;
@@ -509,6 +529,7 @@ export class LogSequenceValidator {
   matchesExpected(expected, incoming) {
     const expectedLogTag = canonicalRequestLogTag(expected.logTag);
     const incomingLogTag = canonicalRequestLogTag(incoming.logTag);
+    const isFetchOfferAsyncResponseRequest = expectedLogTag === 'FETCH_OFFER_ASYNC_RESPONSE_REQUEST';
 
     // Basic matching on source, destination, and log tag
     if (
@@ -532,7 +553,7 @@ export class LogSequenceValidator {
     }
 
     // Compare loanApplicationId if present in expected entry
-    if (expected.loanApplicationId && incoming.loanApplicationId) {
+    if (!isFetchOfferAsyncResponseRequest && expected.loanApplicationId && incoming.loanApplicationId) {
       if (expected.loanApplicationId !== incoming.loanApplicationId) {
         return false;
       }

@@ -125,6 +125,100 @@ test('maybePassThroughFetchLoanApplicationData forwards unmatched live request d
   });
 });
 
+test('maybePassThroughFetchLoanApplicationData forwards live request when matching replay entry is only in the future', async () => {
+  const orchestrator = Object.create(ReplayOrchestrator.prototype);
+  orchestrator.config = { merchantId: 'flipkart', asyncReplayMode: true };
+  orchestrator.validator = {
+    currentIndex: 524,
+    entries: [
+      {
+        index: 524,
+        isRequest: true,
+        source: 'GATEWAY',
+        destination: 'LSP',
+        logTag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+        toString() {
+          return '[524] LOAN_STATUS_ASYNC_RESPONSE_REQUEST GATEWAY→LSP';
+        }
+      },
+      {
+        index: 549,
+        isRequest: true,
+        source: 'GATEWAY',
+        destination: 'LSP',
+        logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+        payload: {
+          requiredData: ['SELECTED_OFFER_SERIALIZER']
+        },
+        toString() {
+          return '[549] FECTH_LOAN_APPLICATION_DATA_API_REQUEST GATEWAY→LSP';
+        }
+      }
+    ],
+    processedIndices: new Set(),
+    getCurrentEntry() {
+      return this.entries[0];
+    }
+  };
+
+  let observedRequest = null;
+  orchestrator.forwardLiveFetchLoanApplicationDataRequest = async (incoming, merchantId) => {
+    observedRequest = { incoming, merchantId };
+    return {
+      status: 200,
+      statusText: 'OK',
+      data: { ok: true, source: 'live-lsp-future-entry' },
+      headers: { 'content-type': 'application/json' }
+    };
+  };
+
+  const result = await orchestrator.maybePassThroughFetchLoanApplicationData({
+    source: 'GATEWAY',
+    destination: 'LSP',
+    api: '/api/fetch/loanApplicationData',
+    logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+    requestId: 'future-fetch-loan-request',
+    payload: {
+      loanApplicationId: 'LA-1',
+      requestId: 'future-fetch-loan-request',
+      requiredData: ['SELECTED_OFFER_SERIALIZER'],
+      lineId: null
+    },
+    headers: {
+      'x-merchant-id': 'flipkart'
+    }
+  });
+
+  assert.deepEqual(result, {
+    success: true,
+    payload: { ok: true, source: 'live-lsp-future-entry' },
+    headers: { 'content-type': 'application/json' },
+    status: 200,
+    statusText: 'OK',
+    error: null,
+    livePassThrough: true
+  });
+  assert.deepEqual(observedRequest, {
+    incoming: {
+      source: 'GATEWAY',
+      destination: 'LSP',
+      api: '/api/fetch/loanApplicationData',
+      logTag: 'FECTH_LOAN_APPLICATION_DATA_API_REQUEST',
+      requestId: 'future-fetch-loan-request',
+      payload: {
+        loanApplicationId: 'LA-1',
+        requestId: 'future-fetch-loan-request',
+        requiredData: ['SELECTED_OFFER_SERIALIZER'],
+        lineId: null
+      },
+      headers: {
+        'x-merchant-id': 'flipkart'
+      }
+    },
+    merchantId: 'flipkart'
+  });
+});
+
 test('maybePassThroughFetchLoanApplicationData returns cached response when replay entry was already self-triggered and processed', async () => {
   const orchestrator = Object.create(ReplayOrchestrator.prototype);
   const processedRequestEntry = {

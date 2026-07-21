@@ -581,6 +581,58 @@ test('future GATEWAY->LENDER loan status requests reserve distinct replay entrie
   );
 });
 
+test('future CORE->GATEWAY request comparison is recorded against the claimed future entry', async () => {
+  const logs = [
+    createRequestLog(0, {
+      logTag: 'SOME_OTHER_REQUEST',
+      traceRoute: 'CORE_GATEWAY'
+    }),
+    createRequestLog(1, {
+      logTag: 'LSP-GetStatus_REQUEST',
+      traceRoute: 'CORE_GATEWAY'
+    })
+  ];
+
+  const validator = new LogSequenceValidator(logs);
+  validator.currentIndex = 0;
+
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  orchestrator.validator = validator;
+  orchestrator.config = { timeoutMs: 10000 };
+  orchestrator.registerPreSatisfiedReplayEntry = () => {};
+  orchestrator.registerReplayIdentifierMappings = () => {};
+  orchestrator.findCorrespondingResponse = () => null;
+  orchestrator.forwardToDestination = async () => ({ success: true });
+  orchestrator.recordSuccess = () => {};
+
+  let recordedEntryOverride = null;
+  orchestrator.comparePayloads = (_expected, _actual, _logTag, entryOverride = null) => {
+    recordedEntryOverride = entryOverride;
+    return { match: true, differences: {}, differenceList: [] };
+  };
+
+  const incoming = {
+    source: 'CORE',
+    destination: 'GATEWAY',
+    api: '/gateway/v3.3/fetchLoanStatus',
+    logTag: 'LSP-GetStatus_REQUEST',
+    payload: {
+      loanApplicationId: 'loan-1'
+    },
+    requestId: 'req-1',
+    loanApplicationId: 'loan-1',
+    lenderOrgId: 'TVS_CREDIT'
+  };
+
+  await orchestrator.maybeHandleFutureCoreGatewayRequest(
+    incoming,
+    incoming,
+    { foundInLookahead: validator.entries[1], isEarly: true }
+  );
+
+  assert.equal(recordedEntryOverride, validator.entries[1]);
+});
+
 test('current GATEWAY->LENDER replay slot completes reserved buffered request instead of buffering a second same-slot request', async () => {
   const logs = [
     createRequestLog(127, {
@@ -2037,5 +2089,66 @@ test('buildFailureFallbackResponse uses matching replay response for tolerated F
   assert.deepEqual(fallback.response.data, {
     status: 'SUCCESS',
     loanApplicationId: 'loan-1'
+  });
+});
+
+test('buildFailureFallbackResponse uses matching replay response for tolerated hard-eligibility idempotency response', () => {
+  const logs = [
+    {
+      messageNumber: 0,
+      message: {
+        log_tag: 'FlipKart-HardEligibility_REQUEST',
+        trace_route: 'APP_WRAPPER',
+        order_id: 'order-1',
+        trace_request: {
+          orderId: 'order-1'
+        }
+      }
+    },
+    {
+      messageNumber: 1,
+      message: {
+        log_tag: 'FlipKart-HardEligibility_RESPONSE',
+        trace_route: 'WRAPPER_APP',
+        order_id: 'order-1',
+        trace_response: {
+          status: 'SUCCESS',
+          error: null
+        }
+      }
+    }
+  ];
+
+  const orchestrator = new AsyncReplayOrchestrator(logs, {
+    timeoutMs: 10000,
+    orderId: 'order-1'
+  });
+
+  const fallback = orchestrator.buildFailureFallbackResponse(
+    {
+      logTag: 'FlipKart-HardEligibility_REQUEST',
+      logIndex: 0,
+      requestId: 'live-request-1'
+    },
+    {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/json' },
+      data: '{"status":"FAILURE","error":{"error_message":"Hard Eligibility Already Initiated","error_code":"IDEMPOTENCY_ERROR"}}'
+    },
+    {
+      error_message: 'Hard Eligibility Already Initiated',
+      error_code: 'IDEMPOTENCY_ERROR'
+    },
+    null
+  );
+
+  assert.ok(fallback);
+  assert.equal(fallback.reason, 'hard_eligibility_idempotency_replay_response_fallback');
+  assert.equal(fallback.postBatchConfirmationRequired, false);
+  assert.equal(fallback.postBatchConfirmationResponseIndex, null);
+  assert.deepEqual(fallback.response.data, {
+    status: 'SUCCESS',
+    error: null
   });
 });

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getApiMapping } from './config.js';
+import { extractPayload, getApiMapping } from './config.js';
 
 test('getApiMapping resolves gateway updateKYC request path', () => {
   const mapping = getApiMapping('/gateway/v3.3/kyc/updateKYCRequest', {
@@ -319,4 +319,48 @@ test('getApiMapping keeps /prod/MOCK_DATA multitag cursor isolated per replay sc
   assert.equal(firstOrderParent.logTag, 'KFS SERVICE API :: PARENT_REQUEST');
   assert.equal(secondOrderParent.logTag, 'KFS SERVICE API :: PARENT_REQUEST');
   assert.equal(firstOrderChild.logTag, 'KFS SERVICE API :: CHILD_REQUEST');
+});
+
+test('extractPayload falls back to ack payload for response logs when trace_response is empty', () => {
+  const payload = extractPayload(
+    {
+      trace_response: null,
+      trace_request_ack: {
+        ack: {
+          error: '0',
+          traceId: 'LSP123'
+        }
+      }
+    },
+    'LSP-FetchOfferRequest_RESPONSE'
+  );
+
+  assert.deepEqual(payload, {
+    ack: {
+      error: '0',
+      traceId: 'LSP123'
+    }
+  });
+});
+
+test('extractPayload prefers trace_response over ack payload for response logs', () => {
+  const payload = extractPayload(
+    {
+      trace_response: {
+        status: 'SUCCESS',
+        error: null
+      },
+      trace_request_ack: {
+        ack: {
+          error: '0'
+        }
+      }
+    },
+    'Some_RESPONSE'
+  );
+
+  assert.deepEqual(payload, {
+    status: 'SUCCESS',
+    error: null
+  });
 });

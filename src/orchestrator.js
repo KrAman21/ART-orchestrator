@@ -2,7 +2,7 @@ import { StateManager } from './services/state-manager.js';
 import { LogSequenceValidator } from './services/log-sequence-validator.js';
 import { compareLog } from './services/comparator.js';
 import { logger } from './utils/logger.js';
-import { getApiForLogTag as getApiFromConfig, getEndpointConfig, SERVICE_MAP, SKIP_DESTINATIONS, isAsyncParallelApi, LENDER_ORG_ID_TO_ID_MAP, normalizeSourceDestination } from './config.js';
+import { getApiForLogTag as getApiFromConfig, getEndpointConfig, SERVICE_MAP, SKIP_DESTINATIONS, isAsyncParallelApi, LENDER_ORG_ID_TO_ID_MAP, normalizeSourceDestination, extractPayload } from './config.js';
 import { transformRequest } from './services/request-transformer.js';
 import { makeRequest } from './services/http-client.js';
 
@@ -1454,6 +1454,7 @@ export class ReplayOrchestrator {
     const currentIndex = Number.isInteger(this.validator?.currentIndex)
       ? this.validator.currentIndex
       : 0;
+    const currentReplayEntry = this.validator?.getCurrentEntry?.() || null;
     const pendingReplayEntry = this.validator?.entries?.find?.(entry =>
       entry.index >= currentIndex &&
       !this.validator.processedIndices.has(entry.index) &&
@@ -1468,14 +1469,29 @@ export class ReplayOrchestrator {
     );
 
     if (pendingReplayEntry) {
+      const currentReplayOwnsRequest =
+        currentReplayEntry &&
+        currentReplayEntry.isRequest &&
+        currentReplayEntry.index === pendingReplayEntry.index;
+
+      if (!currentReplayOwnsRequest) {
+        logger.info('FetchLoanApplicationData replay entry exists only in the future, using fallback handling for current live request', {
+          requestId: incoming.requestId,
+          incomingLogTag: incoming.logTag,
+          requiredData,
+          currentEntry: currentReplayEntry?.toString?.() || null,
+          pendingReplayEntry: pendingReplayEntry.toString()
+        });
+      } else {
       logger.info('Allowing fetchLoanApplicationData request to be served through normal replay handling', {
         requestId: incoming.requestId,
         incomingLogTag: incoming.logTag,
         requiredData,
-        currentEntry: this.validator?.getCurrentEntry?.()?.toString?.() || null,
+        currentEntry: currentReplayEntry?.toString?.() || null,
         pendingReplayEntry: pendingReplayEntry.toString()
       });
-      return null;
+        return null;
+      }
     }
 
     if (!this.config?.asyncReplayMode) {
@@ -1610,7 +1626,11 @@ export class ReplayOrchestrator {
   }
 
   comparePayloads(expected, actual, logTag, entryOverride = null) {
-    const comparison = compareLog(expected, actual, logTag);
+    const comparisonExpected =
+      entryOverride?.message && logTag
+        ? (extractPayload(entryOverride.message, logTag) ?? expected)
+        : expected;
+    const comparison = compareLog(comparisonExpected, actual, logTag);
     const currentEntry = entryOverride || this.validator.getCurrentEntry();
 
     this.results.payloadComparisons.push({

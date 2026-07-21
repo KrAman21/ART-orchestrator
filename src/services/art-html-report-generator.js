@@ -167,6 +167,19 @@ function buildOrderSection(orderComp, orderOutcome) {
   const failInfo = orderOutcome
     ? `<div class="failure-banner"><span class="failure-label">Stopped at</span><code>${esc(orderOutcome.logTag)}</code><span class="failure-reason">${esc(orderOutcome.failureReason)}</span></div>`
     : '';
+  const fetchSummary = orderOutcome?.fetchDiagnostics?.summary || null;
+  const orderFetchSuccess = orderOutcome?.fetchDiagnostics?.orderFetch?.success;
+  const laFetchSuccess = fetchSummary?.allLoanApplicationFetchesSuccessful;
+  const failedLaids = fetchSummary?.failedLoanApplicationIds || [];
+  const fetchPills = orderOutcome
+    ? [
+      `<span class="pill ${orderFetchSuccess === true ? 'pill-ok' : orderFetchSuccess === false ? 'pill-fail' : 'pill-total'}">order fetch: ${esc(orderFetchSuccess === true ? 'SUCCESS' : orderFetchSuccess === false ? 'FAILED' : 'UNKNOWN')}</span>`,
+      `<span class="pill ${laFetchSuccess === true ? 'pill-ok' : laFetchSuccess === false ? 'pill-fail' : 'pill-total'}">la fetch: ${esc(laFetchSuccess === true ? 'SUCCESS' : laFetchSuccess === false ? 'FAILED' : 'UNKNOWN')}</span>`
+    ].join('')
+    : '';
+  const fetchFailureNote = failedLaids.length > 0
+    ? `<div class="failure-banner"><span class="failure-label">Failed LAIDs</span><code>${esc(failedLaids.join(', '))}</code></div>`
+    : '';
 
   const tagSections = [...tagMap.entries()]
     .map(([tag, entries], i) => buildTagSection(tag, entries, `${orderId}-${i}`))
@@ -181,9 +194,11 @@ function buildOrderSection(orderComp, orderOutcome) {
       <div class="order-subtitle">Payload comparison summary</div>
     </div>
     ${failInfo}
+    ${fetchFailureNote}
     <div class="summary-pills">
       <span class="pill pill-total">${formatDurationMs(orderOutcome?.processingTimeMs)}</span>
       <span class="pill pill-diff">${esc(orderOutcome?.failureCategory || 'NO_FAILURE')}</span>
+      ${fetchPills}
       <span class="pill pill-total">${totalTags} API tags</span>
       <span class="pill pill-ok">${matchedTags} matched</span>
       <span class="pill pill-fail">${mismatchedTags} mismatched</span>
@@ -259,7 +274,7 @@ function buildHtml(report) {
     ? `<section class="order-section uncovered">
         <h2 class="order-title">Orders with no comparison data</h2>
         <ul>${uncoveredOutcomes.map(o =>
-          `<li><code>${esc(o.orderId)}</code> — <span class="status-fail">${esc(o.status)}</span> · ${esc(o.failureCategory || 'NO_FAILURE')} · ${esc(formatDurationMs(o.processingTimeMs))}: ${esc(o.failureReason || o.stopReason || '')}</li>`
+          `<li><code>${esc(o.orderId)}</code> — <span class="status-fail">${esc(o.status)}</span> · ${esc(o.failureCategory || 'NO_FAILURE')} · order fetch: ${esc(o.fetchDiagnostics?.orderFetch?.success === true ? 'SUCCESS' : o.fetchDiagnostics?.orderFetch?.success === false ? 'FAILED' : 'UNKNOWN')} · la fetch: ${esc(o.fetchDiagnostics?.summary?.allLoanApplicationFetchesSuccessful === true ? 'SUCCESS' : o.fetchDiagnostics?.summary?.allLoanApplicationFetchesSuccessful === false ? 'FAILED' : 'UNKNOWN')} · ${esc(formatDurationMs(o.processingTimeMs))}: ${esc(o.failureReason || o.stopReason || '')}</li>`
         ).join('')}</ul>
       </section>`
     : '';

@@ -153,6 +153,16 @@ function buildSourceCounts(sourceResults) {
   return counts;
 }
 
+function buildFetchAttemptSummary(result, attempt) {
+  return {
+    attempt,
+    success: Boolean(result?.success),
+    count: result?.count || 0,
+    error: result?.error || result?.message || null,
+    source: result?.source || null
+  };
+}
+
 export class MultiSourceLogFetcher {
   constructor(options = {}) {
     this.sessionToken = options.sessionToken || process.env.SESSION_TOKEN || '';
@@ -170,15 +180,86 @@ export class MultiSourceLogFetcher {
     );
   }
 
-  async fetchLogsForOrder(merchantId, orderId, retries = 0) {
+  async fetchWithRetries(fetcher, retryLabel, retryContext = {}) {
+    const attempts = [];
+    const maxAttempts = this.maxRetries + 1;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const result = await fetcher();
+      attempts.push(buildFetchAttemptSummary(result, attempt));
+
+      if (result?.success) {
+        return {
+          result,
+          attempts,
+          attemptsUsed: attempt,
+          exhaustedRetries: false
+        };
+      }
+
+      if (attempt < maxAttempts) {
+        logger.warn(`${retryLabel} failed, retrying (${attempt}/${this.maxRetries})...`, {
+          ...retryContext,
+          attempt,
+          maxRetries: this.maxRetries,
+          error: result?.error || result?.message || 'Unknown fetch failure'
+        });
+        await this.sleep(this.retryDelay * attempt);
+      }
+    }
+
+    return {
+      result: null,
+      attempts,
+      attemptsUsed: attempts.length,
+      exhaustedRetries: true
+    };
+  }
+
+  async fetchLogsForOrder(merchantId, orderId) {
     logger.info(`Fetching replay logs for order: ${merchantId}/${orderId}`, {
       merchantId,
       orderId,
-      attempt: retries + 1,
       useOrderContextLookup: this.useOrderContextLookup
     });
 
-    const orderLogsResult = await fetchS3TraceLogsByOrder(merchantId, orderId, this.sessionToken);
+    const orderLogsFetch = await this.fetchWithRetries(
+      () => fetchS3TraceLogsByOrder(merchantId, orderId, this.sessionToken),
+      `Order log fetch failed for ${orderId}`,
+      { merchantId, orderId, fetchType: 'order_logs' }
+    );
+    const orderLogsResult = orderLogsFetch.result || {
+      success: false,
+      error: orderLogsFetch.attempts[orderLogsFetch.attempts.length - 1]?.error || 'Order log fetch failed',
+      logs: [],
+      count: 0,
+      source: { id: `${merchantId}/${orderId}`, idType: 'merchant_id/order_id', label: 'order' }
+    };
+
+    const fetchDiagnostics = {
+      orderFetch: {
+        success: Boolean(orderLogsResult.success),
+        attempts: orderLogsFetch.attempts,
+        attemptsUsed: orderLogsFetch.attemptsUsed,
+        count: orderLogsResult.count || 0,
+        error: orderLogsResult.error || orderLogsResult.message || null
+      },
+      orderContextFetch: {
+        attempted: this.useOrderContextLookup,
+        success: false,
+        customerId: null,
+        loanApplicationIds: [],
+        error: null
+      },
+      loanApplicationFetches: [],
+      summary: {
+        orderFetchSuccessful: Boolean(orderLogsResult.success),
+        allLoanApplicationFetchesSuccessful: true,
+        failedLoanApplicationIds: [],
+        preservedLoanApplicationIds: [],
+        discardedLoanApplicationIds: []
+      }
+    };
 
     if (!orderLogsResult.success) {
       const fallbackContext = { customerId: null, loanApplicationIds: [] };
@@ -193,14 +274,14 @@ export class MultiSourceLogFetcher {
           fallbackContext.customerId = lspContext.customerId;
           fallbackContext.loanApplicationIds = lspContext.loanApplicationIds;
         }
-      }
 
-      if (retries < this.maxRetries) {
-        logger.warn(`Order log fetch failed for ${orderId}, retrying (${retries + 1}/${this.maxRetries})...`, {
-          error: orderLogsResult.error
-        });
-        await this.sleep(this.retryDelay * (retries + 1));
-        return this.fetchLogsForOrder(merchantId, orderId, retries + 1);
+        fetchDiagnostics.orderContextFetch = {
+          attempted: true,
+          success: Boolean(lspContext.success),
+          customerId: lspContext.customerId || null,
+          loanApplicationIds: lspContext.loanApplicationIds || [],
+          error: lspContext.error || null
+        };
       }
 
       return {
@@ -211,7 +292,8 @@ export class MultiSourceLogFetcher {
         merchantId,
         orderId,
         context: fallbackContext,
-        sourceCounts: {}
+        sourceCounts: {},
+        fetchDiagnostics
       };
     }
 
@@ -222,6 +304,14 @@ export class MultiSourceLogFetcher {
         endpoint: this.lspOrderStatusEndpoint || undefined
       })
       : { success: false, customerId: null, loanApplicationIds: [] };
+
+    fetchDiagnostics.orderContextFetch = {
+      attempted: this.useOrderContextLookup,
+      success: Boolean(lspContext.success),
+      customerId: lspContext.customerId || null,
+      loanApplicationIds: lspContext.loanApplicationIds || [],
+      error: lspContext.error || null
+    };
 
     if (shouldSkipReplayForMultipleOrderContextLaids(lspContext)) {
       const skipReason =
@@ -247,7 +337,8 @@ export class MultiSourceLogFetcher {
           loanApplicationIds: lspContext.loanApplicationIds
         },
         sourceCounts: {},
-        sourceResults: []
+        sourceResults: [],
+        fetchDiagnostics
       };
     }
 
@@ -260,8 +351,42 @@ export class MultiSourceLogFetcher {
     const discardedLoanApplicationIds = [];
     const discardedLoanApplicationReasons = [];
     const preservedLoanApplicationIds = [];
+    const failedLoanApplicationFetches = [];
     for (const loanApplicationId of replayContext.loanApplicationIds) {
-      const loanApplicationResult = await fetchS3TraceLogsByLoanApplicationId(loanApplicationId, this.sessionToken);
+      const loanApplicationFetch = await this.fetchWithRetries(
+        () => fetchS3TraceLogsByLoanApplicationId(loanApplicationId, this.sessionToken),
+        `Loan application log fetch failed for ${loanApplicationId}`,
+        { merchantId, orderId, loanApplicationId, fetchType: 'loan_application_logs' }
+      );
+      const loanApplicationResult = loanApplicationFetch.result || {
+        success: false,
+        error: loanApplicationFetch.attempts[loanApplicationFetch.attempts.length - 1]?.error || 'Loan application log fetch failed',
+        logs: [],
+        count: 0,
+        source: { id: loanApplicationId, idType: 'loan_application_id', label: 'loan_application' }
+      };
+      const loanApplicationFetchInfo = {
+        loanApplicationId,
+        success: Boolean(loanApplicationResult.success),
+        attempts: loanApplicationFetch.attempts,
+        attemptsUsed: loanApplicationFetch.attemptsUsed,
+        count: loanApplicationResult.count || 0,
+        error: loanApplicationResult.error || loanApplicationResult.message || null,
+        discarded: false,
+        discardReason: null
+      };
+
+      fetchDiagnostics.loanApplicationFetches.push(loanApplicationFetchInfo);
+
+      if (!loanApplicationResult.success) {
+        failedLoanApplicationFetches.push({
+          loanApplicationId,
+          error: loanApplicationFetchInfo.error
+        });
+        await this.sleep(this.delayBetweenRequests);
+        continue;
+      }
+
       const loanApplicationDiscardDecision = loanApplicationResult.success
         ? shouldDiscardLoanApplicationLogSet(orderId, orderLogsResult.logs, loanApplicationResult.logs)
         : { discard: false, reason: null, topLevelOrderIds: [] };
@@ -296,6 +421,8 @@ export class MultiSourceLogFetcher {
           reason: loanApplicationDiscardDecision.reason,
           topLevelOrderIds: loanApplicationDiscardDecision.topLevelOrderIds || []
         });
+        loanApplicationFetchInfo.discarded = true;
+        loanApplicationFetchInfo.discardReason = loanApplicationDiscardDecision.reason;
       } else {
         sourceResults.push(loanApplicationResult);
         if (loanApplicationResult.success) {
@@ -303,6 +430,41 @@ export class MultiSourceLogFetcher {
         }
       }
       await this.sleep(this.delayBetweenRequests);
+    }
+
+    fetchDiagnostics.summary.allLoanApplicationFetchesSuccessful = failedLoanApplicationFetches.length === 0;
+    fetchDiagnostics.summary.failedLoanApplicationIds = failedLoanApplicationFetches.map(item => item.loanApplicationId);
+    fetchDiagnostics.summary.preservedLoanApplicationIds = preservedLoanApplicationIds;
+    fetchDiagnostics.summary.discardedLoanApplicationIds = discardedLoanApplicationIds;
+
+    if (failedLoanApplicationFetches.length > 0) {
+      const error =
+        `Failed to fetch loan application logs after retries for: ${failedLoanApplicationFetches.map(item => item.loanApplicationId).join(', ')}`;
+
+      logger.warn(error, {
+        merchantId,
+        orderId,
+        failedLoanApplicationFetches
+      });
+
+      return {
+        success: false,
+        error,
+        logs: [],
+        count: 0,
+        merchantId,
+        orderId,
+        context: {
+          ...replayContext,
+          loanApplicationIds: preservedLoanApplicationIds
+        },
+        sourceCounts: {},
+        sourceResults,
+        discardedLoanApplicationIds,
+        discardedLoanApplicationReasons,
+        failedLoanApplicationFetches,
+        fetchDiagnostics
+      };
     }
 
     const successfulSourceResults = sourceResults.filter(result => result.success);
@@ -359,7 +521,8 @@ export class MultiSourceLogFetcher {
         sourceCounts,
         sourceResults,
         discardedLoanApplicationIds,
-        discardedLoanApplicationReasons
+        discardedLoanApplicationReasons,
+        fetchDiagnostics
       };
     }
 
@@ -389,7 +552,8 @@ export class MultiSourceLogFetcher {
       sourceCounts,
       sourceResults,
       discardedLoanApplicationIds,
-      discardedLoanApplicationReasons
+      discardedLoanApplicationReasons,
+      fetchDiagnostics
     };
   }
 
@@ -438,7 +602,9 @@ export class MultiSourceLogFetcher {
 
     const allLogs = dedupeLogs(results.filter(result => result.success).flatMap(result => result.logs))
       .sort(compareLogsForReplay);
-    const saved = await this.saveLogsToFile(allLogs);
+    const saved = failedFetches === 0
+      ? await this.saveLogsToFile(allLogs)
+      : false;
 
     return {
       success: failedFetches === 0,

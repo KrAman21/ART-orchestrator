@@ -96,3 +96,175 @@ test('compareLog unwraps actual payload envelope before comparing', () => {
   assert.equal(result.match, true);
   assert.deepEqual(result.differenceList, []);
 });
+
+test('compareLog skips LSP-Eligibility replay-enrichment noise for masked-to-null and enriched borrower fields', () => {
+  const result = compareLog(
+    {
+      applicant: {
+        productData: null,
+        businessDetails: {
+          monthlyIncome: null
+        }
+      },
+      applicants: [
+        {
+          productData: null,
+          businessDetails: {
+            monthlyIncome: null
+          }
+        }
+      ],
+      borrower: {
+        businessDetails: {
+          monthlyIncome: null
+        }
+      }
+    },
+    {
+      applicant: {
+        businessDetails: {
+          monthlyIncome: '50000.00'
+        }
+      },
+      applicants: [
+        {
+          businessDetails: {
+            monthlyIncome: '50000.00'
+          }
+        }
+      ],
+      borrower: {
+        businessDetails: {
+          monthlyIncome: '50000',
+          entityCategory: 'INDIVIDUAL'
+        },
+        profileDetails: {
+          addressType: 'DELIVERY'
+        }
+      }
+    },
+    'LSP-Eligibility_REQUEST'
+  );
+
+  assert.equal(result.match, true);
+  assert.deepEqual(result.differenceList, []);
+});
+
+test('compareLog skips Themis eligibility replay-enrichment noise but still reports monthlyIncome type mismatches', () => {
+  const result = compareLog(
+    {
+      applicant: {
+        productData: {}
+      },
+      borrower: {
+        businessDetails: {
+          monthlyIncome: '50000.00'
+        }
+      }
+    },
+    {
+      applicant: {},
+      borrower: {
+        businessDetails: {
+          monthlyIncome: '50000',
+          entityCategory: 'INDIVIDUAL'
+        },
+        profileDetails: {
+          addressType: 'DELIVERY'
+        }
+      }
+    },
+    'Themis-Eligibility_REQUEST'
+  );
+
+  assert.equal(result.match, false);
+  assert.deepEqual(result.differenceList, [
+    {
+      path: 'borrower.businessDetails.monthlyIncome',
+      expected: '50000.00',
+      actual: '50000',
+      reason: 'type mismatch',
+      expectedType: 'DOUBLE',
+      actualType: 'INTEGER'
+    }
+  ]);
+});
+
+test('compareLog skips FetchOfferRequest replay-enrichment noise', () => {
+  const result = compareLog(
+    {
+      loanApplication: {
+        applicants: [
+          {
+            productData: null,
+            businessDetails: {
+              monthlyIncome: null
+            }
+          }
+        ],
+        borrower: {
+          organizationDetails: {},
+          businessDetails: {
+            monthlyIncome: null
+          }
+        }
+      }
+    },
+    {
+      loanApplication: {
+        applicants: [
+          {
+            businessDetails: {
+              monthlyIncome: '50000.00'
+            }
+          }
+        ],
+        borrower: {
+          businessDetails: {
+            monthlyIncome: '50000',
+            entityCategory: 'INDIVIDUAL'
+          },
+          profileDetails: {
+            addressType: 'DELIVERY'
+          }
+        }
+      }
+    },
+    'LSP-FetchOfferRequest_REQUEST'
+  );
+
+  assert.equal(result.match, true);
+  assert.deepEqual(result.differenceList, []);
+});
+
+test('compareLog reports numerically equivalent values when numeric types differ outside replay-enrichment skips', () => {
+  const result = compareLog(
+    {
+      borrower: {
+        businessDetails: {
+          monthlyIncome: '50000.00'
+        }
+      }
+    },
+    {
+      borrower: {
+        businessDetails: {
+          monthlyIncome: '50000'
+        }
+      }
+    },
+    'Themis-Eligibility_REQUEST'
+  );
+
+  assert.equal(result.match, false);
+  assert.deepEqual(result.differenceList, [
+    {
+      path: 'borrower.businessDetails.monthlyIncome',
+      expected: '50000.00',
+      actual: '50000',
+      reason: 'type mismatch',
+      expectedType: 'DOUBLE',
+      actualType: 'INTEGER'
+    }
+  ]);
+});

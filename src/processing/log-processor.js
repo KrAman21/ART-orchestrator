@@ -437,17 +437,21 @@ export class LogProcessor {
           }
         }
       } else {
-        if (entry.logTag === 'FlipKart-CreateLoan_REQUEST') {
-          this.logger.info('Adding 1s delay before FlipKart-CreateLoan_REQUEST', {
+        if (entry.logTag === 'FlipKart-CreateLoan_REQUEST' || entry.logTag === 'FlipKart-HardEligibility_REQUEST') {
+          const delayMs = entry.logTag === 'FlipKart-HardEligibility_REQUEST' ? 3000 : 1000;
+          const delayReason = entry.logTag === 'FlipKart-HardEligibility_REQUEST'
+            ? 'hard_eligibility_delay'
+            : 'create_loan_delay';
+          this.logger.info(`Adding ${delayMs}ms delay before ${entry.logTag}`, {
             logTag: entry.logTag,
-            delayMs: 1000
+            delayMs
           });
           const createLoanDelayStart = this.config?.orderProfiler?.enabled ? this.config.orderProfiler.now() : 0;
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, delayMs));
           this.config?.orderProfiler?.endSection('replay_poll_sleep', createLoanDelayStart, {
             currentLogTag: entry.logTag,
             currentLogIndex: entry.index,
-            reason: 'create_loan_delay'
+            reason: delayReason
           });
         }
         const externalRequestStart = this.config?.orderProfiler?.enabled ? this.config.orderProfiler.now() : 0;
