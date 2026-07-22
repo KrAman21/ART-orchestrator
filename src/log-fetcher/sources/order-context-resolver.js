@@ -17,61 +17,6 @@ function pushCandidate(target, value) {
   target.push(normalized);
 }
 
-function pushCandidates(target, value) {
-  if (Array.isArray(value)) {
-    value.forEach(item => pushCandidate(target, item));
-    return;
-  }
-
-  pushCandidate(target, value);
-}
-
-function scanValueForContext(value, bucket) {
-  if (Array.isArray(value)) {
-    value.forEach(item => scanValueForContext(item, bucket));
-    return;
-  }
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed || !['{', '['].includes(trimmed[0])) {
-      return;
-    }
-
-    try {
-      scanValueForContext(JSON.parse(trimmed), bucket);
-    } catch (_error) {
-      // Not every string that starts like JSON is valid JSON. Ignore and keep scanning siblings.
-    }
-    return;
-  }
-
-  if (!value || typeof value !== 'object') {
-    return;
-  }
-
-  for (const [key, nestedValue] of Object.entries(value)) {
-    if (key === 'customerId' || key === 'customer_id' || key === 'merchant_customer_id' || key === 'merchantCustomerId') {
-      pushCandidates(bucket.customerIds, nestedValue);
-    }
-
-    if (
-      key === 'loanApplicationId' ||
-      key === 'loan_application_id' ||
-      key === 'loanApplicationIds' ||
-      key === 'loan_application_ids'
-    ) {
-      pushCandidates(bucket.loanApplicationIds, nestedValue);
-    }
-
-    if (key === 'laid' || key === 'laId' || key === 'la_id') {
-      pushCandidates(bucket.loanApplicationIds, nestedValue);
-    }
-
-    scanValueForContext(nestedValue, bucket);
-  }
-}
-
 function uniqueStrings(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -83,7 +28,18 @@ export function extractReplayContextFromLogs(logs = []) {
   };
 
   for (const log of logs) {
-    scanValueForContext(log, bucket);
+    const message = log?.message;
+    if (!message || typeof message !== 'object') {
+      continue;
+    }
+
+    pushCandidate(bucket.customerIds, message.customer_id);
+    pushCandidate(bucket.customerIds, message.customerId);
+    pushCandidate(bucket.customerIds, message.merchant_customer_id);
+    pushCandidate(bucket.customerIds, message.merchantCustomerId);
+
+    // Only trust the top-level S3 message loan_application_id for replay context.
+    pushCandidate(bucket.loanApplicationIds, message.loan_application_id);
   }
 
   return {

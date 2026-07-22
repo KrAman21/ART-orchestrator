@@ -80,31 +80,80 @@ function getTopLevelOrderIds(logs) {
   return orderIds;
 }
 
+function countTopLevelOrderIds(logs) {
+  const counts = new Map();
+
+  for (const log of Array.isArray(logs) ? logs : []) {
+    const orderId = log?.message?.order_id;
+    if (typeof orderId !== 'string' || !orderId.trim()) {
+      continue;
+    }
+
+    const normalizedOrderId = orderId.trim();
+    counts.set(normalizedOrderId, (counts.get(normalizedOrderId) || 0) + 1);
+  }
+
+  return counts;
+}
+
 export function shouldDiscardLoanApplicationLogSet(orderId, orderLogs, loanApplicationLogs) {
   if (!shouldMergeLoanApplicationLogs(orderLogs, loanApplicationLogs)) {
     return {
       discard: true,
-      reason: 'predates_order_start_time'
+      reason: 'predates_order_start_time',
+      sanitizedLogs: Array.isArray(loanApplicationLogs) ? loanApplicationLogs : []
     };
   }
 
   const topLevelOrderIds = getTopLevelOrderIds(loanApplicationLogs);
+  const topLevelOrderIdCounts = countTopLevelOrderIds(loanApplicationLogs);
   if (
     typeof orderId === 'string' &&
     orderId.trim() &&
     Array.from(topLevelOrderIds).some(loanLogOrderId => loanLogOrderId !== orderId)
   ) {
+    const contaminationThreshold = 5;
+    const foreignOrderIds = Array.from(topLevelOrderIdCounts.entries())
+      .filter(([loanLogOrderId]) => loanLogOrderId !== orderId)
+      .map(([loanLogOrderId, count]) => ({ orderId: loanLogOrderId, count }));
+    const shouldSanitizeOnly = foreignOrderIds.length > 0 &&
+      foreignOrderIds.every(({ count }) => count < contaminationThreshold);
+
+    if (shouldSanitizeOnly) {
+      const sanitizedLogs = (Array.isArray(loanApplicationLogs) ? loanApplicationLogs : [])
+        .filter(log => {
+          const topLevelOrderId = log?.message?.order_id;
+          if (typeof topLevelOrderId !== 'string' || !topLevelOrderId.trim()) {
+            return true;
+          }
+
+          return topLevelOrderId.trim() === orderId;
+        });
+
+      return {
+        discard: false,
+        reason: 'sanitized_mismatched_top_level_order_id',
+        topLevelOrderIds: Array.from(topLevelOrderIds),
+        sanitizedLogs,
+        foreignOrderIdCounts: foreignOrderIds
+      };
+    }
+
     return {
       discard: true,
       reason: 'mismatched_top_level_order_id',
-      topLevelOrderIds: Array.from(topLevelOrderIds)
+      topLevelOrderIds: Array.from(topLevelOrderIds),
+      sanitizedLogs: Array.isArray(loanApplicationLogs) ? loanApplicationLogs : [],
+      foreignOrderIdCounts: foreignOrderIds
     };
   }
 
   return {
     discard: false,
     reason: null,
-    topLevelOrderIds: Array.from(topLevelOrderIds)
+    topLevelOrderIds: Array.from(topLevelOrderIds),
+    sanitizedLogs: Array.isArray(loanApplicationLogs) ? loanApplicationLogs : [],
+    foreignOrderIdCounts: []
   };
 }
 
@@ -163,6 +212,10 @@ function buildFetchAttemptSummary(result, attempt) {
   };
 }
 
+function isSuccessfulEmptyFetch(result) {
+  return Boolean(result?.success) && (result?.count || 0) === 0;
+}
+
 export class MultiSourceLogFetcher {
   constructor(options = {}) {
     this.sessionToken = options.sessionToken || process.env.SESSION_TOKEN || '';
@@ -170,6 +223,7 @@ export class MultiSourceLogFetcher {
     this.delayBetweenRequests = options.delayBetweenRequests || 500;
     this.maxRetries = options.maxRetries || 3;
     this.retryDelay = options.retryDelay || 2000;
+    this.emptyLoanApplicationLogFetchAttempts = options.emptyLoanApplicationLogFetchAttempts || 3;
     this.lspLookupBaseUrl = options.lspLookupBaseUrl || process.env.LSP_LOOKUP_BASE_URL || null;
     this.lspOrderStatusEndpoint = options.lspOrderStatusEndpoint || process.env.LSP_ORDER_STATUS_ENDPOINT || null;
     this.useOrderContextLookup = options.useOrderContextLookup ?? parseBooleanOption(
@@ -213,6 +267,65 @@ export class MultiSourceLogFetcher {
       attempts,
       attemptsUsed: attempts.length,
       exhaustedRetries: true
+    };
+  }
+
+  async fetchLoanApplicationLogsWithRetries(loanApplicationId, retryContext = {}) {
+    const attempts = [];
+
+    for (let attempt = 1; attempt <= this.emptyLoanApplicationLogFetchAttempts; attempt += 1) {
+      const result = await fetchS3TraceLogsByLoanApplicationId(loanApplicationId, this.sessionToken);
+      attempts.push(buildFetchAttemptSummary(result, attempt));
+
+      if (result?.success && !isSuccessfulEmptyFetch(result)) {
+        return {
+          result,
+          attempts,
+          attemptsUsed: attempt,
+          exhaustedRetries: false,
+          exhaustedEmptyLogRetries: false
+        };
+      }
+
+      if (result?.success && isSuccessfulEmptyFetch(result)) {
+        if (attempt < this.emptyLoanApplicationLogFetchAttempts) {
+          logger.warn('Loan application log fetch returned 0 logs, retrying', {
+            ...retryContext,
+            loanApplicationId,
+            attempt,
+            maxAttempts: this.emptyLoanApplicationLogFetchAttempts
+          });
+          await this.sleep(this.retryDelay * attempt);
+          continue;
+        }
+
+        return {
+          result,
+          attempts,
+          attemptsUsed: attempt,
+          exhaustedRetries: false,
+          exhaustedEmptyLogRetries: true
+        };
+      }
+
+      if (attempt < this.emptyLoanApplicationLogFetchAttempts) {
+        logger.warn(`Loan application log fetch failed for ${loanApplicationId}, retrying (${attempt}/${this.emptyLoanApplicationLogFetchAttempts - 1})...`, {
+          ...retryContext,
+          loanApplicationId,
+          attempt,
+          maxAttempts: this.emptyLoanApplicationLogFetchAttempts,
+          error: result?.error || result?.message || 'Unknown fetch failure'
+        });
+        await this.sleep(this.retryDelay * attempt);
+      }
+    }
+
+    return {
+      result: null,
+      attempts,
+      attemptsUsed: attempts.length,
+      exhaustedRetries: true,
+      exhaustedEmptyLogRetries: false
     };
   }
 
@@ -352,10 +465,10 @@ export class MultiSourceLogFetcher {
     const discardedLoanApplicationReasons = [];
     const preservedLoanApplicationIds = [];
     const failedLoanApplicationFetches = [];
+    const emptyLoanApplicationFetches = [];
     for (const loanApplicationId of replayContext.loanApplicationIds) {
-      const loanApplicationFetch = await this.fetchWithRetries(
-        () => fetchS3TraceLogsByLoanApplicationId(loanApplicationId, this.sessionToken),
-        `Loan application log fetch failed for ${loanApplicationId}`,
+      const loanApplicationFetch = await this.fetchLoanApplicationLogsWithRetries(
+        loanApplicationId,
         { merchantId, orderId, loanApplicationId, fetchType: 'loan_application_logs' }
       );
       const loanApplicationResult = loanApplicationFetch.result || {
@@ -372,6 +485,7 @@ export class MultiSourceLogFetcher {
         attemptsUsed: loanApplicationFetch.attemptsUsed,
         count: loanApplicationResult.count || 0,
         error: loanApplicationResult.error || loanApplicationResult.message || null,
+        exhaustedEmptyLogRetries: Boolean(loanApplicationFetch.exhaustedEmptyLogRetries),
         discarded: false,
         discardReason: null
       };
@@ -382,6 +496,15 @@ export class MultiSourceLogFetcher {
         failedLoanApplicationFetches.push({
           loanApplicationId,
           error: loanApplicationFetchInfo.error
+        });
+        await this.sleep(this.delayBetweenRequests);
+        continue;
+      }
+
+      if (loanApplicationFetch.exhaustedEmptyLogRetries) {
+        emptyLoanApplicationFetches.push({
+          loanApplicationId,
+          attemptsUsed: loanApplicationFetch.attemptsUsed
         });
         await this.sleep(this.delayBetweenRequests);
         continue;
@@ -424,7 +547,28 @@ export class MultiSourceLogFetcher {
         loanApplicationFetchInfo.discarded = true;
         loanApplicationFetchInfo.discardReason = loanApplicationDiscardDecision.reason;
       } else {
-        sourceResults.push(loanApplicationResult);
+        const effectiveLoanApplicationResult = loanApplicationResult.success &&
+          loanApplicationDiscardDecision.reason === 'sanitized_mismatched_top_level_order_id'
+          ? {
+            ...loanApplicationResult,
+            logs: loanApplicationDiscardDecision.sanitizedLogs,
+            count: loanApplicationDiscardDecision.sanitizedLogs.length
+          }
+          : loanApplicationResult;
+
+        if (loanApplicationResult.success && loanApplicationDiscardDecision.reason === 'sanitized_mismatched_top_level_order_id') {
+          logger.warn('Discarding only contaminated LAID logs because foreign top-level order_id occurrences are below threshold', {
+            merchantId,
+            orderId,
+            loanApplicationId,
+            originalLogCount: loanApplicationResult.logs.length,
+            sanitizedLogCount: effectiveLoanApplicationResult.logs.length,
+            topLevelOrderIds: loanApplicationDiscardDecision.topLevelOrderIds,
+            foreignOrderIdCounts: loanApplicationDiscardDecision.foreignOrderIdCounts
+          });
+        }
+
+        sourceResults.push(effectiveLoanApplicationResult);
         if (loanApplicationResult.success) {
           preservedLoanApplicationIds.push(loanApplicationId);
         }
@@ -436,6 +580,7 @@ export class MultiSourceLogFetcher {
     fetchDiagnostics.summary.failedLoanApplicationIds = failedLoanApplicationFetches.map(item => item.loanApplicationId);
     fetchDiagnostics.summary.preservedLoanApplicationIds = preservedLoanApplicationIds;
     fetchDiagnostics.summary.discardedLoanApplicationIds = discardedLoanApplicationIds;
+    fetchDiagnostics.summary.emptyLoanApplicationIds = emptyLoanApplicationFetches.map(item => item.loanApplicationId);
 
     if (failedLoanApplicationFetches.length > 0) {
       const error =
@@ -463,6 +608,38 @@ export class MultiSourceLogFetcher {
         discardedLoanApplicationIds,
         discardedLoanApplicationReasons,
         failedLoanApplicationFetches,
+        fetchDiagnostics
+      };
+    }
+
+    if (emptyLoanApplicationFetches.length > 0) {
+      const skipReason =
+        `Skipping order replay because loanApplicationId logs stayed empty after ${this.emptyLoanApplicationLogFetchAttempts} attempts: ` +
+        `${emptyLoanApplicationFetches.map(item => item.loanApplicationId).join(', ')}`;
+
+      logger.warn(skipReason, {
+        merchantId,
+        orderId,
+        emptyLoanApplicationFetches
+      });
+
+      return {
+        success: true,
+        skipped: true,
+        skipReason,
+        logs: [],
+        count: 0,
+        merchantId,
+        orderId,
+        context: {
+          ...replayContext,
+          loanApplicationIds: preservedLoanApplicationIds
+        },
+        sourceCounts: buildSourceCounts(sourceResults),
+        sourceResults,
+        discardedLoanApplicationIds,
+        discardedLoanApplicationReasons,
+        emptyLoanApplicationFetches,
         fetchDiagnostics
       };
     }

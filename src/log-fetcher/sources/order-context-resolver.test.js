@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { extractReplayContextFromLogs } from './order-context-resolver.js';
 
-test('extractReplayContextFromLogs finds unique loan application IDs in objects and JSON trace strings', () => {
+test('extractReplayContextFromLogs only uses top-level S3 message loan_application_id values', () => {
   const logs = [
     {
       message: {
@@ -14,11 +14,24 @@ test('extractReplayContextFromLogs finds unique loan application IDs in objects 
           nested: {
             loanApplicationIds: ['loan-2', 'loan-3']
           }
-        })
+        }),
+        trace_response: {
+          lineDetails: {
+            lineDetailExtensibleData: {
+              referenceId: 'loan-4',
+              journeyData: {
+                steps: [
+                  { loanApplicationId: 'loan-5' }
+                ]
+              }
+            }
+          }
+        }
       }
     },
     {
       message: {
+        loan_application_id: 'loan-1',
         trace_response: {
           loanApplicationId: 'loan-3',
           customerId: 'customer-2'
@@ -35,5 +48,5 @@ test('extractReplayContextFromLogs finds unique loan application IDs in objects 
   const context = extractReplayContextFromLogs(logs);
 
   assert.equal(context.customerId, 'customer-1');
-  assert.deepEqual(context.loanApplicationIds, ['loan-1', 'loan-2', 'loan-3']);
+  assert.deepEqual(context.loanApplicationIds, ['loan-1']);
 });
