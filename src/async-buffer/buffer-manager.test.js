@@ -254,6 +254,52 @@ test('distinguishes repeated CORE->GATEWAY fetchOfferSync calls by plansFilterin
   }
 });
 
+test('does not match LOAN_STATUS_ASYNC_RESPONSE_REQUEST when loanDetails.loanStatus differs', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'req-1',
+      payload: {
+        loanMetadata: {
+          isLenderApproved: true
+        },
+        loanDetails: {
+          loanStatus: 'REPAYMENT_SETUP_COMPLETED'
+        }
+      }
+    }));
+
+    const claimed = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'expected-req-1',
+      loanApplicationId: 'loan-1',
+      lenderOrgId: 'TVS_CREDIT',
+      orderId: 'order-1',
+      payload: {
+        loanMetadata: {
+          isLenderApproved: true
+        },
+        loanDetails: {
+          loanStatus: 'GRANTED'
+        }
+      }
+    }), 30);
+
+    assert.equal(claimed, null);
+  } finally {
+    manager.stop();
+  }
+});
+
 test('preserves gateway lender request as rewind fallback and uses it after short rewind wait', async () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,
@@ -858,6 +904,52 @@ test('getResponseByMetadata finds response with inverted sourceDestination', () 
     assert.ok(found);
     assert.deepEqual(found.response.data, { token: 'abc' });
     assert.equal(manager.responseBuffer.size, 0);
+  } finally {
+    manager.stop();
+  }
+});
+
+test('discardResponsesByMetadata removes only matching error responses', () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    manager.addResponse('resp-error-match', { data: { status: 'FAILURE' } }, true, {
+      logTag: 'FlipKart-CreateLoan_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      orderId: 'order-1',
+      requestId: 'req-1'
+    });
+    manager.addResponse('resp-success-match', { data: { status: 'SUCCESS' } }, false, {
+      logTag: 'FlipKart-CreateLoan_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      orderId: 'order-1',
+      requestId: 'req-1'
+    });
+    manager.addResponse('resp-other-order', { data: { status: 'FAILURE' } }, true, {
+      logTag: 'FlipKart-CreateLoan_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      orderId: 'order-2',
+      requestId: 'req-2'
+    });
+
+    const discarded = manager.discardResponsesByMetadata(
+      'FlipKart-CreateLoan_RESPONSE',
+      'APP_WRAPPER',
+      null,
+      null,
+      null,
+      ['req-1'],
+      'order-1',
+      { onlyErrors: true }
+    );
+
+    assert.deepEqual(discarded.map(entry => entry.requestId), ['resp-error-match']);
+    assert.equal(manager.responseBuffer.has('resp-error-match'), false);
+    assert.equal(manager.responseBuffer.has('resp-success-match'), true);
+    assert.equal(manager.responseBuffer.has('resp-other-order'), true);
   } finally {
     manager.stop();
   }

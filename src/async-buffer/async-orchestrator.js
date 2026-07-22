@@ -16,6 +16,31 @@ const APP_CORE_IMMEDIATE_PAIRED_RESPONSE_LOG_TAGS = new Set([
   'GetAgreementDataRequest_REQUEST'
 ]);
 
+export function getAsyncReplayPreSendDelay(logTag) {
+  if (logTag === 'FlipKart-HardEligibility_REQUEST') {
+    return {
+      delayMs: 3000,
+      delayLabel: 'FlipKart hardEligibility'
+    };
+  }
+
+  if (logTag === 'FlipKart-GetRedirectionURL_REQUEST') {
+    return {
+      delayMs: 1000,
+      delayLabel: 'FlipKart getRedirectionUrl'
+    };
+  }
+
+  if (logTag === 'FlipKart-CreateLoan_REQUEST') {
+    return {
+      delayMs: 2000,
+      delayLabel: 'FlipKart createLoan'
+    };
+  }
+
+  return null;
+}
+
 function resolveWrapperEndpointForMerchant(entry, endpointConfig) {
   if (!entry || entry.sourceDestination !== 'APP_WRAPPER') {
     return endpointConfig?.endpoint || null;
@@ -1717,6 +1742,119 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     return processingPromise;
   }
 
+  hasRetryableCreateLoanFailureForCapture(entry) {
+    if (entry?.logTag !== 'Capture_REQUEST') {
+      return false;
+    }
+
+    const failures = this.httpClient?.failedRequests || [];
+    return failures.some((failure) =>
+      failure?.logTag === 'FlipKart-CreateLoan_REQUEST' &&
+      failure?.errorCode === 'API_CALL_NOT_ALLOWED' &&
+      (!entry?.orderId || !failure?.requestPayload?.order_id || failure.requestPayload.order_id === entry.orderId)
+    );
+  }
+
+  findRelatedCreateLoanEntryForCapture(entry) {
+    if (!entry || !Array.isArray(this.validator?.entries)) {
+      return null;
+    }
+
+    for (let index = entry.index - 1; index >= 0; index -= 1) {
+      const candidate = this.validator.entries[index];
+      if (!candidate || candidate.logTag !== 'FlipKart-CreateLoan_REQUEST') {
+        continue;
+      }
+
+      if (entry.orderId && candidate.orderId && candidate.orderId !== entry.orderId) {
+        continue;
+      }
+
+      return candidate;
+    }
+
+    return null;
+  }
+
+  async maybeRetryCreateLoanAfterCaptureTimeout(entry, timeoutMs) {
+    if (entry?.logTag !== 'Capture_REQUEST') {
+      return null;
+    }
+
+    if (!this.captureTriggeredCreateLoanRetries) {
+      this.captureTriggeredCreateLoanRetries = new Set();
+    }
+
+    const retryKey = `${entry.orderId || this.orderId || 'unknown-order'}:${entry.index}`;
+    if (this.captureTriggeredCreateLoanRetries.has(retryKey)) {
+      return null;
+    }
+
+    if (!this.hasRetryableCreateLoanFailureForCapture(entry)) {
+      return null;
+    }
+
+    const createLoanEntry = this.findRelatedCreateLoanEntryForCapture(entry);
+    if (!createLoanEntry) {
+      logger.warn('Capture replay timeout met retry conditions but no related FlipKart create-loan entry was found', {
+        entry: entry.toString(),
+        orderId: entry.orderId || this.orderId || null
+      });
+      return null;
+    }
+
+    this.captureTriggeredCreateLoanRetries.add(retryKey);
+
+    logger.warn('Retrying FlipKart create-loan once because Capture_REQUEST timed out after API_CALL_NOT_ALLOWED failure', {
+      captureEntry: entry.toString(),
+      createLoanEntry: createLoanEntry.toString(),
+      orderId: entry.orderId || this.orderId || null,
+      timeoutMs,
+      retryDelayMs: 2000
+    });
+
+    const staleCreateLoanResponses = this.bufferManager?.discardResponsesByMetadata?.(
+      'FlipKart-CreateLoan_RESPONSE',
+      createLoanEntry.sourceDestination || 'APP_WRAPPER',
+      createLoanEntry.loanApplicationId || entry.loanApplicationId || null,
+      createLoanEntry.lenderOrgId || entry.lenderOrgId || null,
+      createLoanEntry.clientRequestId || null,
+      [createLoanEntry.requestId, createLoanEntry.xRequestId].filter(Boolean),
+      createLoanEntry.orderId || entry.orderId || this.orderId || null,
+      { onlyErrors: true }
+    ) || [];
+
+    if (staleCreateLoanResponses.length > 0) {
+      logger.info('Discarded stale buffered FlipKart create-loan responses before retrying after Capture_REQUEST timeout', {
+        captureEntry: entry.toString(),
+        createLoanEntry: createLoanEntry.toString(),
+        orderId: entry.orderId || this.orderId || null,
+        discardedCount: staleCreateLoanResponses.length,
+        discardedRequestIds: staleCreateLoanResponses.map(response => response.requestId)
+      });
+    }
+
+    await this.sleep(2000);
+
+    const triggerResult = await this.triggerExternalRequestAsyncWithOptions(createLoanEntry, {
+      advanceValidator: false,
+      tolerateFailure: true,
+      fallbackReason: 'capture_request_timeout_retry_create_loan'
+    });
+
+    if (!triggerResult?.success) {
+      logger.warn('FlipKart create-loan retry trigger did not succeed after Capture_REQUEST timeout', {
+        captureEntry: entry.toString(),
+        createLoanEntry: createLoanEntry.toString(),
+        orderId: entry.orderId || this.orderId || null,
+        error: triggerResult?.error || null
+      });
+    }
+
+    const retriedBufferedRequest = await this.bufferManager.waitForMatchingRequest(entry, timeoutMs);
+    return retriedBufferedRequest || null;
+  }
+
   async _processNextLogEntryInternal(entry) {
     this.maybeRegisterObservedImmediateGatewayLenderSatisfaction(entry);
     this.maybeRegisterObservedImmediateCoreGatewaySatisfaction(entry);
@@ -1862,6 +2000,31 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
             configuredFallbackApis: Array.from(SELF_TRIGGER_FALLBACK_API_LOG_TAGS)
           });
           return this.triggerMissingExpectedRequestFallback(entry, effectiveTimeoutMs);
+        }
+
+        const retriedBuffered = await this.maybeRetryCreateLoanAfterCaptureTimeout(entry, effectiveTimeoutMs);
+        if (retriedBuffered) {
+          try {
+            logger.info('Capture_REQUEST matched after FlipKart create-loan retry', {
+              orderId: this.orderId,
+              expectedEntry: entry.toString(),
+              expectedIndex: entry.index,
+              bufferKey: retriedBuffered.key,
+              bufferedAgeMs: Date.now() - retriedBuffered.timestamp,
+              bufferedRequest: this.bufferManager?.summarizeRequestForDiagnostics?.(retriedBuffered.request) || {
+                source: retriedBuffered.request?.source,
+                destination: retriedBuffered.request?.destination,
+                logTag: retriedBuffered.request?.logTag,
+                requestId: retriedBuffered.request?.requestId || null
+              }
+            });
+            const response = await super.handleIncomingRequest(retriedBuffered.request);
+            this.bufferManager.completeIncomingRequest(retriedBuffered.key, response);
+            return true;
+          } catch (error) {
+            this.bufferManager.failIncomingRequest(retriedBuffered.key, error);
+            throw error;
+          }
         }
 
         logger.warn('ASYNC_ORCH_REPLAY_WAIT_MISSING', {
@@ -2181,14 +2344,9 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         }
       }
 
-      if (
-        entry.logTag === 'FlipKart-GetRedirectionURL_REQUEST' ||
-        entry.logTag === 'FlipKart-HardEligibility_REQUEST'
-      ) {
-        const delayMs = entry.logTag === 'FlipKart-HardEligibility_REQUEST' ? 3000 : 1000;
-        const delayLabel = entry.logTag === 'FlipKart-HardEligibility_REQUEST'
-          ? 'FlipKart hardEligibility'
-          : 'FlipKart getRedirectionUrl';
+      const preSendDelay = getAsyncReplayPreSendDelay(entry.logTag);
+      if (preSendDelay) {
+        const { delayMs, delayLabel } = preSendDelay;
         logger.info(`Applying pre-send delay before ${delayLabel} replay`, {
           requestEntry: entry.toString(),
           requestId: forwardingRequest.requestId,

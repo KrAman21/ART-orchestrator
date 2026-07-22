@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { AsyncReplayOrchestrator, prepareAsyncReplayForwarding } from './async-orchestrator.js';
+import { AsyncReplayOrchestrator, getAsyncReplayPreSendDelay, prepareAsyncReplayForwarding } from './async-orchestrator.js';
 import { LogSequenceValidator } from '../services/log-sequence-validator.js';
 import { StateManager } from '../services/state-manager.js';
 
@@ -39,6 +39,92 @@ test('uses 40 second wait timeout for skippable FETCH_OFFER_ASYNC_RESPONSE_REQUE
 
   const timeoutMs = orchestrator.getRequestWaitTimeoutMs(entry);
   assert.equal(timeoutMs, 40000);
+});
+
+test('getAsyncReplayPreSendDelay returns 2 second delay for FlipKart create-loan replay', () => {
+  assert.deepEqual(getAsyncReplayPreSendDelay('FlipKart-CreateLoan_REQUEST'), {
+    delayMs: 2000,
+    delayLabel: 'FlipKart createLoan'
+  });
+
+  assert.equal(getAsyncReplayPreSendDelay('SomeOther_REQUEST'), null);
+});
+
+test('maybeRetryCreateLoanAfterCaptureTimeout retries related create-loan once after API_CALL_NOT_ALLOWED failure', async () => {
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  const createLoanEntry = {
+    index: 101,
+    logTag: 'FlipKart-CreateLoan_REQUEST',
+    orderId: 'order-1',
+    requestId: 'create-loan-req-1',
+    sourceDestination: 'APP_WRAPPER',
+    toString: () => '[101] FlipKart-CreateLoan_REQUEST APP→WRAPPER'
+  };
+  const captureEntry = {
+    index: 105,
+    logTag: 'Capture_REQUEST',
+    orderId: 'order-1',
+    toString: () => '[105] Capture_REQUEST CORE→GATEWAY'
+  };
+  const waitedTimeouts = [];
+  const triggeredFallbackReasons = [];
+  const discardedBuffers = [];
+
+  orchestrator.orderId = 'order-1';
+  orchestrator.validator = {
+    entries: [createLoanEntry, captureEntry]
+  };
+  orchestrator.httpClient = {
+    failedRequests: [
+      {
+        logTag: 'FlipKart-CreateLoan_REQUEST',
+        errorCode: 'API_CALL_NOT_ALLOWED',
+        requestPayload: {
+          order_id: 'order-1'
+        }
+      }
+    ]
+  };
+  orchestrator.bufferManager = {
+    discardResponsesByMetadata: (...args) => {
+      discardedBuffers.push(args);
+      return [{ requestId: 'create-loan-req-1', isError: true }];
+    },
+    waitForMatchingRequest: async (_entry, timeoutMs) => {
+      waitedTimeouts.push(timeoutMs);
+      return { key: 'buffered-key', request: { requestId: 'capture-live-1' }, timestamp: Date.now() };
+    }
+  };
+  orchestrator.sleep = async (ms) => {
+    waitedTimeouts.push(ms);
+  };
+  orchestrator.triggerExternalRequestAsyncWithOptions = async (entry, options = {}) => {
+    triggeredFallbackReasons.push({ entry, fallbackReason: options.fallbackReason });
+    return { success: true };
+  };
+
+  const retried = await orchestrator.maybeRetryCreateLoanAfterCaptureTimeout(captureEntry, 9000);
+
+  assert.equal(retried?.key, 'buffered-key');
+  assert.deepEqual(waitedTimeouts, [2000, 9000]);
+  assert.equal(triggeredFallbackReasons.length, 1);
+  assert.equal(discardedBuffers.length, 1);
+  assert.deepEqual(discardedBuffers[0], [
+    'FlipKart-CreateLoan_RESPONSE',
+    'APP_WRAPPER',
+    null,
+    null,
+    null,
+    ['create-loan-req-1'],
+    'order-1',
+    { onlyErrors: true }
+  ]);
+  assert.equal(triggeredFallbackReasons[0].entry, createLoanEntry);
+  assert.equal(triggeredFallbackReasons[0].fallbackReason, 'capture_request_timeout_retry_create_loan');
+
+  const secondAttempt = await orchestrator.maybeRetryCreateLoanAfterCaptureTimeout(captureEntry, 9000);
+  assert.equal(secondAttempt, null);
+  assert.equal(triggeredFallbackReasons.length, 1);
 });
 
 test('uses 9 second wait timeout for self-trigger fallback LOAN_STATUS_ASYNC_RESPONSE_REQUEST branch', () => {

@@ -30,6 +30,12 @@ function getPayloadDisambiguator(value, key) {
   return null;
 }
 
+const STRICT_REQUEST_PAYLOAD_MATCH_RULES = {
+  LOAN_STATUS_ASYNC_RESPONSE_REQUEST: [
+    'loanDetails.loanStatus'
+  ]
+};
+
 export class BufferManager {
   constructor(config = {}) {
     this.incomingRequests = new Map();
@@ -695,6 +701,63 @@ export class BufferManager {
     return best.entry;
   }
 
+  discardResponsesByMetadata(
+    logTag,
+    sourceDestination,
+    loanApplicationId = null,
+    lenderOrgId = null,
+    clientRequestId = null,
+    requestIds = [],
+    orderId = null,
+    options = {}
+  ) {
+    const {
+      onlyErrors = false
+    } = options;
+    const identifiers = {
+      clientRequestId,
+      loanApplicationId,
+      lenderOrgId,
+      orderId,
+      requestIds: (requestIds || []).filter(Boolean)
+    };
+    const discarded = [];
+
+    while (true) {
+      const best = this._findBestResponseCandidate(logTag, sourceDestination, identifiers);
+      if (!best) {
+        break;
+      }
+
+      if (onlyErrors && !best.entry?.isError) {
+        break;
+      }
+
+      this.responseBuffer.delete(best.requestId);
+      discarded.push({
+        requestId: best.requestId,
+        isError: Boolean(best.entry?.isError),
+        metadata: best.entry?.metadata || {}
+      });
+    }
+
+    if (discarded.length > 0) {
+      logger.info('Discarded buffered responses by metadata', {
+        logTag,
+        sourceDestination,
+        clientRequestId,
+        loanApplicationId,
+        lenderOrgId,
+        orderId,
+        requestIds: identifiers.requestIds,
+        onlyErrors,
+        discarded
+      });
+    }
+
+    return discarded;
+  }
+
   _normalizeLogTag(tag) {
     return (tag || '')
       .replace(/_REQUEST$/i, '')
@@ -1140,6 +1203,25 @@ export class BufferManager {
     return score;
   }
 
+  _getStrictPayloadMismatch(expectedPayload, actualPayload, logTag) {
+    const requiredPaths = STRICT_REQUEST_PAYLOAD_MATCH_RULES[canonicalRequestLogTag(logTag)] || [];
+
+    for (const path of requiredPaths) {
+      const expectedValue = this._getNestedValue(expectedPayload, path);
+      const actualValue = this._getNestedValue(actualPayload, path);
+
+      if (expectedValue === undefined || actualValue === undefined) {
+        continue;
+      }
+
+      if (expectedValue !== actualValue) {
+        return `${path} mismatch: ${actualValue} !== ${expectedValue}`;
+      }
+    }
+
+    return null;
+  }
+
   _buildExpectedEntryMatchDetails(leftExpectedEntry, rightExpectedEntry) {
     const mismatchReason = this._getRequestShapeMismatch(leftExpectedEntry, rightExpectedEntry);
     if (mismatchReason) {
@@ -1268,6 +1350,23 @@ export class BufferManager {
 
     let differenceCount = 0;
     if (expectedEntry.payload && incoming.payload) {
+      const strictPayloadMismatch = this._getStrictPayloadMismatch(
+        expectedEntry.payload,
+        incoming.payload,
+        expectedEntry.logTag
+      );
+
+      if (strictPayloadMismatch) {
+        return {
+          matches: false,
+          score: Number.NEGATIVE_INFINITY,
+          differenceCount: Number.POSITIVE_INFINITY,
+          exactSignals,
+          exactMatchCount: exactSignals.length,
+          mismatchReason: strictPayloadMismatch
+        };
+      }
+
       const comparison = compareLog(expectedEntry.payload, incoming.payload, expectedEntry.logTag);
       differenceCount = comparison.differenceList?.length || 0;
       score -= differenceCount;
