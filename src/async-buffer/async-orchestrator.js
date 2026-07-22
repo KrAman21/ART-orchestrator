@@ -87,6 +87,34 @@ function extractOpportunityId(value) {
   return null;
 }
 
+function extractRefundTxnId(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (typeof value.refund_txn_id === 'string' && value.refund_txn_id) {
+    return value.refund_txn_id;
+  }
+
+  if (typeof value.refundTxnId === 'string' && value.refundTxnId) {
+    return value.refundTxnId;
+  }
+
+  if (value.payload && typeof value.payload === 'object') {
+    return extractRefundTxnId(value.payload);
+  }
+
+  if (value.body && typeof value.body === 'object') {
+    return extractRefundTxnId(value.body);
+  }
+
+  if (value.trace_request && typeof value.trace_request === 'object') {
+    return extractRefundTxnId(value.trace_request);
+  }
+
+  return null;
+}
+
 function normalizeHdbWebhookLoanApplicationIdentifiers(remapped, forcedLoanApplicationId = null) {
   if (!remapped || typeof remapped !== 'object') {
     return remapped;
@@ -1855,6 +1883,111 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     return retriedBufferedRequest || null;
   }
 
+  findRefundStatusTriggerFetchStatusEntry(entry) {
+    if (entry?.logTag !== 'LSP-RefundStatusV2_REQUEST') {
+      return null;
+    }
+
+    const entries = this.validator?.entries || [];
+    const orderId = entry.orderId || this.orderId || null;
+    const refundTxnId = extractRefundTxnId(entry.payload) || extractRefundTxnId(entry.message) || null;
+    const entryIndex = entry.index ?? -1;
+    const candidates = [];
+
+    for (const candidate of entries) {
+      if (!candidate || candidate.logTag !== 'FlipKart-FetchStatus_REQUEST') {
+        continue;
+      }
+
+      const candidateIndex = candidate.index ?? -1;
+      if (candidateIndex <= entryIndex) {
+        continue;
+      }
+
+      const candidateRefundTxnId =
+        extractRefundTxnId(candidate.payload) ||
+        extractRefundTxnId(candidate.message) ||
+        null;
+
+      if (!candidateRefundTxnId) {
+        continue;
+      }
+
+      const sameOrder = !orderId || !candidate.orderId || candidate.orderId === orderId;
+      const sameRefundTxn = !refundTxnId || candidateRefundTxnId === refundTxnId;
+      if (!sameOrder || !sameRefundTxn) {
+        continue;
+      }
+
+      candidates.push(candidate);
+    }
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    candidates.sort((left, right) => (left.index ?? 0) - (right.index ?? 0));
+
+    return candidates[0];
+  }
+
+  async maybeTriggerRefundStatusFetchStatusFallback(entry, timeoutMs) {
+    if (entry?.logTag !== 'LSP-RefundStatusV2_REQUEST') {
+      return null;
+    }
+
+    if (!this.refundStatusTriggeredFetchStatusRetries) {
+      this.refundStatusTriggeredFetchStatusRetries = new Set();
+    }
+
+    const retryKey = `${entry.orderId || this.orderId || 'unknown-order'}:${entry.index}`;
+    if (this.refundStatusTriggeredFetchStatusRetries.has(retryKey)) {
+      return null;
+    }
+
+    const fetchStatusEntry = this.findRefundStatusTriggerFetchStatusEntry(entry);
+    if (!fetchStatusEntry) {
+      logger.warn('Refund-status replay timeout did not find a matching FlipKart fetch-status trigger with refund_txn_id', {
+        entry: entry.toString(),
+        orderId: entry.orderId || this.orderId || null,
+        refundTxnId: extractRefundTxnId(entry.payload) || extractRefundTxnId(entry.message) || null
+      });
+      return null;
+    }
+
+    this.refundStatusTriggeredFetchStatusRetries.add(retryKey);
+
+    logger.warn('Retrying refund-status replay by triggering matching FlipKart fetch-status request with refund_txn_id', {
+      refundStatusEntry: entry.toString(),
+      fetchStatusEntry: fetchStatusEntry.toString(),
+      orderId: entry.orderId || this.orderId || null,
+      refundTxnId:
+        extractRefundTxnId(fetchStatusEntry.payload) ||
+        extractRefundTxnId(fetchStatusEntry.message) ||
+        extractRefundTxnId(entry.payload) ||
+        null,
+      timeoutMs
+    });
+
+    const triggerResult = await this.triggerExternalRequestAsyncWithOptions(fetchStatusEntry, {
+      advanceValidator: false,
+      tolerateFailure: true,
+      fallbackReason: 'refund_status_wait_retry_fetch_status'
+    });
+
+    if (!triggerResult?.success) {
+      logger.warn('FlipKart fetch-status retry trigger did not succeed while waiting for refund-status request', {
+        refundStatusEntry: entry.toString(),
+        fetchStatusEntry: fetchStatusEntry.toString(),
+        orderId: entry.orderId || this.orderId || null,
+        error: triggerResult?.error || null
+      });
+    }
+
+    const retriedBufferedRequest = await this.bufferManager.waitForMatchingRequest(entry, timeoutMs);
+    return retriedBufferedRequest || null;
+  }
+
   async _processNextLogEntryInternal(entry) {
     this.maybeRegisterObservedImmediateGatewayLenderSatisfaction(entry);
     this.maybeRegisterObservedImmediateCoreGatewaySatisfaction(entry);
@@ -2023,6 +2156,31 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
             return true;
           } catch (error) {
             this.bufferManager.failIncomingRequest(retriedBuffered.key, error);
+            throw error;
+          }
+        }
+
+        const refundRetriedBuffered = await this.maybeTriggerRefundStatusFetchStatusFallback(entry, effectiveTimeoutMs);
+        if (refundRetriedBuffered) {
+          try {
+            logger.info('LSP-RefundStatusV2_REQUEST matched after triggering FlipKart fetch-status retry with refund_txn_id', {
+              orderId: this.orderId,
+              expectedEntry: entry.toString(),
+              expectedIndex: entry.index,
+              bufferKey: refundRetriedBuffered.key,
+              bufferedAgeMs: Date.now() - refundRetriedBuffered.timestamp,
+              bufferedRequest: this.bufferManager?.summarizeRequestForDiagnostics?.(refundRetriedBuffered.request) || {
+                source: refundRetriedBuffered.request?.source,
+                destination: refundRetriedBuffered.request?.destination,
+                logTag: refundRetriedBuffered.request?.logTag,
+                requestId: refundRetriedBuffered.request?.requestId || null
+              }
+            });
+            const response = await super.handleIncomingRequest(refundRetriedBuffered.request);
+            this.bufferManager.completeIncomingRequest(refundRetriedBuffered.key, response);
+            return true;
+          } catch (error) {
+            this.bufferManager.failIncomingRequest(refundRetriedBuffered.key, error);
             throw error;
           }
         }

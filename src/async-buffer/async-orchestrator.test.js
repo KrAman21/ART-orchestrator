@@ -127,6 +127,71 @@ test('maybeRetryCreateLoanAfterCaptureTimeout retries related create-loan once a
   assert.equal(triggeredFallbackReasons.length, 1);
 });
 
+test('maybeTriggerRefundStatusFetchStatusFallback triggers matching fetch-status with refund txn id and waits for refund request', async () => {
+  const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
+  const earlierFetchStatusEntry = {
+    index: 30,
+    logTag: 'FlipKart-FetchStatus_REQUEST',
+    orderId: 'order-1',
+    sourceDestination: 'APP_WRAPPER',
+    payload: {
+      refund_txn_id: 'refund-1',
+      order_id: 'order-1'
+    },
+    toString: () => '[30] FlipKart-FetchStatus_REQUEST APP→WRAPPER'
+  };
+  const refundStatusEntry = {
+    index: 32,
+    logTag: 'LSP-RefundStatusV2_REQUEST',
+    orderId: 'order-1',
+    payload: {
+      refund_txn_id: 'refund-1'
+    },
+    toString: () => '[32] LSP-RefundStatusV2_REQUEST CORE→GATEWAY'
+  };
+  const laterFetchStatusEntry = {
+    index: 36,
+    logTag: 'FlipKart-FetchStatus_REQUEST',
+    orderId: 'order-1',
+    sourceDestination: 'APP_WRAPPER',
+    payload: {
+      refund_txn_id: 'refund-1',
+      order_id: 'order-1'
+    },
+    toString: () => '[36] FlipKart-FetchStatus_REQUEST APP→WRAPPER'
+  };
+  const waitedTimeouts = [];
+  const triggeredFallbackReasons = [];
+
+  orchestrator.orderId = 'order-1';
+  orchestrator.validator = {
+    entries: [earlierFetchStatusEntry, refundStatusEntry, laterFetchStatusEntry]
+  };
+  orchestrator.bufferManager = {
+    waitForMatchingRequest: async (_entry, timeoutMs) => {
+      waitedTimeouts.push(timeoutMs);
+      return { key: 'buffered-refund-key', request: { requestId: 'refund-live-1' }, timestamp: Date.now() };
+    }
+  };
+  orchestrator.triggerExternalRequestAsyncWithOptions = async (entry, options = {}) => {
+    triggeredFallbackReasons.push({ entry, fallbackReason: options.fallbackReason, advanceValidator: options.advanceValidator });
+    return { success: true };
+  };
+
+  const retried = await orchestrator.maybeTriggerRefundStatusFetchStatusFallback(refundStatusEntry, 10000);
+
+  assert.equal(retried?.key, 'buffered-refund-key');
+  assert.deepEqual(waitedTimeouts, [10000]);
+  assert.equal(triggeredFallbackReasons.length, 1);
+  assert.equal(triggeredFallbackReasons[0].entry, laterFetchStatusEntry);
+  assert.equal(triggeredFallbackReasons[0].fallbackReason, 'refund_status_wait_retry_fetch_status');
+  assert.equal(triggeredFallbackReasons[0].advanceValidator, false);
+
+  const secondAttempt = await orchestrator.maybeTriggerRefundStatusFetchStatusFallback(refundStatusEntry, 10000);
+  assert.equal(secondAttempt, null);
+  assert.equal(triggeredFallbackReasons.length, 1);
+});
+
 test('uses 9 second wait timeout for self-trigger fallback LOAN_STATUS_ASYNC_RESPONSE_REQUEST branch', () => {
   const orchestrator = Object.create(AsyncReplayOrchestrator.prototype);
   orchestrator.config = {
