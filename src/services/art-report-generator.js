@@ -780,11 +780,6 @@ export class ArtReportGenerator {
     const ordersWithBufferFailures = this.orders.filter(o => (o.bufferFailures || []).length > 0).length;
     const totalFailedLogs = this.orders.reduce((acc, order) => acc + (order.diagnostics?.failedLogsCount || order.artResults?.failed || 0), 0);
     const totalTimeoutLogs = this.orders.reduce((acc, order) => acc + (order.diagnostics?.timeoutLogsCount || 0), 0);
-    const totalPayloadComparisons = this.orders.reduce((acc, order) => acc + (order.artResults?.payloadComparisons?.length || 0), 0);
-    const totalPayloadMismatches = this.orders.reduce(
-      (acc, order) => acc + (order.artResults?.payloadComparisons?.filter((comparison) => (comparison.differenceCount || 0) > 0).length || 0),
-      0
-    );
     const totalFallbackRecoveries = this.orders.reduce((acc, order) => acc + (order.fallbackRecoveries?.length || 0), 0);
     const totalUnexpectedActualApis = this.orders.reduce((acc, order) => acc + (order.unexpectedActualApis?.length || 0), 0);
 
@@ -808,6 +803,14 @@ export class ArtReportGenerator {
     const payloadComparisons = this.orders
       .map((order) => this.buildPayloadComparisons(order))
       .filter((order) => order.comparisons.length > 0);
+    const totalPayloadComparisons = this.orders.reduce(
+      (acc, order) => acc + (order.artResults?.payloadComparisons?.length || 0),
+      0
+    );
+    const totalPayloadMismatches = payloadComparisons.reduce(
+      (acc, order) => acc + (order.comparisons?.length || 0),
+      0
+    );
     const unexpectedActualApis = this.orders
       .map((order) => this.buildUnexpectedActualApis(order))
       .filter((order) => order.apis.length > 0);

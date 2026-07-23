@@ -1629,23 +1629,6 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       }
     }
 
-    if (
-      !buffered &&
-      currentEntry.sourceDestination === 'APP_WRAPPER' &&
-      this.bufferManager?.responseBuffer?.size === 1
-    ) {
-      const [[fallbackRequestId, fallbackEntry]] = this.bufferManager.responseBuffer.entries();
-      this.bufferManager.responseBuffer.delete(fallbackRequestId);
-      buffered = fallbackEntry;
-      requestId = fallbackRequestId;
-
-      logger.info('Using sole buffered APP_WRAPPER response as fallback match', {
-        entry: currentEntry.toString(),
-        requestEntry: requestEntry?.toString?.() || null,
-        fallbackRequestId
-      });
-    }
-    
     if (!buffered) {
       logger.info('Response not yet in buffer', {
         requestIds,
@@ -1985,6 +1968,17 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     }
 
     const retriedBufferedRequest = await this.bufferManager.waitForMatchingRequest(entry, timeoutMs);
+    if (retriedBufferedRequest) {
+      this.bufferManager?.discardResponsesByMetadata?.(
+        fetchStatusEntry.logTag,
+        fetchStatusEntry.sourceDestination,
+        fetchStatusEntry.loanApplicationId || null,
+        fetchStatusEntry.lenderOrgId || null,
+        fetchStatusEntry.clientRequestId || null,
+        [fetchStatusEntry.requestId, fetchStatusEntry.xRequestId].filter(Boolean),
+        fetchStatusEntry.orderId || entry.orderId || this.orderId || null
+      );
+    }
     return retriedBufferedRequest || null;
   }
 
@@ -2589,6 +2583,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
 
   async triggerMissingExpectedRequestFallback(entry, timeoutMs) {
     const responseEntry = this.findCorrespondingResponse(entry, true);
+    const bufferedGatewayRequest =
+      entry?.source === 'GATEWAY' && entry?.destination === 'LSP'
+        ? this.bufferManager?.findOldestBufferedRequestByShape?.(entry) || null
+        : null;
     const recoveryInfo = {
       type: 'SELF_TRIGGER_FALLBACK',
       logTag: entry.logTag,
@@ -2624,6 +2622,21 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     this.validator.markProcessed(entry);
     if (responseEntry) {
       this.validator.markProcessed(responseEntry);
+    }
+
+    if (bufferedGatewayRequest && responseEntry && this.bufferManager?.completeIncomingRequest) {
+      const replayResponse = {
+        success: true,
+        payload: transformRequest(responseEntry.payload, responseEntry.logTag)
+      };
+      this.bufferManager.completeIncomingRequest(bufferedGatewayRequest.key, replayResponse);
+      logger.info('Resolved buffered GATEWAY->LSP request from self-trigger fallback replay response', {
+        requestEntry: entry.toString(),
+        responseEntry: responseEntry.toString(),
+        bufferKey: bufferedGatewayRequest.key,
+        bufferedRequestId: bufferedGatewayRequest.request?.requestId || null,
+        bufferedLogTag: bufferedGatewayRequest.request?.logTag || null
+      });
     }
 
     this.bufferManager?.skipWaiter?.(entry);

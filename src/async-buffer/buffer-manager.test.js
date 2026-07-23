@@ -300,6 +300,56 @@ test('does not match LOAN_STATUS_ASYNC_RESPONSE_REQUEST when loanDetails.loanSta
   }
 });
 
+test('repeated LOAN_STATUS_ASYNC_RESPONSE_REQUEST calls are disambiguated by payload metadata traceId', async () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    const first = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'req-1',
+      payload: {
+        metadata: { traceId: 'trace-1' },
+        loanDetails: { loanStatus: 'ACTIVE' }
+      }
+    }));
+
+    const second = await manager.addIncomingRequest(createIncomingRequest({
+      logTag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'req-2',
+      payload: {
+        metadata: { traceId: 'trace-2' },
+        loanDetails: { loanStatus: 'ACTIVE' }
+      }
+    }));
+
+    const claimed = await manager.waitForMatchingRequest(createExpectedEntry({
+      logTag: 'LOAN_STATUS_ASYNC_RESPONSE_REQUEST',
+      source: 'GATEWAY',
+      destination: 'LSP',
+      requestId: 'expected-req',
+      traceId: 'trace-2',
+      payload: {
+        metadata: { traceId: 'trace-2' },
+        loanDetails: { loanStatus: 'ACTIVE' }
+      }
+    }), 50);
+
+    assert.ok(claimed);
+    assert.equal(claimed.key, second.key);
+    assert.equal(claimed.request.requestId, 'req-2');
+    assert.equal(manager.incomingRequests.get(first.key)?.state, 'buffered');
+  } finally {
+    manager.stop();
+  }
+});
+
 test('preserves gateway lender request as rewind fallback and uses it after short rewind wait', async () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,
@@ -1272,6 +1322,38 @@ test('getResponseByMetadata can disambiguate using orderId when other ids are ab
 
     assert.ok(found);
     assert.deepEqual(found.response.data, { picked: 'B' });
+    assert.equal(manager.responseBuffer.size, 1);
+  } finally {
+    manager.stop();
+  }
+});
+
+test('getResponseByMetadata does not fall back to same-tag stale response when correlation ids are present but do not match', () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    manager.addResponse('resp-stale', { data: { picked: 'stale' } }, false, {
+      requestId: 'older-request-id',
+      logTag: 'FlipKart-FetchStatus_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'client-old',
+      orderId: 'order-1'
+    });
+
+    const found = manager.getResponseByMetadata(
+      'FlipKart-FetchStatus_RESPONSE',
+      'APP_WRAPPER',
+      null,
+      null,
+      'client-new',
+      ['latest-request-id'],
+      'order-1'
+    );
+
+    assert.equal(found, null);
     assert.equal(manager.responseBuffer.size, 1);
   } finally {
     manager.stop();

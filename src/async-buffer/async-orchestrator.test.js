@@ -162,6 +162,7 @@ test('maybeTriggerRefundStatusFetchStatusFallback triggers matching fetch-status
   };
   const waitedTimeouts = [];
   const triggeredFallbackReasons = [];
+  const discardedResponses = [];
 
   orchestrator.orderId = 'order-1';
   orchestrator.validator = {
@@ -171,6 +172,10 @@ test('maybeTriggerRefundStatusFetchStatusFallback triggers matching fetch-status
     waitForMatchingRequest: async (_entry, timeoutMs) => {
       waitedTimeouts.push(timeoutMs);
       return { key: 'buffered-refund-key', request: { requestId: 'refund-live-1' }, timestamp: Date.now() };
+    },
+    discardResponsesByMetadata: (...args) => {
+      discardedResponses.push(args);
+      return [];
     }
   };
   orchestrator.triggerExternalRequestAsyncWithOptions = async (entry, options = {}) => {
@@ -186,6 +191,15 @@ test('maybeTriggerRefundStatusFetchStatusFallback triggers matching fetch-status
   assert.equal(triggeredFallbackReasons[0].entry, laterFetchStatusEntry);
   assert.equal(triggeredFallbackReasons[0].fallbackReason, 'refund_status_wait_retry_fetch_status');
   assert.equal(triggeredFallbackReasons[0].advanceValidator, false);
+  assert.deepEqual(discardedResponses, [[
+    'FlipKart-FetchStatus_REQUEST',
+    'APP_WRAPPER',
+    null,
+    null,
+    null,
+    [],
+    'order-1'
+  ]]);
 
   const secondAttempt = await orchestrator.maybeTriggerRefundStatusFetchStatusFallback(refundStatusEntry, 10000);
   assert.equal(secondAttempt, null);

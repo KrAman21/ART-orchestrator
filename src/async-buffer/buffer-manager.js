@@ -200,7 +200,14 @@ export class BufferManager {
       outerRequestId,
       payloadRequestId,
       clientRequestId: request.clientRequestId || request.client_request_id || request.payload?.clientRequestId || request.payload?.client_request_id || null,
-      traceId: request.traceId || request.trace_id || request.payload?.traceId || request.payload?.trace_id || null,
+      traceId:
+        request.traceId ||
+        request.trace_id ||
+        request.payload?.traceId ||
+        request.payload?.trace_id ||
+        request.payload?.metadata?.traceId ||
+        request.payload?.metadata?.trace_id ||
+        null,
       sequenceId: request.sequenceId || request.sequence_id || request.headers?.['x-sequence-id'] || null,
       loanApplicationId: request.loanApplicationId || request.loan_application_id || request.payload?.loanApplicationId || request.payload?.loan_application_id || null,
       lenderOrgId: request.lenderOrgId || request.lender_org_id || request.payload?.lenderOrgId || request.payload?.lender_org_id || request.payload?.themisDetail?.lenderOrgId || null,
@@ -791,29 +798,54 @@ export class BufferManager {
 
       const exactMatches = [];
       const partialMatches = [];
+      const conflictingMatches = [];
 
       if (identifiers.clientRequestId && meta.clientRequestId === identifiers.clientRequestId) {
         exactMatches.push('clientRequestId');
+      } else if (identifiers.clientRequestId && meta.clientRequestId) {
+        conflictingMatches.push('clientRequestId');
       }
 
       if (identifiers.loanApplicationId && meta.loanApplicationId === identifiers.loanApplicationId) {
         exactMatches.push('loanApplicationId');
+      } else if (identifiers.loanApplicationId && meta.loanApplicationId) {
+        conflictingMatches.push('loanApplicationId');
       }
 
       if (identifiers.lenderOrgId && meta.lenderOrgId === identifiers.lenderOrgId) {
         exactMatches.push('lenderOrgId');
+      } else if (identifiers.lenderOrgId && meta.lenderOrgId) {
+        conflictingMatches.push('lenderOrgId');
       }
 
       if (identifiers.orderId && meta.orderId === identifiers.orderId) {
         exactMatches.push('orderId');
+      } else if (identifiers.orderId && meta.orderId) {
+        conflictingMatches.push('orderId');
       }
 
       if (requestIds.length > 0) {
         if (requestIds.includes(requestId) || requestIds.includes(meta.requestId)) {
           exactMatches.push('requestId');
         } else if (meta.requestId) {
-          partialMatches.push('hasRequestId');
+          conflictingMatches.push('requestId');
         }
+      }
+
+      const hasStrongExactMatch = (
+        exactMatches.includes('clientRequestId') ||
+        exactMatches.includes('loanApplicationId') ||
+        exactMatches.includes('lenderOrgId')
+      );
+      const disqualifyingConflicts = conflictingMatches.filter(signal => {
+        if (signal === 'requestId' && hasStrongExactMatch) {
+          return false;
+        }
+        return true;
+      });
+
+      if (disqualifyingConflicts.length > 0) {
+        continue;
       }
 
       let score = metaSD === sourceDestination ? 30 : 20;
@@ -822,7 +854,6 @@ export class BufferManager {
       if (exactMatches.includes('lenderOrgId')) score += 50;
       if (exactMatches.includes('orderId')) score += 40;
       if (exactMatches.includes('requestId')) score += 35;
-      if (partialMatches.includes('hasRequestId')) score += 5;
 
       candidates.push({
         requestId,
@@ -1077,6 +1108,29 @@ export class BufferManager {
     }
 
     return false;
+  }
+
+  findOldestBufferedRequestByShape(expectedEntry) {
+    const candidates = [];
+
+    for (const [key, entry] of this.incomingRequests) {
+      if (entry.state !== 'buffered') {
+        continue;
+      }
+
+      if (this._getRequestShapeMismatch(entry.request, expectedEntry)) {
+        continue;
+      }
+
+      candidates.push({ key, entry });
+    }
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    candidates.sort((a, b) => a.entry.timestamp - b.entry.timestamp);
+    return candidates[0].entry;
   }
   
   _matchesRequest(incoming, expected) {
