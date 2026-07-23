@@ -791,6 +791,7 @@ export class BufferManager {
       const metaTag = this._normalizeLogTag(meta.logTag);
 
       if (metaTag !== baseTag) continue;
+      if (meta.nonComparableForReplay) continue;
 
       const metaSD = meta.sourceDestination;
       const sdMatch = metaSD === sourceDestination || metaSD === invertedSD;

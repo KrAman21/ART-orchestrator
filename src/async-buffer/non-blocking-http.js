@@ -4,6 +4,14 @@ import {
 } from '../services/http-client.js';
 import { logger } from '../utils/logger.js';
 
+function buildResponseBufferKey(requestId, fallbackReason = null) {
+  if (!fallbackReason) {
+    return requestId;
+  }
+
+  return `${requestId}::helper::${fallbackReason}`;
+}
+
 export class NonBlockingHttpClient {
   constructor(bufferManager, reportGenerator = null, orderId = null, options = {}) {
     this.bufferManager = bufferManager;
@@ -17,12 +25,16 @@ export class NonBlockingHttpClient {
       options.buildFailureFallbackResponse || (() => null);
   }
   
-  async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, loanApplicationId = null, lenderOrgId = null, clientRequestId = null) {
+  async send(baseUrl, endpoint, method, payload, requestId, sourceDestination, logTag, merchantId, customHeaders = {}, logIndex = null, unixSocket = null, loanApplicationId = null, lenderOrgId = null, clientRequestId = null, options = {}) {
+    const {
+      fallbackReason = null
+    } = options;
     logger.info('Non-blocking HTTP send initiated', {
       requestId,
       logTag,
       sourceDestination,
-      endpoint
+      endpoint,
+      fallbackReason
     });
     
     const requestPromise = blockingMakeRequest(
@@ -53,7 +65,8 @@ export class NonBlockingHttpClient {
       logIndex,
       loanApplicationId,
       lenderOrgId,
-      clientRequestId
+      clientRequestId,
+      fallbackReason
     });
     
     requestPromise.then(response => {
@@ -109,6 +122,7 @@ export class NonBlockingHttpClient {
       if (hasFailure) {
         const fallbackResponse = this.buildFailureFallbackResponse(activeReq, response, apiFailure, null);
         if (fallbackResponse?.response) {
+          const responseBufferKey = buildResponseBufferKey(requestId, fallbackResponse.reason || null);
           logger.warn('Non-blocking request failure tolerated via replay fallback response', {
             requestId,
             logTag,
@@ -116,7 +130,7 @@ export class NonBlockingHttpClient {
             apiFailure,
             fallbackReason: fallbackResponse.reason || 'replay_fallback_response'
           });
-          this.bufferManager.addResponse(requestId, fallbackResponse.response, false, {
+          this.bufferManager.addResponse(responseBufferKey, fallbackResponse.response, false, {
             requestId,
             logTag,
             sourceDestination,
@@ -155,14 +169,17 @@ export class NonBlockingHttpClient {
         });
       } else {
         logger.info('Non-blocking request completed successfully', { requestId, status: response.status });
-        this.bufferManager.addResponse(requestId, response, false, {
+        const responseBufferKey = buildResponseBufferKey(requestId, activeReq?.fallbackReason || null);
+        this.bufferManager.addResponse(responseBufferKey, response, false, {
           requestId,
           logTag,
           sourceDestination,
           loanApplicationId: activeReq?.loanApplicationId,
           lenderOrgId: activeReq?.lenderOrgId,
           clientRequestId: activeReq?.clientRequestId,
-          orderId: this.orderId
+          orderId: this.orderId,
+          fallbackReason: activeReq?.fallbackReason || null,
+          nonComparableForReplay: Boolean(activeReq?.fallbackReason)
         });
       }
     }).catch(error => {
@@ -177,13 +194,14 @@ export class NonBlockingHttpClient {
         error
       );
       if (fallbackResponse?.response) {
+        const responseBufferKey = buildResponseBufferKey(requestId, fallbackResponse.reason || null);
         logger.warn('Non-blocking request exception tolerated via replay fallback response', {
           requestId,
           logTag,
           error: error.message,
           fallbackReason: fallbackResponse.reason || 'replay_fallback_response'
         });
-        this.bufferManager.addResponse(requestId, fallbackResponse.response, false, {
+        this.bufferManager.addResponse(responseBufferKey, fallbackResponse.response, false, {
           requestId,
           logTag,
           sourceDestination,

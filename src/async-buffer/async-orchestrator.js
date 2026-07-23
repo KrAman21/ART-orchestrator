@@ -1667,12 +1667,23 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
       return true;
     }
     
-    const comparison = this.comparePayloads(
+    let effectiveResponseData = replayBufferedResponseData;
+    let comparison = this.comparePayloads(
       currentEntry.payload,
-      replayBufferedResponseData,
+      effectiveResponseData,
       currentEntry.logTag,
       currentEntry
     );
+
+    const refreshedTerminalFetchStatus = await this.maybeRefreshTerminalFetchStatusComparison(
+      currentEntry,
+      requestEntry,
+      comparison
+    );
+    if (refreshedTerminalFetchStatus) {
+      comparison = refreshedTerminalFetchStatus.comparison;
+      effectiveResponseData = refreshedTerminalFetchStatus.responseData;
+    }
     
     if (!comparison.match) {
       logger.warn('Buffered response comparison mismatch tolerated', {
@@ -1683,11 +1694,11 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     } else {
       this.stateManager.registerMappingsFromPayloadPair(
         currentEntry.payload,
-        replayBufferedResponseData,
+        effectiveResponseData,
         {
           logTag: currentEntry.logTag,
           expectedPayload: currentEntry.payload || null,
-          actualPayload: replayBufferedResponseData || null
+          actualPayload: effectiveResponseData || null
         }
       );
     }
@@ -1695,12 +1706,12 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     if (currentEntry.logTag === 'GetLenderFlows_RESPONSE') {
       this.stateManager?.updateReplayAppAuthFromResponse?.(
         currentEntry.loanApplicationId || requestEntry?.loanApplicationId || null,
-        replayBufferedResponseData,
+        effectiveResponseData,
         { logTag: currentEntry.logTag }
       );
     }
 
-    this.recordObservedProcessedResponse(currentEntry, replayBufferedResponseData);
+    this.recordObservedProcessedResponse(currentEntry, effectiveResponseData);
     
     this.validator.advance();
     this.recordSuccess('buffered_response_validation', currentEntry);
@@ -1719,6 +1730,95 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
     });
     
     return true;
+  }
+
+  isTerminalReplayEntry(entry) {
+    if (!entry || !Array.isArray(this.validator?.entries) || this.validator.entries.length === 0) {
+      return false;
+    }
+
+    const lastEntry = this.validator.entries[this.validator.entries.length - 1];
+    return lastEntry?.index === entry.index;
+  }
+
+  hasTerminalFetchStatusStatusMismatch(comparison) {
+    const statusPaths = new Set([
+      'status',
+      'order_status',
+      'loan_status',
+      'txn_status',
+      'refund_status'
+    ]);
+
+    return (comparison?.differenceList || []).some((difference) => statusPaths.has(difference?.path));
+  }
+
+  replaceLatestPayloadComparison(entry, comparison) {
+    if (!Array.isArray(this.results?.payloadComparisons) || !this.results.payloadComparisons.length) {
+      return;
+    }
+
+    const latest = this.results.payloadComparisons[this.results.payloadComparisons.length - 1];
+    if (!latest) {
+      return;
+    }
+
+    if (latest.logTag === entry?.logTag && latest.logIndex === entry?.index) {
+      this.results.payloadComparisons.pop();
+    }
+  }
+
+  async maybeRefreshTerminalFetchStatusComparison(currentEntry, requestEntry, initialComparison) {
+    if (
+      currentEntry?.logTag !== 'FlipKart-FetchStatus_RESPONSE' ||
+      requestEntry?.logTag !== 'FlipKart-FetchStatus_REQUEST' ||
+      !this.isTerminalReplayEntry(currentEntry) ||
+      initialComparison?.match ||
+      !this.hasTerminalFetchStatusStatusMismatch(initialComparison)
+    ) {
+      return null;
+    }
+
+    logger.info('Refreshing terminal fetch-status response before final comparison', {
+      responseEntry: currentEntry.toString(),
+      requestEntry: requestEntry.toString(),
+      differencePaths: (initialComparison?.differenceList || []).map((difference) => difference?.path).filter(Boolean)
+    });
+
+    try {
+      const refreshedResponse = await this.executeBlockingReplayRequest(requestEntry);
+      const refreshedResponseData = this.stateManager?.remapReplayValue
+        ? this.stateManager.remapReplayValue(refreshedResponse?.data, null, { logTag: currentEntry.logTag })
+        : refreshedResponse?.data;
+
+      this.replaceLatestPayloadComparison(currentEntry, initialComparison);
+
+      const refreshedComparison = this.comparePayloads(
+        currentEntry.payload,
+        refreshedResponseData,
+        currentEntry.logTag,
+        currentEntry
+      );
+
+      logger.info('Terminal fetch-status refresh comparison completed', {
+        responseEntry: currentEntry.toString(),
+        requestEntry: requestEntry.toString(),
+        refreshedMatch: refreshedComparison.match,
+        refreshedDifferencePaths: (refreshedComparison?.differenceList || []).map((difference) => difference?.path).filter(Boolean)
+      });
+
+      return {
+        comparison: refreshedComparison,
+        responseData: refreshedResponseData
+      };
+    } catch (error) {
+      logger.warn('Terminal fetch-status refresh failed; keeping original comparison result', {
+        responseEntry: currentEntry?.toString?.() || null,
+        requestEntry: requestEntry?.toString?.() || null,
+        error: error.message
+      });
+      return null;
+    }
   }
   
   async processNextLogEntry() {
@@ -2528,7 +2628,10 @@ export class AsyncReplayOrchestrator extends ReplayOrchestrator {
         this.getServiceUnixSocket(service),
         resolvedLoanApplicationId,
         entry.lenderOrgId,
-        entry.clientRequestId
+        entry.clientRequestId,
+        {
+          fallbackReason
+        }
       );
 
       if (advanceValidator) {

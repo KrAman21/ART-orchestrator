@@ -1360,6 +1360,98 @@ test('getResponseByMetadata does not fall back to same-tag stale response when c
   }
 });
 
+test('getResponseByMetadata ignores helper responses marked non-comparable for replay', () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    manager.addResponse('resp-helper', { data: { refund_status: 'PENDING' } }, false, {
+      requestId: 'helper-request-id',
+      logTag: 'FlipKart-FetchStatus_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'client-1',
+      orderId: 'order-1',
+      nonComparableForReplay: true,
+      fallbackReason: 'refund_status_wait_retry_fetch_status'
+    });
+
+    manager.addResponse('resp-real', { data: { refund_status: 'SUCCESS' } }, false, {
+      requestId: 'real-request-id',
+      logTag: 'FlipKart-FetchStatus_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'client-1',
+      orderId: 'order-1'
+    });
+
+    const found = manager.getResponseByMetadata(
+      'FlipKart-FetchStatus_RESPONSE',
+      'APP_WRAPPER',
+      null,
+      null,
+      'client-1',
+      [],
+      'order-1'
+    );
+
+    assert.ok(found);
+    assert.deepEqual(found.response.data, { refund_status: 'SUCCESS' });
+    assert.equal(manager.responseBuffer.size, 1);
+    assert.ok(manager.responseBuffer.get('resp-helper'));
+  } finally {
+    manager.stop();
+  }
+});
+
+test('helper response can coexist with later comparable response for the same logical requestId', () => {
+  const manager = new BufferManager({
+    defaultTimeoutMs: 200,
+    cleanupIntervalMs: 25
+  });
+
+  try {
+    manager.addResponse('shared-request-id::helper::refund_status_wait_retry_fetch_status', { data: { refund_status: 'PENDING' } }, false, {
+      requestId: 'shared-request-id',
+      logTag: 'FlipKart-FetchStatus_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'client-1',
+      orderId: 'order-1',
+      nonComparableForReplay: true,
+      fallbackReason: 'refund_status_wait_retry_fetch_status'
+    });
+
+    manager.addResponse('shared-request-id', { data: { refund_status: 'PENDING' } }, false, {
+      requestId: 'shared-request-id',
+      logTag: 'FlipKart-FetchStatus_REQUEST',
+      sourceDestination: 'APP_WRAPPER',
+      clientRequestId: 'client-1',
+      orderId: 'order-1',
+      nonComparableForReplay: false,
+      fallbackReason: null
+    });
+
+    const found = manager.getResponseByMetadata(
+      'FlipKart-FetchStatus_RESPONSE',
+      'APP_WRAPPER',
+      null,
+      null,
+      'client-1',
+      [],
+      'order-1'
+    );
+
+    assert.ok(found);
+    assert.deepEqual(found.response.data, { refund_status: 'PENDING' });
+    assert.equal(manager.responseBuffer.size, 1);
+    assert.ok(
+      manager.responseBuffer.get('shared-request-id::helper::refund_status_wait_retry_fetch_status')
+    );
+  } finally {
+    manager.stop();
+  }
+});
+
 test('resolves async waiter even when sync path already claimed the entry', async () => {
   const manager = new BufferManager({
     defaultTimeoutMs: 200,
